@@ -25,6 +25,8 @@ pub struct Workspace {
     pub is_active: bool,
     pub window_count: usize,
     pub windows: Vec<CGRect>,
+    /// Row and column in the workspace grid, when workspaces form one.
+    pub grid_cell: Option<(usize, usize)>,
 }
 
 /// Menu-bar-only projection; workspace indices remain local to each space.
@@ -403,6 +405,7 @@ pub(crate) fn sig(update: &Update) -> u64 {
             workspace.layout_mode.hash(&mut hash);
             workspace.is_active.hash(&mut hash);
             workspace.window_count.hash(&mut hash);
+            workspace.grid_cell.hash(&mut hash);
             workspace.windows.len().hash(&mut hash);
             for window in &workspace.windows {
                 let frame = *window;
@@ -432,6 +435,7 @@ mod tests {
             is_active: true,
             window_count: 1,
             windows: Vec::new(),
+            grid_cell: None,
         }
     }
 

@@ -55,6 +55,13 @@ const CORNER_RADIUS: f64 = 3.0;
 const BORDER_WIDTH: f64 = 1.0;
 const CONTENT_INSET: f64 = 2.0;
 const FONT_SIZE: f64 = 11.0;
+// The workspace grid as one small map per display, row by row from the top.
+const GRID_MAP_CELL_WIDTH: f64 = 5.0;
+const GRID_MAP_CELL_HEIGHT: f64 = 4.0;
+const GRID_MAP_GAP: f64 = 1.5;
+const GRID_MAP_EMPTY_ALPHA: f64 = 0.25;
+const GRID_MAP_OCCUPIED_ALPHA: f64 = 0.55;
+const GRID_MAP_ACTIVE_ALPHA: f64 = 1.0;
 
 #[cfg(test)]
 thread_local! {
@@ -351,6 +358,7 @@ impl MenuIcon {
 struct MenuIconLayout {
     size: CGSize,
     workspaces: Vec<WorkspaceRenderData>,
+    grid_cells: Vec<(CGRect, f64)>,
     separators: Vec<f64>,
     separator_line: Option<CachedTextLine>,
 }
@@ -368,6 +376,7 @@ struct WorkspaceRenderInput<'a> {
     workspace: &'a Workspace,
     label: Cow<'a, str>,
     show_windows: bool,
+    grid_cell: Option<(usize, usize)>,
 }
 
 fn render_inputs<'a>(
@@ -378,10 +387,13 @@ fn render_inputs<'a>(
     displays
         .iter()
         .flat_map(|display| {
+            // A grid shows every cell in place, whatever the display mode and style.
+            let grid = !display.workspaces.is_empty()
+                && display.workspaces.iter().all(|workspace| workspace.grid_cell.is_some());
             display
                 .workspaces
                 .iter()
-                .filter(|workspace| match settings.mode {
+                .filter(move |workspace| grid || match settings.mode {
                     MenuBarDisplayMode::All => {
                         settings.show_empty || workspace.window_count > 0 || workspace.is_active
                     }
@@ -391,12 +403,13 @@ fn render_inputs<'a>(
                     display_uuid: &display.display_uuid,
                     space: display.space,
                     workspace,
-                    label: if show_windows {
+                    label: if show_windows || grid {
                         Cow::Borrowed("")
                     } else {
                         workspace_label(workspace, settings.active_label)
                     },
-                    show_windows,
+                    show_windows: show_windows && !grid,
+                    grid_cell: workspace.grid_cell.filter(|_| grid),
                 })
         })
         .collect()
@@ -414,6 +427,8 @@ struct WorkspaceRenderKey {
     workspace_id: String,
     label: String,
     show_windows: bool,
+    grid_cell: Option<(usize, usize)>,
+    occupied: bool,
     is_active: bool,
     window_count: usize,
     window_frames: Vec<[u64; 4]>,
@@ -429,6 +444,8 @@ impl MenuIconRenderKey {
                 workspace_id: input.workspace.id.clone(),
                 label: input.label.to_string(),
                 show_windows: input.show_windows,
+                grid_cell: input.grid_cell,
+                occupied: input.grid_cell.is_some() && input.workspace.window_count > 0,
                 is_active: input.workspace.is_active,
                 window_count: input
                     .show_windows
@@ -466,6 +483,9 @@ impl MenuIconRenderKey {
                     && key.workspace_id == input.workspace.id
                     && key.label == input.label
                     && key.show_windows == input.show_windows
+                    && key.grid_cell == input.grid_cell
+                    && key.occupied
+                        == (input.grid_cell.is_some() && input.workspace.window_count > 0)
                     && key.is_active == input.workspace.is_active
                     && (!input.show_windows || key.window_count == input.workspace.window_count)
                     && (!input.show_windows
@@ -1204,6 +1224,7 @@ mod layout_library_tests {
             is_active: active,
             window_count: 0,
             windows: Vec::new(),
+            grid_cell: None,
         }
     }
 
@@ -1473,6 +1494,7 @@ mod layout_library_tests {
             workspace: &workspace,
             label: Cow::Borrowed("1"),
             show_windows: false,
+            grid_cell: None,
         }]);
 
         assert!(key.matches_inputs(&[WorkspaceRenderInput {
@@ -1481,6 +1503,7 @@ mod layout_library_tests {
             workspace: &workspace,
             label: Cow::Borrowed("1"),
             show_windows: false,
+            grid_cell: None,
         }]));
 
         workspace.is_active = false;
@@ -1490,7 +1513,74 @@ mod layout_library_tests {
             workspace: &workspace,
             label: Cow::Borrowed("1"),
             show_windows: false,
+            grid_cell: None,
         }]));
+    }
+
+    #[test]
+    fn grid_shows_one_map_per_display_shaded_by_state() {
+        let mut workspaces: Vec<_> = (0..9)
+            .map(|index| Workspace {
+                grid_cell: Some((index / 3, index % 3)),
+                ..workspace(&index.to_string(), index, "", index == 4, "bsp")
+            })
+            .collect();
+        workspaces[0].window_count = 2;
+        let displays = vec![DisplayWorkspaces {
+            display_uuid: "a".into(),
+            space: SpaceId::new(1),
+            is_active_context: true,
+            workspaces,
+        }];
+        // Empty cells stay, whatever the mode says.
+        let settings = MenuBarSettings {
+            show_empty: false,
+            mode: MenuBarDisplayMode::Active,
+            ..MenuBarSettings::default()
+        };
+        let inputs = render_inputs(&displays, &settings);
+        assert_eq!(inputs.len(), 9);
+        assert!(inputs.iter().all(|input| input.label.is_empty() && !input.show_windows));
+
+        let layout = build_grid_layout(&inputs, || None);
+        let cells = &layout.grid_cells;
+        assert_eq!(cells.len(), 9);
+        assert!(layout.workspaces.is_empty());
+        assert_eq!(
+            layout.size,
+            CGSize::new(
+                3.0 * GRID_MAP_CELL_WIDTH + 2.0 * GRID_MAP_GAP,
+                3.0 * GRID_MAP_CELL_HEIGHT + 2.0 * GRID_MAP_GAP
+            )
+        );
+        // Row 0 is on top in the unflipped canvas, columns run left to right.
+        assert_eq!(cells[0].0.max().y, layout.size.height);
+        assert_eq!(cells[8].0.origin, CGPoint::new(layout.size.width - GRID_MAP_CELL_WIDTH, 0.0));
+        assert!(cells[1].0.origin.x > cells[0].0.max().x);
+        assert!(cells[3].0.max().y < cells[0].0.origin.y);
+        assert_eq!(
+            cells.iter().map(|&(_, alpha)| alpha).collect::<Vec<_>>(),
+            [
+                GRID_MAP_OCCUPIED_ALPHA,
+                GRID_MAP_EMPTY_ALPHA,
+                GRID_MAP_EMPTY_ALPHA,
+                GRID_MAP_EMPTY_ALPHA,
+                GRID_MAP_ACTIVE_ALPHA,
+                GRID_MAP_EMPTY_ALPHA,
+                GRID_MAP_EMPTY_ALPHA,
+                GRID_MAP_EMPTY_ALPHA,
+                GRID_MAP_EMPTY_ALPHA,
+            ]
+        );
+
+        // A cell gaining its first window redraws the map.
+        let key = MenuIconRenderKey::from_inputs(&inputs);
+        let mut changed = displays.clone();
+        changed[0].workspaces[5].window_count = 1;
+        assert!(!key.matches_inputs(&render_inputs(&changed, &settings)));
+        changed[0].workspaces[5].window_count = 0;
+        changed[0].workspaces[0].window_count = 3;
+        assert!(key.matches_inputs(&render_inputs(&changed, &settings)));
     }
 }
 
@@ -1568,10 +1658,95 @@ fn label_cell_width(text_width: f64) -> f64 {
     LABEL_HEIGHT.max((text_width * 2.0).ceil() / 2.0 + 2.0 * LABEL_PADDING)
 }
 
+fn separator_text_line() -> CachedTextLine {
+    // AeroSpace's largeTitle.bold pipe, rendered at half scale.
+    let font = NSFont::systemFontOfSize_weight(13.0, unsafe { NSFontWeightBold });
+    build_cached_text_line("|", &build_text_attrs(&font)).expect("nonempty separator")
+}
+
+fn grid_map_alpha(workspace: &Workspace) -> f64 {
+    if workspace.is_active {
+        GRID_MAP_ACTIVE_ALPHA
+    } else if workspace.window_count > 0 {
+        GRID_MAP_OCCUPIED_ALPHA
+    } else {
+        GRID_MAP_EMPTY_ALPHA
+    }
+}
+
+/// One map per display: a cell per workspace at its row and column, shaded by
+/// whether it is empty, holds windows, or is the active one.
+fn build_grid_layout(
+    inputs: &[WorkspaceRenderInput<'_>],
+    separator: impl FnOnce() -> Option<CachedTextLine>,
+) -> MenuIconLayout {
+    let mut groups: Vec<Vec<&WorkspaceRenderInput<'_>>> = Vec::new();
+    for input in inputs {
+        match groups.last_mut() {
+            Some(group)
+                if (group[0].display_uuid, group[0].space)
+                    == (input.display_uuid, input.space) =>
+            {
+                group.push(input)
+            }
+            _ => groups.push(vec![input]),
+        }
+    }
+    let shape = |group: &[&WorkspaceRenderInput<'_>]| {
+        group.iter().filter_map(|input| input.grid_cell).fold((0, 0), |(rows, columns), (r, c)| {
+            (rows.max(r + 1), columns.max(c + 1))
+        })
+    };
+    let extent = |count: usize, cell: f64| {
+        count as f64 * cell + count.saturating_sub(1) as f64 * GRID_MAP_GAP
+    };
+    let height = groups
+        .iter()
+        .map(|group| extent(shape(group).0, GRID_MAP_CELL_HEIGHT))
+        .fold(0.0, f64::max);
+    let separator_line = (groups.len() > 1).then(separator).flatten();
+    let mut separators = Vec::new();
+    let mut grid_cells = Vec::with_capacity(inputs.len());
+    let mut width = 0.0;
+    for (i, group) in groups.iter().enumerate() {
+        if i > 0 {
+            separators.push(width + SEPARATOR_SPACING);
+            width += 2.0 * SEPARATOR_SPACING + separator_line.as_ref().map_or(0.0, |l| l.width);
+        }
+        let (rows, columns) = shape(group);
+        let top = (height + extent(rows, GRID_MAP_CELL_HEIGHT)) / 2.0;
+        for input in group {
+            let Some((row, column)) = input.grid_cell else { continue };
+            grid_cells.push((
+                CGRect::new(
+                    CGPoint::new(
+                        width + column as f64 * (GRID_MAP_CELL_WIDTH + GRID_MAP_GAP),
+                        top - GRID_MAP_CELL_HEIGHT
+                            - row as f64 * (GRID_MAP_CELL_HEIGHT + GRID_MAP_GAP),
+                    ),
+                    CGSize::new(GRID_MAP_CELL_WIDTH, GRID_MAP_CELL_HEIGHT),
+                ),
+                grid_map_alpha(input.workspace),
+            ));
+        }
+        width += extent(columns, GRID_MAP_CELL_WIDTH);
+    }
+    MenuIconLayout {
+        size: CGSize::new(width, height),
+        grid_cells,
+        separators,
+        separator_line,
+        ..MenuIconLayout::default()
+    }
+}
+
 fn build_layout(
     inputs: &[WorkspaceRenderInput<'_>],
     text_attrs: &NSDictionary<NSAttributedStringKey, AnyObject>,
 ) -> MenuIconLayout {
+    if !inputs.is_empty() && inputs.iter().all(|input| input.grid_cell.is_some()) {
+        return build_grid_layout(inputs, || Some(separator_text_line()));
+    }
     let count = inputs.len();
     let mut workspaces = Vec::with_capacity(count);
     let height = if inputs.first().is_some_and(|input| !input.show_windows) {
@@ -1594,12 +1769,7 @@ fn build_layout(
                     LABEL_SPACING
                 }
             } else {
-                let line = separator_line.get_or_insert_with(|| {
-                    // AeroSpace's largeTitle.bold pipe, rendered at half scale.
-                    let font = NSFont::systemFontOfSize_weight(13.0, unsafe { NSFontWeightBold });
-                    build_cached_text_line("|", &build_text_attrs(&font))
-                        .expect("nonempty separator")
-                });
+                let line = separator_line.get_or_insert_with(separator_text_line);
                 separators.push(width + SEPARATOR_SPACING);
                 2.0 * SEPARATOR_SPACING + line.width
             };
@@ -1666,6 +1836,7 @@ fn build_layout(
 
     MenuIconLayout {
         workspaces,
+        grid_cells: Vec::new(),
         separators,
         separator_line,
         size: CGSize::new(width, height),
@@ -1696,6 +1867,19 @@ fn draw_menu_icon(cg: &CGContext, bounds: CGRect, layout: &MenuIconLayout) {
     let foreground = NSColor::labelColor();
     CGContext::set_rgb_stroke_color(Some(cg), 1.0, 1.0, 1.0, 1.0);
     CGContext::set_line_width(Some(cg), BORDER_WIDTH);
+
+    for &(cell, alpha) in &layout.grid_cells {
+        add_rounded_rect(
+            cg,
+            cell.origin.x,
+            cell.origin.y + y_offset,
+            cell.size.width,
+            cell.size.height,
+            1.0,
+        );
+        CGContext::set_rgb_fill_color(Some(cg), 1.0, 1.0, 1.0, alpha);
+        CGContext::fill_path(Some(cg));
+    }
 
     for workspace in layout.workspaces.iter() {
         let is_label = workspace.label_line.is_some();

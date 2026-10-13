@@ -374,6 +374,7 @@ impl Reactor {
                     is_active,
                     window_count,
                     windows: frames,
+                    grid_cell: self.layout_manager.layout_engine.workspaces().grid_cell(index),
                     layout_mode: self
                         .layout_manager
                         .layout_engine
