@@ -26,6 +26,9 @@ pub struct RuntimeWorkspaceData {
     pub windows: Vec<RuntimeWindowData>,
     /// Row and column in the workspace grid, when workspaces form one.
     pub grid_cell: Option<(usize, usize)>,
+    /// The window the layout last focused here. Unlike `is_focused`, this does
+    /// not wait for the system to report the focus change.
+    pub layout_focus: Option<WindowId>,
 }
 
 #[derive(Debug, Clone)]

@@ -276,6 +276,12 @@ impl MissionControlActor {
                 }
                 if matches!(action, Some(OverviewAction::Dismiss)) {
                     self.close();
+                } else if let Some(OverviewAction::Command(command)) = action {
+                    // Queries share the reactor's queue, so the refresh sees the result.
+                    self.reactor.send(reactor::Event::Command(reactor::Command::Layout(command)));
+                    if let Some(session) = &mut self.session {
+                        session.refresh(&self.reactor, self.cache.as_ref(), None);
+                    }
                 } else if let Some(OverviewAction::Activate {
                     display,
                     workspace,

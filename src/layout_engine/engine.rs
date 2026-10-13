@@ -916,7 +916,23 @@ impl LayoutEngine {
                 self.workspaces[target].layout_system.window_in_direction(target_layout, direction)?;
             (window_store.workspace_for_window(space, wid) == Some(target)).then_some(wid)
         });
-        self.activate_workspace(window_store, space, target, entry)
+        let response = self.activate_workspace(window_store, space, target, entry);
+        self.record_grid_focus(space, target, &response);
+        response
+    }
+
+    /// Note the focus a cell switch asks for right away, so the overview and the
+    /// next grid command see it before the system reports the focus change.
+    fn record_grid_focus(
+        &mut self,
+        space: SpaceId,
+        workspace: VirtualWorkspaceId,
+        response: &EventResponse,
+    ) {
+        if let Some(wid) = response.focus_window {
+            self.focused_window = Some(wid);
+            self.workspaces.set_last_focused_window(space, workspace, Some(wid));
+        }
     }
 
     /// Swap with the neighboring tile in the active cell, or past the cell's edge,
@@ -956,7 +972,9 @@ impl LayoutEngine {
             .layout_system
             .add_window_from_direction(target_layout, wid, direction);
         self.workspaces.set_last_focused_window(space, ws_id, None);
-        self.activate_workspace(window_store, space, target, Some(wid))
+        let response = self.activate_workspace(window_store, space, target, Some(wid));
+        self.record_grid_focus(space, target, &response);
+        response
     }
 
     fn switch_to_workspace(

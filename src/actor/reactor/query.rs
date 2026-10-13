@@ -531,6 +531,12 @@ impl Reactor {
                 window_count: windows.len(),
                 windows,
                 grid_cell: self.layout_manager.layout_engine.workspaces().grid_cell(index),
+                layout_focus: space_id.and_then(|space| {
+                    self.layout_manager
+                        .layout_engine
+                        .workspaces()
+                        .last_focused_window(space, *workspace_id)
+                }),
                 index,
             });
         }

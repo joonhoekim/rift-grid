@@ -35,7 +35,8 @@ const GAP: f64 = 40.0;
 const CORNER: f64 = 8.0;
 const CAPTION: f64 = 48.0;
 const GRID_GAP: f64 = 24.0;
-const HEADING: f64 = 26.0;
+// Grid cards are bare previews with a hairline gap between tiles.
+const BARE_INSET: f64 = 1.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Selection {
@@ -58,6 +59,20 @@ struct WorkspaceProjection {
     frame: CGRect,
     scene: crate::actor::drag::DragScene,
     windows: Vec<WindowProjection>,
+}
+
+/// Where a card shows its preview: the whole card for a bare card, otherwise
+/// fitted above the caption.
+fn card_image_frame(size: CGSize, bare: bool) -> CGRect {
+    if bare {
+        return rect(
+            BARE_INSET,
+            BARE_INSET,
+            (size.width - 2.0 * BARE_INSET).max(1.0),
+            (size.height - 2.0 * BARE_INSET).max(1.0),
+        );
+    }
+    preview_frame(size)
 }
 
 fn preview_frame(size: CGSize) -> CGRect {
@@ -231,8 +246,8 @@ fn grid_shape(workspaces: &[RuntimeWorkspaceData]) -> Option<(usize, usize)> {
         .filter(|&(rows, columns)| rows > 0 && columns > 0)
 }
 
-/// The frame of one grid cell: cells keep the display's aspect ratio, leave room
-/// for a heading above each row, and the whole grid is centered in the overview.
+/// The frame of one grid cell: cells keep the display's aspect ratio and the whole
+/// grid is centered in the overview.
 fn grid_cell_frame(
     overview: CGSize,
     display: CGSize,
@@ -242,17 +257,14 @@ fn grid_cell_frame(
     let (rows_f, columns_f) = (rows as f64, columns as f64);
     let aspect = display.width / display.height;
     let available_width = (overview.width - (columns_f + 1.0) * GRID_GAP).max(1.0);
-    let available_height =
-        (overview.height - (rows_f + 1.0) * GRID_GAP - rows_f * HEADING).max(1.0);
+    let available_height = (overview.height - (rows_f + 1.0) * GRID_GAP).max(1.0);
     let width = (available_width / columns_f).min(available_height / rows_f * aspect);
     let height = width / aspect;
     let total_width = columns_f * width + (columns_f - 1.0) * GRID_GAP;
-    let total_height = rows_f * (height + HEADING) + (rows_f - 1.0) * GRID_GAP;
+    let total_height = rows_f * height + (rows_f - 1.0) * GRID_GAP;
     rect(
         (overview.width - total_width) / 2.0 + column as f64 * (width + GRID_GAP),
-        (overview.height - total_height) / 2.0
-            + HEADING
-            + row as f64 * (height + HEADING + GRID_GAP),
+        (overview.height - total_height) / 2.0 + row as f64 * (height + GRID_GAP),
         width,
         height,
     )
@@ -396,13 +408,13 @@ fn hit(
             .iter()
             .rev()
             .find(|w| {
-                let image = preview_frame(w.frame.size);
+                let image = card_image_frame(w.frame.size, ws.cell);
                 contains(
                     rect(
                         w.frame.origin.x + image.origin.x,
                         w.frame.origin.y + image.origin.y,
                         image.size.width,
-                        image.size.height + CAPTION,
+                        image.size.height + if ws.cell { 0.0 } else { CAPTION },
                     ),
                     local,
                 )
@@ -418,6 +430,9 @@ fn hit(
 
 pub(crate) enum OverviewAction {
     Dismiss,
+    /// Run a layout command and keep the overview open; the overview then follows
+    /// the focus it produces.
+    Command(crate::layout_engine::LayoutCommand),
     Activate {
         display: String,
         workspace: crate::model::VirtualWorkspaceId,
@@ -428,6 +443,7 @@ pub(crate) enum OverviewAction {
 
 struct WindowCard {
     id: WindowId,
+    bare: bool,
     layer: Retained<CALayer>,
     image: Retained<CALayer>,
     caption: Retained<CALayer>,
@@ -438,6 +454,7 @@ impl WindowCard {
     fn new(
         data: &RuntimeWindowData,
         frame: CGRect,
+        bare: bool,
         scale: f64,
         image_contents: Option<&AnyObject>,
         icon_contents: Option<&AnyObject>,
@@ -476,8 +493,10 @@ impl WindowCard {
             title.setAlignmentMode(objc2_quartz_core::kCAAlignmentCenter);
         }
         title.setOpacity(0.65);
+        caption.setHidden(bare);
         let result = Self {
             id: data.id,
+            bare,
             layer: card,
             image,
             caption,
@@ -490,7 +509,7 @@ impl WindowCard {
 
     fn set_frame(&self, frame: CGRect, scale: f64) {
         self.layer.setFrame(frame);
-        let image = pixel_aligned(preview_frame(frame.size), scale);
+        let image = pixel_aligned(card_image_frame(frame.size, self.bare), scale);
         self.image.setFrame(image);
         self.caption
             .setFrame(rect(image.origin.x, image.max().y, image.size.width, CAPTION));
@@ -668,6 +687,7 @@ impl DisplayOverview {
             {
                 view.layer.setFrame(pixel_aligned(projected.frame, self.scale));
                 view.heading.setFrame(workspace_heading(projected, self.scale));
+                view.heading.setHidden(projected.cell);
                 view.backdrop.setFrame(pixel_aligned(workspace_backdrop(projected), self.scale));
                 for ((card, window), old) in
                     view.cards.iter().zip(&projected.windows).zip(&previous.windows)
@@ -726,6 +746,7 @@ impl DisplayOverview {
                 if let Some(view) = existing.as_ref().filter(|view| !view.cards.is_empty()) {
                     view.layer.setFrame(pixel_aligned(ws.frame, self.scale));
                     view.heading.setFrame(workspace_heading(ws, self.scale));
+                    view.heading.setHidden(ws.cell);
                     view.backdrop.setFrame(pixel_aligned(workspace_backdrop(ws), self.scale));
                     update_heading(&view.heading, data);
                     self.views.push(existing.unwrap());
@@ -776,6 +797,7 @@ impl DisplayOverview {
                 backdrop.setFrame(pixel_aligned(workspace_backdrop(ws), self.scale));
                 update_heading(&heading, data);
                 heading.setFrame(workspace_heading(ws, self.scale));
+                heading.setHidden(ws.cell);
                 self.root.addSublayer(&container);
                 self.root.addSublayer(&heading);
                 let mut cards = Vec::new();
@@ -843,6 +865,7 @@ impl DisplayOverview {
                         WindowCard::new(
                             data,
                             w.frame,
+                            ws.cell,
                             self.scale,
                             image.map(|i| &*(i.as_ref() as *const CGImage as *const AnyObject)),
                             icon.as_ref()
@@ -1043,7 +1066,11 @@ impl OverviewSession {
         let ws = &displays[active].workspaces[displays[active].centered];
         let selection = Selection {
             workspace: ws.index,
-            window: ws.windows.iter().find(|w| w.is_focused).map(|w| w.id),
+            window: if displays[active].grid().is_some() {
+                ws.layout_focus
+            } else {
+                ws.windows.iter().find(|w| w.is_focused).map(|w| w.id)
+            },
         };
         let session = Self {
             generation,
@@ -1105,6 +1132,7 @@ impl OverviewSession {
     ) {
         let _transaction = LayerTransaction::disabled().flush_on_commit();
         self.end_drag();
+        let old = (self.active, self.selection);
         let selected = moved.or(self.selection.window);
         for (i, d) in self.displays.iter_mut().enumerate() {
             let centered_id = d.workspaces.get(d.centered).map(|ws| ws.workspace_id);
@@ -1160,7 +1188,18 @@ impl OverviewSession {
                 window: None,
             };
         }
-        self.highlight(None);
+        // In a grid the selection is the real focus: the active cell and the window
+        // the layout focused there.
+        if let Some(d) = self.displays.get(self.active)
+            && d.grid().is_some()
+            && let Some(ws) = d.workspaces.iter().find(|ws| ws.is_active)
+        {
+            self.selection = Selection {
+                workspace: ws.index,
+                window: ws.layout_focus,
+            };
+        }
+        self.highlight(Some(old).filter(|&(display, _)| display < self.displays.len()));
         self.sync_images(cache);
         self.request_previews(cache);
     }
@@ -1212,6 +1251,7 @@ impl OverviewSession {
                     source.layer.frame().size.width,
                     source.layer.frame().size.height,
                 ),
+                source.bare,
                 d.scale,
                 source.image.contents().as_deref(),
                 source.icon.as_ref().and_then(|icon| icon.contents()).as_deref(),
@@ -1369,15 +1409,22 @@ impl OverviewSession {
     }
 
     fn update_preview_borders(&self) {
-        for card in self.displays.iter().flat_map(|d| &d.views).flat_map(|ws| &ws.cards) {
-            set_preview_border(
-                &card.image,
-                if Some(card.id) == self.hovered {
-                    1.5
-                } else {
-                    0.0
-                },
-            );
+        for (i, d) in self.displays.iter().enumerate() {
+            let focused = (i == self.active && d.grid().is_some())
+                .then_some(self.selection.window)
+                .flatten();
+            for card in d.views.iter().flat_map(|ws| &ws.cards) {
+                set_preview_border(
+                    &card.image,
+                    if Some(card.id) == focused {
+                        2.5
+                    } else if Some(card.id) == self.hovered {
+                        1.5
+                    } else {
+                        0.0
+                    },
+                );
+            }
         }
     }
 
@@ -1392,6 +1439,11 @@ impl OverviewSession {
                 if let Some(ws) =
                     self.displays[display].views.iter().find(|w| w.index == selection.workspace)
                 {
+                    let outline = width > 0.5 && self.displays[display].grid().is_some();
+                    ws.backdrop.setBorderWidth(if outline { 1.0 } else { 0.0 });
+                    ws.backdrop.setBorderColor(
+                        outline.then(|| color(1.0, 1.0, 1.0, 0.55)).as_deref(),
+                    );
                     ws.backdrop.setBackgroundColor(Some(&color(
                         1.0,
                         1.0,
@@ -1498,8 +1550,11 @@ impl OverviewSession {
                 let Some((i, selection)) = target else {
                     return activate.then_some(OverviewAction::Dismiss);
                 };
-                self.active = i;
-                self.selection = selection;
+                // A grid's selection is the real focus; hovering only outlines.
+                if activate || self.displays[i].grid().is_none() {
+                    self.active = i;
+                    self.selection = selection;
+                }
             }
             Input::Scroll { point, delta } => {
                 let i = self.displays.iter().position(|d| contains(d.bounds, point))?;
@@ -1561,28 +1616,18 @@ impl OverviewSession {
                     self.move_drag(point);
                 }
             }
-            Input::Up | Input::Down | Input::Left | Input::Right
+            Input::Up | Input::Down | Input::Left | Input::Right | Input::Cycle(_)
                 if self.displays[self.active].grid().is_some() =>
             {
-                let d = &self.displays[self.active];
-                let direction = match input {
-                    Input::Up => crate::layout_engine::Direction::Up,
-                    Input::Down => crate::layout_engine::Direction::Down,
-                    Input::Left => crate::layout_engine::Direction::Left,
-                    _ => crate::layout_engine::Direction::Right,
-                };
-                let (_, columns) = d.grid()?;
-                let target = crate::model::virtual_workspace::grid_neighbor_index(
-                    self.selection.workspace,
-                    d.workspaces.len(),
-                    columns,
-                    direction,
-                )?;
-                let ws = d.workspaces.iter().find(|ws| ws.index == target)?;
-                self.selection = Selection {
-                    workspace: ws.index,
-                    window: ws.windows.iter().find(|w| w.is_focused).map(|w| w.id),
-                };
+                use crate::layout_engine::{Direction, LayoutCommand};
+                return Some(OverviewAction::Command(match input {
+                    Input::Up => LayoutCommand::GridFocus(Direction::Up),
+                    Input::Down => LayoutCommand::GridFocus(Direction::Down),
+                    Input::Left => LayoutCommand::GridFocus(Direction::Left),
+                    Input::Right => LayoutCommand::GridFocus(Direction::Right),
+                    Input::Cycle(true) => LayoutCommand::NextWindow,
+                    _ => LayoutCommand::PrevWindow,
+                }));
             }
             Input::Up | Input::Down => {
                 let d = &mut self.displays[self.active];
@@ -2220,6 +2265,7 @@ mod tests {
             window_count: windows.len(),
             windows,
             grid_cell: None,
+            layout_focus: None,
         }
     }
     fn request(id: u32) -> PreviewRequest {
@@ -2916,14 +2962,14 @@ mod tests {
             assert_eq!(ws.frame.size, frame(0).size);
             assert!((ws.frame.size.width / ws.frame.size.height - 1.6).abs() < 1e-9);
             assert!(ws.frame.origin.x >= 0.0 && ws.frame.max().x <= overview.width);
-            assert!(ws.frame.origin.y >= HEADING && ws.frame.max().y <= overview.height);
+            assert!(ws.frame.origin.y >= 0.0 && ws.frame.max().y <= overview.height);
         }
         assert!((frame(4).mid().x - overview.width / 2.0).abs() < 1e-9);
-        assert!((frame(4).mid().y - overview.height / 2.0).abs() < HEADING);
+        assert!((frame(4).mid().y - overview.height / 2.0).abs() < 1e-9);
         // Row by row from the top left.
         assert!(frame(0).max().x < frame(1).origin.x);
         assert_eq!(frame(0).origin.y, frame(2).origin.y);
-        assert!(frame(0).max().y + HEADING < frame(3).origin.y);
+        assert_eq!(frame(0).max().y + GRID_GAP, frame(3).origin.y);
         assert_eq!(frame(0).origin.x, frame(6).origin.x);
 
         // The center cell's two tiles split it in half, and the whole cell is the hit target.
@@ -2932,6 +2978,17 @@ mod tests {
         let half = frame(4).size.width / 2.0;
         assert_eq!(center.windows[0].frame, rect(0.0, 0.0, half, frame(4).size.height));
         assert_eq!(center.windows[1].frame.origin.x, half);
+        // Cards are bare previews: the bottom of a tile, where a caption would sit,
+        // still selects its window.
+        let bottom_left = CGPoint::new(frame(4).origin.x + 4.0, frame(4).max().y - 4.0);
+        assert_eq!(
+            hit(&workspaces, &projection, bottom_left).and_then(|s| s.window),
+            Some(center.windows[0].id)
+        );
+        assert_eq!(
+            card_image_frame(center.windows[0].frame.size, true).size.height,
+            frame(4).size.height - 2.0 * BARE_INSET
+        );
         let corner = CGPoint::new(frame(8).max().x - 2.0, frame(8).max().y - 2.0);
         assert_eq!(hit(&workspaces, &projection, corner).map(|s| s.workspace), Some(8));
         let gap = CGPoint::new(frame(0).max().x + GRID_GAP / 2.0, frame(0).mid().y);
