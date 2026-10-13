@@ -169,6 +169,17 @@ fn scrolled_workspace_offset(
         - centered as f64
 }
 
+/// The selection a grid overview shows: the active cell, and the window the
+/// system reports focused when it is in that cell. Right after rift moves the
+/// focus the system has not caught up, so the layout's focus stands in for it.
+fn grid_focus_selection(workspaces: &[RuntimeWorkspaceData]) -> Option<Selection> {
+    let ws = workspaces.iter().find(|ws| ws.is_active)?;
+    Some(Selection {
+        workspace: ws.index,
+        window: ws.windows.iter().find(|w| w.is_focused).map(|w| w.id).or(ws.layout_focus),
+    })
+}
+
 fn filter_workspaces(workspaces: &mut Vec<RuntimeWorkspaceData>, show_empty: bool) {
     // Every cell keeps its place in a grid, empty or not.
     if !show_empty && grid_shape(workspaces).is_none() {
@@ -1064,14 +1075,13 @@ impl OverviewSession {
         }
         active = active.min(displays.len() - 1);
         let ws = &displays[active].workspaces[displays[active].centered];
-        let selection = Selection {
-            workspace: ws.index,
-            window: if displays[active].grid().is_some() {
-                ws.layout_focus
-            } else {
-                ws.windows.iter().find(|w| w.is_focused).map(|w| w.id)
-            },
-        };
+        let selection = displays[active]
+            .grid()
+            .and_then(|_| grid_focus_selection(&displays[active].workspaces))
+            .unwrap_or_else(|| Selection {
+                workspace: ws.index,
+                window: ws.windows.iter().find(|w| w.is_focused).map(|w| w.id),
+            });
         let session = Self {
             generation,
             show_empty_workspaces: settings.show_empty_workspaces,
@@ -1188,20 +1198,54 @@ impl OverviewSession {
                 window: None,
             };
         }
-        // In a grid the selection is the real focus: the active cell and the window
-        // the layout focused there.
+        // In a grid the selection is the real focus.
         if let Some(d) = self.displays.get(self.active)
             && d.grid().is_some()
-            && let Some(ws) = d.workspaces.iter().find(|ws| ws.is_active)
+            && let Some(selection) = grid_focus_selection(&d.workspaces)
         {
-            self.selection = Selection {
-                workspace: ws.index,
-                window: ws.layout_focus,
-            };
+            self.selection = selection;
         }
         self.highlight(Some(old).filter(|&(display, _)| display < self.displays.len()));
         self.sync_images(cache);
         self.request_previews(cache);
+    }
+
+    /// Follow focus changes without rebuilding the cards: re-read which cell is
+    /// active and which window the system has focused, and move the outlines.
+    /// Anything more than that waits for a full refresh.
+    pub(crate) fn sync_focus(&mut self, reactor: &ReactorHandle) {
+        if self.drag.is_some() {
+            return;
+        }
+        let Some(d) = self.displays.get_mut(self.active).filter(|d| d.grid().is_some()) else {
+            return;
+        };
+        let mut workspaces = reactor.query_workspaces(d.info.space);
+        filter_workspaces(&mut workspaces, self.show_empty_workspaces);
+        let same_cards = workspaces.len() == d.workspaces.len()
+            && workspaces.iter().zip(&d.workspaces).all(|(a, b)| {
+                a.index == b.index
+                    && a.windows.iter().map(|w| w.id).eq(b.windows.iter().map(|w| w.id))
+            });
+        if !same_cards {
+            return;
+        }
+        for (ws, fresh) in d.workspaces.iter_mut().zip(&workspaces) {
+            ws.is_active = fresh.is_active;
+            ws.layout_focus = fresh.layout_focus;
+            for (w, fresh) in ws.windows.iter_mut().zip(&fresh.windows) {
+                w.is_focused = fresh.is_focused;
+            }
+        }
+        let Some(selection) = grid_focus_selection(&d.workspaces) else {
+            return;
+        };
+        if selection != self.selection {
+            let _transaction = LayerTransaction::disabled().flush_on_commit();
+            let old = (self.active, self.selection);
+            self.selection = selection;
+            self.highlight(Some(old));
+        }
     }
 
     fn end_drag(&mut self) -> Option<OverviewDrag> {
@@ -3033,5 +3077,39 @@ mod tests {
         schedule.enqueue(request(1));
         schedule.enqueue(request(3));
         assert_eq!(schedule.pending.iter().map(|p| p.id.idx.get()).collect::<Vec<_>>(), [3, 1]);
+    }
+
+    #[test]
+    fn grid_selection_follows_the_system_focus_in_the_active_cell() {
+        let tile = |id, focused| {
+            let mut w = window(id, rect(0.0, 0.0, 100.0, 100.0), false);
+            w.is_focused = focused;
+            w
+        };
+        let cells = |active: usize, windows: [Vec<RuntimeWindowData>; 2], layout_focus| {
+            windows
+                .into_iter()
+                .enumerate()
+                .map(|(index, windows)| RuntimeWorkspaceData {
+                    is_active: index == active,
+                    grid_cell: Some((0, index)),
+                    layout_focus: (index == active).then_some(layout_focus).flatten(),
+                    ..workspace(index, windows)
+                })
+                .collect::<Vec<_>>()
+        };
+        let id = |n| Some(WindowId::new(123, n));
+        let select = |ws: &[RuntimeWorkspaceData]| grid_focus_selection(ws).unwrap();
+
+        // The system's focus wins over the layout's within the active cell.
+        let ws = cells(1, [vec![], vec![tile(1, false), tile(2, true)]], id(1));
+        assert_eq!(select(&ws), Selection { workspace: 1, window: id(2) });
+        // Until the system catches up with a move into another cell, the layout's
+        // focus stands in.
+        let ws = cells(1, [vec![tile(3, true)], vec![tile(1, false)]], id(1));
+        assert_eq!(select(&ws), Selection { workspace: 1, window: id(1) });
+        // An empty active cell has no focused window.
+        let ws = cells(1, [vec![tile(3, true)], vec![]], None);
+        assert_eq!(select(&ws), Selection { workspace: 1, window: None });
     }
 }

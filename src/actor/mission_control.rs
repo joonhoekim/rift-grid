@@ -150,6 +150,8 @@ impl MissionControlActor {
         let mut edge_timer = None;
         let mut live_timer = None;
         let mut pending_event = None;
+        // Focus moves settle after the system reports them; look again shortly after.
+        let mut focus_timer: Option<Timer> = None;
         loop {
             let edge_active = self.session.as_ref().is_some_and(OverviewSession::edge_active);
             update_edge_timer(&mut edge_timer, edge_active);
@@ -163,7 +165,14 @@ impl MissionControlActor {
             tokio::select! {
                 _ = async { if let Some(timer) = &mut live_timer { timer.await } else { std::future::pending().await } } => {
                     live_timer = None;
-                    if let Some(session) = &mut self.session { session.recapture(self.cache.as_ref()); }
+                    if let Some(session) = &mut self.session {
+                        session.sync_focus(&self.reactor);
+                        session.recapture(self.cache.as_ref());
+                    }
+                }
+                _ = async { if let Some(timer) = &mut focus_timer { timer.await } else { std::future::pending().await } } => {
+                    focus_timer = None;
+                    if let Some(session) = &mut self.session { session.sync_focus(&self.reactor); }
                 }
                 _ = async { if let Some(timer) = &mut edge_timer { timer.await } else { std::future::pending().await } } => {
                     edge_timer = None;
@@ -183,7 +192,17 @@ impl MissionControlActor {
                         }
                     }
                     let _guard = span.enter();
+                    let settle = matches!(
+                        event,
+                        Event::RefreshCurrentWorkspace
+                            | Event::Input(
+                                Input::Up | Input::Down | Input::Left | Input::Right | Input::Cycle(_)
+                            )
+                    );
                     self.handle(event);
+                    if settle && self.session.is_some() {
+                        focus_timer = Some(Timer::sleep(std::time::Duration::from_millis(150)));
+                    }
                     if !self.settings.enabled { break; }
                 }
                 result = async {
