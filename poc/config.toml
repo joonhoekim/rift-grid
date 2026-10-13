@@ -1,0 +1,448 @@
+# rift tiling window manager config.
+#
+# This copy is a *seed*. modules/darwin/rice plants it at
+# ~/.config/rift/config.toml on a machine that has none, and after that the
+# live file is the original — edit that one, watch rift hot-reload it, and run
+# `apps/rice/save rift` to bring the result back here. `apps/rice/restore rift`
+# pushes the other way. If a change does not seem to take, press Alt+Ctrl+R
+# (reload_config, bound below); it also prints the reason when the file is bad.
+#
+# Reference: https://github.com/acsandmann/rift/wiki
+#
+# ── Ported from aerospace.toml ────────────────────────────────────────────
+# The keymap is the AeroSpace one, which was itself a port of the niri session
+# in modules/nixos/niri/rice/config.kdl. Alt (⌥) plays the role of niri's Mod;
+# alt-shift and alt-ctrl are both "move, don't focus", as before.
+#
+# What did NOT survive the port, and why:
+#   - `mode service` / `mode main`. rift has no modal bindings at all, so the
+#     alt-shift-; submode is gone. Its useful members moved to direct binds
+#     (reload_config, unjoin_windows) or vanished.
+#   - `balance-sizes` (alt-r). No equivalent command.
+#   - `macos-native-fullscreen` (alt-shift-f). rift only does its own
+#     fullscreen, so alt-shift-f is now fullscreen-within-gaps instead. Native
+#     fullscreen is still ctrl-cmd-f in any Mac app.
+#   - `move-workspace-to-monitor` (alt-shift-tab). rift moves *windows*
+#     between displays, not whole workspaces — see the alt-ctrl-arrow binds.
+#
+# ── Space activation ──────────────────────────────────────────────────────
+# rift starts with `default_disable = true` upstream, meaning it manages
+# nothing until you press the toggle. That is a good safety default but a bad
+# surprise ("I rebuilt and nothing tiles"), so it is flipped below. Alt+Z is
+# still the per-space off switch.
+
+[settings]
+default_disable = false
+
+# Animations off. AeroSpace had none, and rift's own docs note the scrolling
+# layout behaves better without them; this keeps window motion instant while
+# the look is being dialled in. Flip `animate` to true to try them.
+animate = false
+animation_duration = 0.2
+animation_fps = 120.0
+
+# Focus on click, not on hover. Set the same way on all three window managers
+# (hyprland `follow_mouse = 0`, niri drops `focus-follows-mouse`).
+#
+# Hover focus and a keyboard-driven tiler disagree about who is in charge. The
+# pointer sits wherever it was last left, so it keeps a claim on focus that the
+# keyboard did not ask for: type into the window you just switched to and the
+# first keystroke can land in whatever the cursor happens to be over, and
+# scrolling over a background window steals it outright. Requiring a click
+# makes focus something you state rather than something the pointer implies.
+focus_follows_mouse = false
+
+# The other direction stays on: focus a window from the keyboard and the cursor
+# is warped to it. That is what makes the setting above cheap — the pointer
+# follows the keyboard instead of fighting it, so it is already in the right
+# window when you do reach for the mouse. AeroSpace did this for monitor
+# switches only (`on-focused-monitor-changed = move-mouse monitor-lazy-center`);
+# rift makes it a setting.
+mouse_follows_focus = false
+mouse_hides_on_focus = false
+
+# Windows that must never steal focus or drag a workspace switch with them.
+auto_focus_blacklist = [
+  "com.apple.Spotlight",
+  "com.apple.dock",
+  "com.apple.systemuiserver",
+  "com.apple.SecurityAgent",
+]
+
+hot_reload = true
+
+# Nothing subscribes to rift's events any more. There used to be two
+# `rift-cli subscribe` listeners here, poking sketchybar to repaint its
+# workspace indicator; the bar is gone and rift draws that indicator itself
+# now (see [settings.ui.menu_bar] below). `git log -- modules/darwin/rice` has
+# the wiring if another consumer ever wants it.
+run_on_start = [
+  # Window borders, started as a CHILD of rift rather than as their own
+  # LaunchAgent. This is not tidiness — it is what makes `ax_focus=on` work.
+  #
+  # JankyBorders' accurate focus mode asks the Accessibility API which window
+  # is focused, and macOS attributes that request to the *responsible* process,
+  # which for a launchd agent is the agent itself. Borders launched
+  # independently therefore needs its own Accessibility grant and still cannot
+  # resolve the focus rift is driving through SkyLight. Spawned here it
+  # inherits rift's trust, and glow() lands on the right window.
+  #
+  # The trade: no rift, no borders. Acceptable — borders only mean anything
+  # while something is tiling. bordersrc is seeded by modules/darwin/rice and
+  # rewritten by apps/rice/colors on every palette change.
+  #
+  # `sh -c` is load-bearing. rift splits these strings into words and execs the
+  # result directly — it does NOT run them through a shell, so `$HOME` written
+  # bare stays a literal four characters:
+  #
+  #   /bin/sh: $HOME/.config/borders/bordersrc: No such file or directory
+  #
+  # Wrapping the path in a quoted -c argument hands one token to sh, and sh is
+  # what expands it. (This is a TOML literal string — single quotes — so the
+  # inner double quotes need no escaping.)
+  '/bin/sh -c "exec $HOME/.config/borders/bordersrc"',
+]
+
+[settings.layout]
+# Every workspace's mode. Alt+Ctrl+1..4 puts the active workspace on any of
+# the four live, but that choice is per-session: reload_config (Alt+Ctrl+R)
+# puts all nine back on the value below — measured, not assumed.
+#   traditional   i3/sway containers — nested splits resized as a tree
+#   bsp           binary space partitioning
+#   master_stack  one master pane + a stack
+#   scrolling     niri's infinite horizontal strip of columns; the shape
+#                 modules/nixos/niri runs on the NixOS side
+#
+# The [settings.layout.scrolling] block below is still read — it governs any
+# workspace put on that mode with Alt+Ctrl+4, and $HOME/.config/rice/bin/
+# monocle.sh (Alt+R) reads its width bounds whatever the mode is.
+mode = "bsp"
+
+# A new window opens next to the focused one, not at the far end of the
+# workspace. It is not scrolling-only: measured under traditional, where a
+# third window lands between the focused one and its right neighbour.
+window_insertion_point = "next_to_selection"
+
+[settings.layout.traditional]
+# Siblings in a split share the space evenly when one is added or removed,
+# rather than the new window taking half of the focused one and leaving the
+# rest untouched.
+equalize_nodes = true
+
+[settings.layout.scrolling]
+# Width of the focused column, as a fraction of the display. niri's preset
+# cycle is 33/50/66 and it opens at 50; rift has no preset list, so this is the
+# single default and Alt+Minus / Alt+Equal walk it between the bounds below.
+column_width_ratio = 0.5
+min_column_width_ratio = 0.33
+# 1.0, not 0.9, so the Alt+R monocle toggle can actually fill the display —
+# the toggle walks the width between column_width_ratio and this bound.
+max_column_width_ratio = 1.0
+
+# "niri": reveal a column only when navigation needs it, i.e. the strip moves
+# as little as possible and the focused column does not jump to a fixed spot.
+# This overrides `alignment` by design — set focus_navigation_style to
+# "anchored" if you want the focused column pinned to `alignment` instead.
+alignment = "center"
+focus_navigation_style = "niri"
+
+[settings.layout.scrolling.gestures]
+# Three-finger horizontal scroll walks the columns.
+#
+# This overlaps with [settings.gestures] below, which puts the same gesture on
+# workspace switching. `propagate_to_workspace_swipe` is what makes them one
+# motion rather than two handlers fighting: scroll through the columns, and
+# when the strip runs out, the next swipe crosses into the neighbouring
+# workspace. If swipes ever feel double-fired, this is the first thing to turn
+# off — the keyboard bindings do not depend on it.
+enabled = false
+fingers = 3
+invert_horizontal = false
+propagate_to_workspace_swipe = true
+
+[settings.layout.gaps.outer]
+# This was 38 while sketchybar drew a 32pt bar of its own up there. macOS
+# already keeps windows clear of its own menu bar, so with the bar gone that
+# number was 32 points of dead band above every window. Symmetric now.
+top = 6
+left = 6
+bottom = 6
+right = 6
+
+[settings.layout.gaps.inner]
+# outer 와 같은 값. rift 0.5.8 미만에서는 이게 0 이 아니면 스크롤링 레이아웃의
+# 컬럼 폭 계산이 어긋나, 포커스가 바뀔 때마다 스트립 전체가 이 폭만큼 좌우로
+# 밀린다 — acsandmann/rift#449 에서 고쳐졌다. 탭 핀은 flake.lock 의
+# acsandmann-tap 이므로, 그걸 되돌리면 이 값도 같이 0 으로 내려야 한다.
+horizontal = 6
+vertical = 6
+
+[settings.ui.menu_bar]
+# rift draws its own workspace indicator in the macOS menu bar. This is the
+# whole reason there is no status bar on this machine: the indicator turned
+# out to be the *only* thing sketchybar was providing that macOS does not
+# already give (clock, battery, CPU and input source were all duplicates of
+# menu extras, and the app menus cannot be reproduced without an accessibility
+# helper). Getting it from the window manager costs no extra process and no
+# TCC grant. See the header of modules/darwin/rice/default.nix.
+enabled = true
+# Empty workspaces are hidden. Nine slots of mostly-dead numbers is what
+# makes a menu-bar indicator get ignored, and macOS truncates the whole thing
+# when the bar runs out of room.
+show_empty = false
+# Draw every workspace, not just the active one, so the indicator answers
+# "where else is there something" and not only "where am I".
+mode = "all"
+# Labels rather than layout previews: the label is what the keybinding says.
+# workspace_names is "1".."9", so `name` is the digit you press — `index`
+# would render 0..8 and be off by one from the keymap.
+active_label = "name"
+display_style = "label"
+
+[settings.ui.stack_line]
+enabled = true
+
+[settings.ui.mission_control]
+# On because Alt+E drives it (`show_mission_control_all`). That key is the
+# overview slot on all three window managers; macOS's nearest equivalent is
+# Mission Control, and rift can only reach it with this enabled.
+enabled = true
+
+[settings.gestures]
+# Three-finger horizontal swipe to change workspace. `consume_dock_swipe` stops
+# macOS from *also* switching its own Spaces on the same gesture.
+enabled = true
+consume_dock_swipe = true
+skip_empty = true
+fingers = 3
+haptics_enabled = true
+haptic_pattern = "level_change"
+
+[virtual_workspaces]
+enabled = true
+# Nine, as AeroSpace had. Indices are 0-based, so Alt+1 targets index 0 —
+# hence the names below, which are what the menu-bar indicator displays. The
+# digit you press and the label you see match; only the internal index is off
+# by one.
+default_workspace_count = 9
+grid_columns = 3
+default_workspace = 4
+workspace_names = ["↖", "↑", "↗", "←", "·", "→", "↙", "↓", "↘"]
+auto_assign_windows = true
+preserve_focus_per_workspace = true
+workspace_auto_back_and_forth = false
+prevent_wrapping = false
+workspace_rules = []
+
+# Windows that should never be tiled. macOS scatters small utility panels that
+# a tiling WM will happily stretch to half the screen.
+app_rules = [
+  { app_id = "com.apple.systempreferences", floating = true },
+  { app_id = "com.apple.ActivityMonitor", floating = true },
+  { app_id = "com.apple.finder", ax_subrole = "AXDialog", floating = true },
+  { app_id = "org.pqrs.Karabiner-Elements.Settings", floating = true },
+  { title_substring = "Preferences", floating = true },
+  { title_substring = "Settings", floating = true },
+]
+[modifier_combinations]
+# The keymap rests on three tiers, and these two names are two of them. The
+# same three exist on hyprland and niri, with Super where this file says Alt —
+# macOS keeps Cmd for itself, so Alt is the only base modifier available here.
+# The full cross-platform table is docs/keymap.md.
+#
+#   Alt          go there, open it
+#   Alt + Shift  take the window with you        (= move)
+#   Alt + Ctrl   cross a monitor, or reach the WM (= move2)
+#
+# `move` used to have a twin: alt-ctrl repeated every move_node binding on the
+# theory that a second spelling costs nothing. It cost the whole Ctrl tier —
+# there was nowhere left for the display moves without inventing a third
+# modifier. One spelling per action, and the tier means something.
+move = "Alt + Shift"
+move2 = "Alt + Ctrl"
+
+[keys]
+# 3x3 grid proof of concept: cell-by-cell movement and the center cell.
+"Alt + Cmd + I" = { grid_cell = "up" }
+"Alt + Cmd + K" = { grid_cell = "down" }
+"Alt + Cmd + J" = { grid_cell = "left" }
+"Alt + Cmd + L" = { grid_cell = "right" }
+"Alt + H" = { switch_to_workspace = 4 }
+
+# ── Tier 1 — Alt: go there, open it ──────────────────────────────────────
+#
+# Directions are IJKL, the inverted-T that matches the arrow keys:
+#
+#         I                 ↑
+#    J    K    L        ←   ↓   →
+#
+# Not hjkl. hjkl is four keys in a row with no shape to it — a vim artifact
+# that carries no spatial meaning, and window management is nothing but
+# spatial. The arrows are bound to the same actions throughout, permanently:
+# they are what IJKL is imitating, and they are the safety net while the hand
+# is still learning that K went from "up" to "down".
+"Alt + I" = { grid_focus = "up" }
+"Alt + K" = { grid_focus = "down" }
+"Alt + J" = { grid_focus = "left" }
+"Alt + L" = { grid_focus = "right" }
+"Alt + Up" = { grid_focus = "up" }
+"Alt + Down" = { grid_focus = "down" }
+"Alt + Left" = { grid_focus = "left" }
+"Alt + Right" = { grid_focus = "right" }
+
+# Workspaces flank the up key on the row above — U back, O forward. They were
+# U and I until IJKL took I. On hyprland and niri these are the same two keys,
+# even though workspaces stack vertically there and are a numbered strip here.
+"Alt + U" = "prev_workspace"
+"Alt + O" = "next_workspace"
+"Alt + Tab" = "switch_to_last_workspace"
+
+# Workspaces 1..9 (indices 0..8 — see default_workspace_count above). The digit
+# you press is the label rift draws in the menu bar; only the index is off by
+# one, and nothing but this file ever sees the index.
+"Alt + 1" = { switch_to_workspace = 0 }
+"Alt + 2" = { switch_to_workspace = 1 }
+"Alt + 3" = { switch_to_workspace = 2 }
+"Alt + 4" = { switch_to_workspace = 3 }
+"Alt + 5" = { switch_to_workspace = 4 }
+"Alt + 6" = { switch_to_workspace = 5 }
+"Alt + 7" = { switch_to_workspace = 6 }
+"Alt + 8" = { switch_to_workspace = 7 }
+"Alt + 9" = { switch_to_workspace = 8 }
+
+# `open -na` starts a *second* Ghostty process rather than adding a window to
+# the running one — Ghostty's own `+new-window` action is unimplemented on
+# macOS ("not supported on this platform"). Drop the -n to merely focus an
+# existing Ghostty instead of getting a new window.
+"Alt + Enter" = { exec = ["/bin/sh", "-c", "open -na Ghostty"] }
+
+# Overview. hyprland has the DMS overview on this key and niri has its own;
+# on macOS the nearest thing is Mission Control, which rift can drive.
+# Requires [settings.ui.mission_control] enabled = true, above.
+"Alt + E" = "show_mission_control_all"
+
+# Close the focused window (hyprland/niri Mod+Q). Distinct from Cmd-Q, which
+# quits the whole application.
+"Alt + Q" = "close_window"
+
+# Cheatsheet — opens docs/keymap.md, the cross-platform keymap this file is one
+# of three implementations of.
+#
+# On Linux this key is `dms ipc call keybinds toggle hyprland`: DMS asks the
+# running compositor what is bound and draws an overlay. There is no equivalent
+# here, and building one was tried and thrown away — reading the live config out
+# of `rift-cli execute config get` is easy, but the overlay around it is not.
+# Ghostty exposes no AXTitle, so no app_rule can single the window out, and
+# `rift-cli query windows` reports ids that vanish moments later, so tracking it
+# from outside needs polling and retries. All of that to avoid opening a file.
+#
+# So: open the file. `open` and not `open -a`, so this follows whatever
+# modules/darwin/default-apps.nix has made the markdown handler (VS Code today).
+#
+# The cost is that this points at the checkout. Nothing else under ~/.config
+# does, so if the repo moves, this key quietly stops working.
+"Alt + Ctrl + H" = { exec = ["/bin/sh", "-c", "open ${RICE_REPO:-$HOME/nixos-config}/docs/keymap.md"] }
+
+# Fullscreen, gentle version: fills the tiling area and leaves the outer gaps,
+# so the menu bar stays reachable. This is the one that used to be on
+# alt-shift-f — the two were inverted relative to hyprland and niri, where the
+# bare key is the gentle one and Shift is the drastic one. Now they match.
+"Alt + F" = "toggle_fullscreen_within_gaps"
+
+"Alt + C" = "center_selection"
+"Alt + Minus" = { resize_window_shrink = "smart" }
+"Alt + Equal" = { resize_window_grow = "smart" }
+
+# Width preset cycle on hyprland and niri. rift has no such action — it has no
+# maximise command at all, and column_width_ratio is only read when the layout
+# is built — so a script nudges the live width with `resize-by` and remembers
+# which window it did that to. Close enough in the hand: press it, the column
+# goes wide; press it again, it comes back. Seeded to $HOME by
+# modules/darwin/rice (a store path cannot be interpolated into plain TOML).
+"Alt + R" = { exec = ["/bin/sh", "-c", "$HOME/.config/rice/bin/monocle.sh"] }
+
+# ── Tier 2 — Alt+Shift: take the window with you ─────────────────────────
+# One rule, four groups: directions, workspace back/forward, workspace by
+# number, and the two window-state keys that have a bigger sibling.
+"move + I" = { grid_move = "up" }
+"move + K" = { grid_move = "down" }
+"move + J" = { grid_move = "left" }
+"move + L" = { grid_move = "right" }
+"move + Up" = { grid_move = "up" }
+"move + Down" = { grid_move = "down" }
+"move + Left" = { grid_move = "left" }
+"move + Right" = { grid_move = "right" }
+
+# `follow = true` so the window and the focus travel together — the point of
+# the tier is that you are going along with it.
+"move + U" = { move_window_to_workspace = { workspace = "prev", follow = true } }
+"move + O" = { move_window_to_workspace = { workspace = "next", follow = true } }
+
+"move + 1" = { move_window_to_workspace = 0 }
+"move + 2" = { move_window_to_workspace = 1 }
+"move + 3" = { move_window_to_workspace = 2 }
+"move + 4" = { move_window_to_workspace = 3 }
+"move + 5" = { move_window_to_workspace = 4 }
+"move + 6" = { move_window_to_workspace = 5 }
+"move + 7" = { move_window_to_workspace = 6 }
+"move + 8" = { move_window_to_workspace = 7 }
+"move + 9" = { move_window_to_workspace = 8 }
+
+# Fullscreen, drastic version: covers the whole display, gaps and menu bar
+# included.
+"move + F" = "toggle_fullscreen"
+"move + Space" = "toggle_window_floating"
+
+# ── Tier 3 — Alt+Ctrl: cross a monitor, or reach the WM ──────────────────
+# This tier is why the duplicate move_node bindings had to go. Two displays
+# here, so these earn their place.
+"move2 + I" = { move_window_to_display = { selector = "up" } }
+"move2 + K" = { move_window_to_display = { selector = "down" } }
+"move2 + J" = { move_window_to_display = { selector = "left" } }
+"move2 + L" = { move_window_to_display = { selector = "right" } }
+"move2 + Up" = { move_window_to_display = { selector = "up" } }
+"move2 + Down" = { move_window_to_display = { selector = "down" } }
+"move2 + Left" = { move_window_to_display = { selector = "left" } }
+"move2 + Right" = { move_window_to_display = { selector = "right" } }
+
+"move2 + R" = "reload_config"
+
+# Layout modes. No counterpart on the other two — hyprland and niri each have
+# one layout and that is the whole point of them.
+"move2 + 1" = { set_workspace_layout = { mode = "traditional" } }
+"move2 + 2" = { set_workspace_layout = { mode = "bsp" } }
+"move2 + 3" = { set_workspace_layout = { mode = "master_stack" } }
+"move2 + 4" = { set_workspace_layout = { mode = "scrolling" } }
+
+# ── Tier 4 — rift only ───────────────────────────────────────────────────
+# Deliberately not mirrored anywhere. These are tree operations that the
+# scrolling layouts on Linux do not have a concept of, so giving them keys
+# that mean something else over there would cost more than it buys. They sit
+# on keys that are unbound on hyprland and niri, so nothing contradicts.
+
+# Per-space master switch. Handy when an app needs to be left alone for a
+# minute (screen sharing, a video call's floating tile).
+"Alt + Z" = "toggle_space_activated"
+"Alt + Slash" = "toggle_orientation"
+"Alt + Comma" = "toggle_stack"
+
+# Join with a neighbour, or unjoin if already joined — one key for what used to
+# be five (four `join_window` directions plus `unjoin_windows`). Those four
+# lived on alt-shift + arrows, which tier 2 now owns.
+#
+# The direction is baked in rather than spread over four keys. "right" because
+# the scrolling strip grows rightwards, so the neighbour you mean is almost
+# always the next column over; expelling does not read the argument at all.
+#
+# It must have one: a bare `"consume_or_expel_window"` is a parse error, and
+# rift rejects the *whole file* on one bad line and silently keeps running the
+# previous config. `rift-cli execute config reload` is what prints the reason.
+"Alt + Ctrl + E" = { consume_or_expel_window = "right" }
+
+"Alt + Ctrl + Space" = "toggle_focus_floating"
+
+# ── Deliberately unbound ─────────────────────────────────────────────────
+#
+#   Alt + D        launcher. macOS has Spotlight on Cmd-Space; hyprland and
+#                  niri need the key because fuzzel is the fallback when the
+#                  shell is not up.
