@@ -1019,6 +1019,11 @@ pub struct MissionControlSettings {
     /// Duration of the Overview fade animation, in milliseconds.
     #[setting(label = "Fade duration (milliseconds)", enabled_by = "enabled")]
     pub fade_duration_ms: f64,
+    #[serde(default)]
+    /// Capture visible window previews again at this interval while Overview is
+    /// open, in milliseconds. 0 captures each window once.
+    #[setting(label = "Live preview interval (milliseconds)", enabled_by = "window_previews")]
+    pub live_preview_interval_ms: f64,
 }
 
 fn default_mission_control_fade_duration_ms() -> f64 { 180.0 }

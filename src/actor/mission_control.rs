@@ -95,6 +95,15 @@ pub fn channel_if_enabled(settings: &MissionControlSettings) -> Option<(Sender, 
 }
 
 /// Keep one run-loop timer across input events; dropping it invalidates the native timer.
+fn update_live_timer(timer: &mut Option<Timer>, interval_ms: Option<f64>) {
+    match interval_ms {
+        Some(ms) => {
+            timer.get_or_insert_with(|| Timer::sleep(std::time::Duration::from_secs_f64(ms / 1000.0)));
+        }
+        None => *timer = None,
+    }
+}
+
 fn update_edge_timer(timer: &mut Option<Timer>, active: bool) {
     if active {
         timer.get_or_insert_with(|| Timer::sleep(std::time::Duration::from_millis(150)));
@@ -139,11 +148,23 @@ impl MissionControlActor {
 
     pub async fn run(mut self) {
         let mut edge_timer = None;
+        let mut live_timer = None;
         let mut pending_event = None;
         loop {
             let edge_active = self.session.as_ref().is_some_and(OverviewSession::edge_active);
             update_edge_timer(&mut edge_timer, edge_active);
+            let live = self.session.is_some()
+                && self.settings.window_previews
+                && self.settings.live_preview_interval_ms > 0.0;
+            update_live_timer(
+                &mut live_timer,
+                live.then_some(self.settings.live_preview_interval_ms.max(50.0)),
+            );
             tokio::select! {
+                _ = async { if let Some(timer) = &mut live_timer { timer.await } else { std::future::pending().await } } => {
+                    live_timer = None;
+                    if let Some(session) = &mut self.session { session.recapture(self.cache.as_ref()); }
+                }
                 _ = async { if let Some(timer) = &mut edge_timer { timer.await } else { std::future::pending().await } } => {
                     edge_timer = None;
                     if let Some(session) = &mut self.session { session.edge_tick(self.cache.as_ref()); }

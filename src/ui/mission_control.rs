@@ -1735,8 +1735,10 @@ impl OverviewSession {
                         }
                         visible.insert(data.id);
                         if previews.schedule.needs(data.id) {
-                            let (width, height) =
-                                capture_size(preview_frame(w.frame.size).size, display.scale);
+                            let (width, height) = capture_size(
+                                card_image_frame(w.frame.size, ws.cell).size,
+                                display.scale,
+                            );
                             previews.schedule.enqueue(PreviewRequest {
                                 id: data.id,
                                 sys_id,
@@ -1776,6 +1778,19 @@ impl OverviewSession {
             .sort_by_key(|p| self.selection.window != Some(p.id));
         previews.pump(self.generation);
         self.sync_images(cache);
+    }
+
+    /// Capture the visible windows again. Cards keep their current image until
+    /// the new one arrives.
+    pub(crate) fn recapture(&mut self, cache: Option<&PreviewCache>) {
+        let Some(previews) = &mut self.previews else {
+            return;
+        };
+        if previews.failed {
+            return;
+        }
+        previews.schedule.expire();
+        self.request_previews(cache);
     }
 
     pub(crate) fn preview_ready(
@@ -2069,6 +2084,12 @@ impl PreviewSchedule {
     }
 
     fn complete(&mut self, id: WindowId) { self.active.remove(&id); }
+
+    /// Let every window be captured again, except those still queued or in flight.
+    fn expire(&mut self) {
+        let Self { attempted, pending, active } = self;
+        attempted.retain(|id| active.contains(id) || pending.iter().any(|p| p.id == *id));
+    }
 }
 fn owner_matches(request: &PreviewRequest, pid: i32, bundle: &str) -> bool {
     request.id.pid == pid && request.bundle.as_ref().is_none_or(|expected| expected == bundle)
@@ -2993,5 +3014,24 @@ mod tests {
         assert_eq!(hit(&workspaces, &projection, corner).map(|s| s.workspace), Some(8));
         let gap = CGPoint::new(frame(0).max().x + GRID_GAP / 2.0, frame(0).mid().y);
         assert_eq!(hit(&workspaces, &projection, gap), None);
+    }
+
+    #[test]
+    fn expiring_the_schedule_recaptures_only_settled_windows() {
+        let mut schedule = PreviewSchedule::default();
+        for id in 1..=3 {
+            schedule.enqueue(request(id));
+        }
+        let first = schedule.next().unwrap().id;
+        schedule.complete(first);
+        let second = schedule.next().unwrap().id;
+        // First is captured, second is in flight, third is still queued.
+        schedule.expire();
+        assert!(schedule.needs(first));
+        assert!(!schedule.needs(second));
+        assert!(!schedule.needs(WindowId::new(123, 3)));
+        schedule.enqueue(request(1));
+        schedule.enqueue(request(3));
+        assert_eq!(schedule.pending.iter().map(|p| p.id.idx.get()).collect::<Vec<_>>(), [3, 1]);
     }
 }
