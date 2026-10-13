@@ -78,6 +78,13 @@ pub enum LayoutCommand {
     },
     CreateWorkspace,
     SwitchToLastWorkspace,
+    /// Workspace grid: focus the neighboring tile, or the neighboring cell at the edge.
+    GridFocus(Direction),
+    /// Workspace grid: swap with the neighboring tile, or carry the window into the
+    /// neighboring cell at the edge.
+    GridMove(Direction),
+    /// Workspace grid: go to the neighboring cell.
+    GridCell(Direction),
     SwapWindows(WindowId, WindowId),
     AdjustMasterRatio(f64),
     AdjustMasterCount {

@@ -76,6 +76,11 @@ pub struct VirtualWorkspaceSettings {
     #[setting(label = "Default workspace", custom, aliases = "startup desktop space")]
     pub default_workspace: usize,
     #[serde(default)]
+    /// Lay workspaces out as a grid with this many columns, row by row from the
+    /// top left. 0 keeps them in a line.
+    #[setting(ignore)]
+    pub grid_columns: usize,
+    #[serde(default)]
     /// Recheck workspace rules when a window title changes.
     #[setting(
         label = "Reapply rules when titles change",
@@ -183,6 +188,7 @@ impl Default for VirtualWorkspaceSettings {
             prevent_wrapping: false,
             workspace_names: default_workspace_names(),
             default_workspace: 0,
+            grid_columns: 0,
             reapply_app_rules_on_title_change: false,
             app_rules: Vec::new(),
             workspace_rules: Vec::new(),

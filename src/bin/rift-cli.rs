@@ -357,6 +357,12 @@ enum LayoutCommands {
     /// Toggle centering of the selected column in scrolling layout.
     /// If invoked again on the same selection, centering is removed.
     CenterSelection,
+    /// Workspace grid: focus the neighboring tile, or the neighboring cell at the edge
+    GridFocus { direction: String },
+    /// Workspace grid: swap with the neighboring tile, or carry the window into the neighboring cell
+    GridMove { direction: String },
+    /// Workspace grid: go to the neighboring cell
+    GridCell { direction: String },
 }
 
 #[derive(Subcommand)]
@@ -971,6 +977,15 @@ fn map_layout_command(cmd: LayoutCommands) -> Result<CliCommand, String> {
         LayoutCommands::Descend => Ok(CliCommand::Reactor(reactor::Command::Layout(LC::Descend))),
         LayoutCommands::MoveNode { direction } => Ok(CliCommand::Reactor(
             reactor::Command::Layout(LC::MoveNode(direction.into())),
+        )),
+        LayoutCommands::GridFocus { direction } => Ok(CliCommand::Reactor(
+            reactor::Command::Layout(LC::GridFocus(direction.into())),
+        )),
+        LayoutCommands::GridMove { direction } => Ok(CliCommand::Reactor(
+            reactor::Command::Layout(LC::GridMove(direction.into())),
+        )),
+        LayoutCommands::GridCell { direction } => Ok(CliCommand::Reactor(
+            reactor::Command::Layout(LC::GridCell(direction.into())),
         )),
         LayoutCommands::JoinWindow { direction } => Ok(CliCommand::Reactor(
             reactor::Command::Layout(LC::JoinWindow(direction.into())),

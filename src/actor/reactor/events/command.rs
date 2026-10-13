@@ -60,9 +60,18 @@ pub fn handle_command_layout(
             | LayoutCommand::MoveWindowToWorkspace { follow: true, .. }
             | LayoutCommand::SwitchToLastWorkspace
     );
+    // A grid command switches workspaces only when it crosses a cell edge, which
+    // is known after it runs.
+    let is_grid_command = matches!(
+        cmd,
+        LayoutCommand::GridFocus(_) | LayoutCommand::GridMove(_) | LayoutCommand::GridCell(_)
+    );
     let requires_workspace_space = matches!(
         cmd,
-        LayoutCommand::NextWorkspace(_)
+        LayoutCommand::GridFocus(_)
+            | LayoutCommand::GridMove(_)
+            | LayoutCommand::GridCell(_)
+            | LayoutCommand::NextWorkspace(_)
             | LayoutCommand::PrevWorkspace(_)
             | LayoutCommand::SwitchToWorkspace(_)
             | LayoutCommand::MoveWindowToWorkspace { follow: true, .. }
@@ -72,7 +81,10 @@ pub fn handle_command_layout(
     );
     let is_virtual_workspace_command = matches!(
         cmd,
-        LayoutCommand::NextWorkspace(_)
+        LayoutCommand::GridFocus(_)
+            | LayoutCommand::GridMove(_)
+            | LayoutCommand::GridCell(_)
+            | LayoutCommand::NextWorkspace(_)
             | LayoutCommand::PrevWorkspace(_)
             | LayoutCommand::SwitchToWorkspace(_)
             | LayoutCommand::MoveWindowToWorkspace { .. }
@@ -99,11 +111,21 @@ pub fn handle_command_layout(
     } else {
         None
     };
-    if !is_workspace_switch {
+    if !is_workspace_switch && !is_grid_command {
         workspace_switch.mark_workspace_switch_inactive();
     }
+    let active_before =
+        workspace_space.and_then(|space| layout.layout_engine.workspaces().active_workspace(space));
 
     let response = match &cmd {
+        LayoutCommand::GridFocus(_) | LayoutCommand::GridMove(_) | LayoutCommand::GridCell(_) => {
+            match workspace_space {
+                Some(space) if layout.layout_engine.workspaces().grid_enabled() => layout
+                    .layout_engine
+                    .handle_virtual_workspace_command(&mut state.windows, space, &cmd),
+                _ => EventResponse::default(),
+            }
+        }
         LayoutCommand::NextWorkspace(_)
         | LayoutCommand::PrevWorkspace(_)
         | LayoutCommand::SwitchToWorkspace(_)
@@ -145,6 +167,15 @@ pub fn handle_command_layout(
             )
         }
     };
+
+    let is_workspace_switch = is_workspace_switch
+        || (is_grid_command
+            && workspace_space
+                .and_then(|space| layout.layout_engine.workspaces().active_workspace(space))
+                != active_before);
+    if is_grid_command && !is_workspace_switch {
+        workspace_switch.mark_workspace_switch_inactive();
+    }
 
     if is_virtual_workspace_command && !response.changed {
         if is_workspace_switch {

@@ -180,6 +180,8 @@ pub struct WorkspaceStore {
     #[serde(skip)]
     prevent_wrapping: bool,
     #[serde(skip)]
+    grid_columns: usize,
+    #[serde(skip)]
     pub workspace_rules: Vec<crate::common::config::WorkspaceLayoutRule>,
     #[serde(skip)]
     pub default_layout_mode: LayoutMode,
@@ -195,6 +197,25 @@ fn deserialize_workspace_order<'de, D: serde::Deserializer<'de>>(
         ids.sort_unstable();
     }
     Ok(spaces)
+}
+
+fn grid_neighbor_index(
+    index: usize,
+    count: usize,
+    columns: usize,
+    dir: Direction,
+) -> Option<usize> {
+    if columns == 0 || index >= count {
+        return None;
+    }
+    let (row, column) = (index / columns, index % columns);
+    let target = match dir {
+        Direction::Left => (column > 0).then(|| index - 1)?,
+        Direction::Right => (column + 1 < columns).then(|| index + 1)?,
+        Direction::Up => (row > 0).then(|| index - columns)?,
+        Direction::Down => index + columns,
+    };
+    (target < count).then_some(target)
 }
 
 impl std::ops::Index<VirtualWorkspaceId> for WorkspaceStore {
@@ -323,6 +344,7 @@ impl WorkspaceStore {
             default_workspace,
             workspace_auto_back_and_forth: config.workspace_auto_back_and_forth,
             prevent_wrapping: config.prevent_wrapping,
+            grid_columns: config.grid_columns,
             workspace_rules: config.workspace_rules.clone(),
             default_layout_mode: layout_settings.mode,
             layout_settings: layout_settings.clone(),
@@ -346,6 +368,7 @@ impl WorkspaceStore {
         self.default_workspace_names = config.workspace_names.clone();
         self.workspace_auto_back_and_forth = config.workspace_auto_back_and_forth;
         self.prevent_wrapping = config.prevent_wrapping;
+        self.grid_columns = config.grid_columns;
 
         let target_count = self.default_workspace_count.max(1).min(self.max_workspaces);
         self.default_workspace = config.default_workspace.min(target_count - 1);
@@ -685,6 +708,25 @@ impl WorkspaceStore {
             }
         }
         None
+    }
+
+    pub fn grid_enabled(&self) -> bool { self.grid_columns > 0 }
+
+    /// The workspace next to `current` in the grid, read row by row from the top
+    /// left. The grid does not wrap: there is no neighbor past an edge.
+    pub fn grid_neighbor(
+        &self,
+        space: SpaceId,
+        current: VirtualWorkspaceId,
+        dir: Direction,
+    ) -> Option<VirtualWorkspaceId> {
+        grid_neighbor_index(
+            self.workspace_ids(space).iter().position(|&id| id == current)?,
+            self.workspace_ids(space).len(),
+            self.grid_columns,
+            dir,
+        )
+        .map(|index| self.workspace_ids(space)[index])
     }
 
     pub fn next_workspace(
@@ -2064,5 +2106,26 @@ mod tests {
 
         assert_eq!(hidden.origin.y, primary.max().y - 1.0);
         assert_eq!(hidden.origin.x, primary.origin.x - frame.size.width + 1.0);
+    }
+
+    #[test]
+    fn grid_neighbors_stop_at_edges() {
+        use Direction::*;
+        // 0 1 2
+        // 3 4 5
+        // 6 7 8
+        let n = |index, dir| grid_neighbor_index(index, 9, 3, dir);
+        assert_eq!([n(4, Left), n(4, Right), n(4, Up), n(4, Down)], [
+            Some(3),
+            Some(5),
+            Some(1),
+            Some(7)
+        ]);
+        assert_eq!([n(0, Left), n(0, Up), n(2, Right), n(8, Down)], [None; 4]);
+        assert_eq!(n(3, Left), None, "rows do not wrap into each other");
+        assert_eq!(n(5, Right), None);
+        assert_eq!(grid_neighbor_index(7, 8, 3, Right), None, "short last row");
+        assert_eq!(grid_neighbor_index(5, 8, 3, Down), None);
+        assert_eq!(n(4, Right).and(grid_neighbor_index(4, 9, 0, Right)), None, "off");
     }
 }

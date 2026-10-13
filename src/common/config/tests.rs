@@ -693,3 +693,32 @@ fn stack_tab_geometry_rejects_unusable_values() {
         assert_eq!(tabs.validate().len(), 1, "{text}");
     }
 }
+
+#[test]
+fn grid_commands_and_columns_parse() {
+    let cfg = Config::parse(
+        r#"
+            [settings]
+
+            [virtual_workspaces]
+            default_workspace_count = 9
+            grid_columns = 3
+
+            [keys]
+            "Alt + J" = { grid_focus = "left" }
+            "Alt + Shift + J" = { grid_move = "left" }
+            "Alt + Cmd + J" = { grid_cell = "left" }
+        "#,
+    )
+    .unwrap();
+    assert_eq!(cfg.virtual_workspaces.grid_columns, 3);
+    let commands: Vec<_> = cfg.keys.iter().map(|(_, command)| command.clone()).collect();
+    for expected in [
+        LayoutCommand::GridFocus(crate::layout_engine::Direction::Left),
+        LayoutCommand::GridMove(crate::layout_engine::Direction::Left),
+        LayoutCommand::GridCell(crate::layout_engine::Direction::Left),
+    ] {
+        let expected = WmCommand::ReactorCommand(reactor::Command::Layout(expected));
+        assert!(commands.contains(&expected), "{expected:?} not in {commands:?}");
+    }
+}
