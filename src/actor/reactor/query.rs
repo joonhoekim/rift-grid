@@ -529,6 +529,7 @@ impl Reactor {
                 is_active,
                 window_count: windows.len(),
                 windows,
+                grid_cell: self.layout_manager.layout_engine.workspaces().grid_cell(index),
                 index,
             });
         }

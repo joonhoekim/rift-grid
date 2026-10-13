@@ -24,6 +24,8 @@ pub struct RuntimeWorkspaceData {
     pub is_active: bool,
     pub window_count: usize,
     pub windows: Vec<RuntimeWindowData>,
+    /// Row and column in the workspace grid, when workspaces form one.
+    pub grid_cell: Option<(usize, usize)>,
 }
 
 #[derive(Debug, Clone)]

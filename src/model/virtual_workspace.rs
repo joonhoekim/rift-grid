@@ -199,7 +199,7 @@ fn deserialize_workspace_order<'de, D: serde::Deserializer<'de>>(
     Ok(spaces)
 }
 
-fn grid_neighbor_index(
+pub(crate) fn grid_neighbor_index(
     index: usize,
     count: usize,
     columns: usize,
@@ -711,6 +711,11 @@ impl WorkspaceStore {
     }
 
     pub fn grid_enabled(&self) -> bool { self.grid_columns > 0 }
+
+    /// Row and column of the workspace at `index` when workspaces form a grid.
+    pub fn grid_cell(&self, index: usize) -> Option<(usize, usize)> {
+        self.grid_enabled().then(|| (index / self.grid_columns, index % self.grid_columns))
+    }
 
     /// The workspace next to `current` in the grid, read row by row from the top
     /// left. The grid does not wrap: there is no neighbor past an edge.

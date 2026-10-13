@@ -34,6 +34,8 @@ use crate::sys::window_server::WindowServerId;
 const GAP: f64 = 40.0;
 const CORNER: f64 = 8.0;
 const CAPTION: f64 = 48.0;
+const GRID_GAP: f64 = 24.0;
+const HEADING: f64 = 26.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Selection {
@@ -51,6 +53,8 @@ struct WindowProjection {
 #[derive(Debug)]
 struct WorkspaceProjection {
     source: usize,
+    /// A grid cell: the backdrop fills the frame instead of hugging the windows.
+    cell: bool,
     frame: CGRect,
     scene: crate::actor::drag::DragScene,
     windows: Vec<WindowProjection>,
@@ -77,6 +81,9 @@ fn pixel_aligned(frame: CGRect, scale: f64) -> CGRect {
 }
 
 fn workspace_backdrop(ws: &WorkspaceProjection) -> CGRect {
+    if ws.cell {
+        return rect(0.0, 0.0, ws.frame.size.width, ws.frame.size.height);
+    }
     let margin = 24.0_f64.min(ws.frame.size.width / 4.0);
     let width = (ws.frame.size.width * 0.55).max(360.0).min(ws.frame.size.width - margin * 2.0);
     let center = ws.frame.size.width / 2.0;
@@ -148,7 +155,8 @@ fn scrolled_workspace_offset(
 }
 
 fn filter_workspaces(workspaces: &mut Vec<RuntimeWorkspaceData>, show_empty: bool) {
-    if !show_empty {
+    // Every cell keeps its place in a grid, empty or not.
+    if !show_empty && grid_shape(workspaces).is_none() {
         workspaces.retain(|ws| !ws.windows.is_empty());
     }
 }
@@ -211,6 +219,119 @@ fn card_visible(bounds: CGSize, ribbon: CGRect, card: CGRect) -> bool {
     left < right && top < bottom
 }
 
+/// Rows and columns when the workspaces form a grid.
+fn grid_shape(workspaces: &[RuntimeWorkspaceData]) -> Option<(usize, usize)> {
+    workspaces
+        .iter()
+        .map(|ws| ws.grid_cell)
+        .try_fold((0, 0), |(rows, columns), cell| {
+            let (row, column) = cell?;
+            Some((rows.max(row + 1), columns.max(column + 1)))
+        })
+        .filter(|&(rows, columns)| rows > 0 && columns > 0)
+}
+
+/// The frame of one grid cell: cells keep the display's aspect ratio, leave room
+/// for a heading above each row, and the whole grid is centered in the overview.
+fn grid_cell_frame(
+    overview: CGSize,
+    display: CGSize,
+    (rows, columns): (usize, usize),
+    (row, column): (usize, usize),
+) -> CGRect {
+    let (rows_f, columns_f) = (rows as f64, columns as f64);
+    let aspect = display.width / display.height;
+    let available_width = (overview.width - (columns_f + 1.0) * GRID_GAP).max(1.0);
+    let available_height =
+        (overview.height - (rows_f + 1.0) * GRID_GAP - rows_f * HEADING).max(1.0);
+    let width = (available_width / columns_f).min(available_height / rows_f * aspect);
+    let height = width / aspect;
+    let total_width = columns_f * width + (columns_f - 1.0) * GRID_GAP;
+    let total_height = rows_f * (height + HEADING) + (rows_f - 1.0) * GRID_GAP;
+    rect(
+        (overview.width - total_width) / 2.0 + column as f64 * (width + GRID_GAP),
+        (overview.height - total_height) / 2.0
+            + HEADING
+            + row as f64 * (height + HEADING + GRID_GAP),
+        width,
+        height,
+    )
+}
+
+fn project_windows(
+    ws: &RuntimeWorkspaceData,
+    display: CGRect,
+    frame: CGRect,
+    scale: f64,
+    x: f64,
+) -> (Vec<WindowProjection>, crate::actor::drag::DragScene) {
+    let mut windows: Vec<_> = ws
+        .windows
+        .iter()
+        .enumerate()
+        .filter_map(|(source, window)| {
+            let w = window.layout_frame.unwrap_or(window.info.frame);
+            let projected = rect(
+                x + (w.origin.x - display.origin.x) * scale,
+                (w.origin.y - display.origin.y) * scale,
+                w.size.width * scale,
+                w.size.height * scale,
+            );
+            intersects(projected, rect(0.0, 0.0, frame.size.width, frame.size.height)).then_some(
+                WindowProjection {
+                    id: window.id,
+                    floating: window.is_floating,
+                    source,
+                    frame: projected,
+                },
+            )
+        })
+        .collect();
+    windows.sort_by_key(|w| w.floating);
+    let scene = crate::actor::drag::DragScene {
+        action_override: (ws.layout_mode == "stack")
+            .then_some(crate::layout_engine::WindowDropAction::Swap),
+        source_neighbors: [false; 4],
+        targets: windows
+            .iter()
+            .rev()
+            .filter_map(|w| {
+                (!w.floating).then_some(crate::actor::drag::DragSceneTarget {
+                    window: w.id,
+                    space: ws.space,
+                    frame: w.frame,
+                })
+            })
+            .collect(),
+    };
+    (windows, scene)
+}
+
+/// Every cell of the grid at once, each a scaled copy of the display.
+fn project_grid(
+    display: CGRect,
+    overview: CGSize,
+    workspaces: &[RuntimeWorkspaceData],
+    shape: (usize, usize),
+) -> Vec<WorkspaceProjection> {
+    workspaces
+        .iter()
+        .enumerate()
+        .filter_map(|(source, ws)| {
+            let frame = grid_cell_frame(overview, display.size, shape, ws.grid_cell?);
+            let scale = frame.size.width / display.size.width;
+            let (windows, scene) = project_windows(ws, display, frame, scale, 0.0);
+            Some(WorkspaceProjection {
+                source,
+                cell: true,
+                frame,
+                scene,
+                windows,
+            })
+        })
+        .collect()
+}
+
 /// Pure display-relative projection with one stride of vertical overscan.
 fn project(
     display: CGRect,
@@ -222,6 +343,9 @@ fn project(
 ) -> Vec<WorkspaceProjection> {
     if display.size.height <= 0.0 || display.size.width <= 0.0 {
         return Vec::new();
+    }
+    if let Some(shape) = grid_shape(workspaces) {
+        return project_grid(display, overview, workspaces, shape);
     }
     let height = ((overview.height - 2.0 * GAP) * 0.5).max(1.0);
     let stride = height + GAP;
@@ -242,47 +366,16 @@ fn project(
             if !intersects(frame, bounds) {
                 return None;
             }
-            let x = (overview.width - display.size.width * scale) / 2.0;
-            let mut windows: Vec<_> = ws
-                .windows
-                .iter()
-                .enumerate()
-                .filter_map(|(source, window)| {
-                    let w = window.layout_frame.unwrap_or(window.info.frame);
-                    let projected = rect(
-                        x + (w.origin.x - display.origin.x) * scale
-                            - offsets.get(&ws.index).copied().unwrap_or(0.0),
-                        (w.origin.y - display.origin.y) * scale,
-                        w.size.width * scale,
-                        w.size.height * scale,
-                    );
-                    intersects(projected, rect(0.0, 0.0, frame.size.width, frame.size.height))
-                        .then_some(WindowProjection {
-                            id: window.id,
-                            floating: window.is_floating,
-                            source,
-                            frame: projected,
-                        })
-                })
-                .collect();
-            windows.sort_by_key(|w| w.floating);
-            let scene = crate::actor::drag::DragScene {
-                action_override: (ws.layout_mode == "stack")
-                    .then_some(crate::layout_engine::WindowDropAction::Swap),
-                source_neighbors: [false; 4],
-                targets: windows
-                    .iter()
-                    .rev()
-                    .filter_map(|w| {
-                        (!w.floating).then_some(crate::actor::drag::DragSceneTarget {
-                            window: w.id,
-                            space: ws.space,
-                            frame: w.frame,
-                        })
-                    })
-                    .collect(),
-            };
-            Some(WorkspaceProjection { source, frame, scene, windows })
+            let x = (overview.width - display.size.width * scale) / 2.0
+                - offsets.get(&ws.index).copied().unwrap_or(0.0);
+            let (windows, scene) = project_windows(ws, display, frame, scale, x);
+            Some(WorkspaceProjection {
+                source,
+                cell: false,
+                frame,
+                scene,
+                windows,
+            })
         })
         .collect()
 }
@@ -472,7 +565,13 @@ fn label(parent: &CALayer, text: &str, frame: CGRect, scale: f64) -> Retained<CA
 }
 
 impl DisplayOverview {
+    fn grid(&self) -> Option<(usize, usize)> { grid_shape(&self.workspaces) }
+
     fn reveal(&mut self, workspace: usize, window: WindowId) -> bool {
+        // Grid cells show the whole display; there is nothing to pan to.
+        if self.grid().is_some() {
+            return false;
+        }
         let Some(ws) = self.workspaces.iter().find(|ws| ws.index == workspace) else {
             return false;
         };
@@ -973,7 +1072,8 @@ impl OverviewSession {
         self.drag.as_ref().is_some_and(|drag| {
             drag.started
                 && self.displays.iter().any(|d| {
-                    contains(d.bounds, drag.point)
+                    d.grid().is_none()
+                        && contains(d.bounds, drag.point)
                         && edge_direction(d.bounds.size.height, drag.point.y - d.bounds.origin.y)
                             != 0.0
                 })
@@ -1405,7 +1505,8 @@ impl OverviewSession {
                 let i = self.displays.iter().position(|d| contains(d.bounds, point))?;
                 self.active = i;
                 let d = &mut self.displays[i];
-                if delta.x == 0.0 && delta.y == 0.0 {
+                // The whole grid is on screen: scrolling has nothing to reveal.
+                if (delta.x == 0.0 && delta.y == 0.0) || d.grid().is_some() {
                     return None;
                 }
                 let mut refresh_previews = true;
@@ -1459,6 +1560,29 @@ impl OverviewSession {
                 if let Some(point) = self.drag.as_ref().map(|drag| drag.point) {
                     self.move_drag(point);
                 }
+            }
+            Input::Up | Input::Down | Input::Left | Input::Right
+                if self.displays[self.active].grid().is_some() =>
+            {
+                let d = &self.displays[self.active];
+                let direction = match input {
+                    Input::Up => crate::layout_engine::Direction::Up,
+                    Input::Down => crate::layout_engine::Direction::Down,
+                    Input::Left => crate::layout_engine::Direction::Left,
+                    _ => crate::layout_engine::Direction::Right,
+                };
+                let (_, columns) = d.grid()?;
+                let target = crate::model::virtual_workspace::grid_neighbor_index(
+                    self.selection.workspace,
+                    d.workspaces.len(),
+                    columns,
+                    direction,
+                )?;
+                let ws = d.workspaces.iter().find(|ws| ws.index == target)?;
+                self.selection = Selection {
+                    workspace: ws.index,
+                    window: ws.windows.iter().find(|w| w.is_focused).map(|w| w.id),
+                };
             }
             Input::Up | Input::Down => {
                 let d = &mut self.displays[self.active];
@@ -2095,6 +2219,7 @@ mod tests {
             is_active: index == 1,
             window_count: windows.len(),
             windows,
+            grid_cell: None,
         }
     }
     fn request(id: u32) -> PreviewRequest {
@@ -2375,6 +2500,7 @@ mod tests {
     #[test]
     fn workspace_surface_encloses_visible_cards_and_stays_inside_screen() {
         let ws = WorkspaceProjection {
+            cell: false,
             source: 0,
             frame: rect(0.0, 200.0, 1200.0, 360.0),
             scene: Default::default(),
@@ -2409,6 +2535,7 @@ mod tests {
             false,
         )])];
         let projection = vec![WorkspaceProjection {
+            cell: false,
             source: 0,
             frame: rect(0.0, 100.0, 1200.0, 360.0),
             scene: Default::default(),
@@ -2453,6 +2580,7 @@ mod tests {
             let aligned = pixel_aligned(frame, scale);
             let heading = workspace_heading(
                 &WorkspaceProjection {
+                    cell: false,
                     source: 0,
                     frame,
                     scene: Default::default(),
@@ -2749,5 +2877,64 @@ mod tests {
         assert!(!owner_matches(&request, 456, "org.example"));
         assert!(!owner_matches(&request, 123, "other.app"));
         assert!(owner_matches(&request, 123, "org.example"));
+    }
+
+    #[test]
+    fn grid_overview_lays_cells_out_in_rows_and_columns() {
+        let display = rect(0.0, 0.0, 1600.0, 1000.0);
+        let overview = CGSize::new(1600.0, 1000.0);
+        let workspaces: Vec<_> = (0..9)
+            .map(|index| {
+                let windows = if index == 4 {
+                    vec![
+                        window(1, rect(0.0, 0.0, 800.0, 1000.0), false),
+                        window(2, rect(800.0, 0.0, 800.0, 1000.0), false),
+                    ]
+                } else {
+                    Vec::new()
+                };
+                RuntimeWorkspaceData {
+                    grid_cell: Some((index / 3, index % 3)),
+                    ..workspace(index, windows)
+                }
+            })
+            .collect();
+        assert_eq!(grid_shape(&workspaces), Some((3, 3)));
+        assert_eq!(grid_shape(&workspaces[..1]), Some((1, 1)));
+        assert_eq!(grid_shape(&[workspace(0, Vec::new())]), None);
+
+        let mut filtered = workspaces.clone();
+        filter_workspaces(&mut filtered, false);
+        assert_eq!(filtered.len(), 9, "empty cells keep their place");
+
+        let projection = project(display, overview, &workspaces, 4, 0.0, &HashMap::default());
+        assert_eq!(projection.len(), 9);
+        let frame = |i: usize| projection[i].frame;
+        // Same size, the display's aspect ratio, inside the overview, centered.
+        for ws in &projection {
+            assert!(ws.cell);
+            assert_eq!(ws.frame.size, frame(0).size);
+            assert!((ws.frame.size.width / ws.frame.size.height - 1.6).abs() < 1e-9);
+            assert!(ws.frame.origin.x >= 0.0 && ws.frame.max().x <= overview.width);
+            assert!(ws.frame.origin.y >= HEADING && ws.frame.max().y <= overview.height);
+        }
+        assert!((frame(4).mid().x - overview.width / 2.0).abs() < 1e-9);
+        assert!((frame(4).mid().y - overview.height / 2.0).abs() < HEADING);
+        // Row by row from the top left.
+        assert!(frame(0).max().x < frame(1).origin.x);
+        assert_eq!(frame(0).origin.y, frame(2).origin.y);
+        assert!(frame(0).max().y + HEADING < frame(3).origin.y);
+        assert_eq!(frame(0).origin.x, frame(6).origin.x);
+
+        // The center cell's two tiles split it in half, and the whole cell is the hit target.
+        let center = &projection[4];
+        assert_eq!(workspace_backdrop(center), rect(0.0, 0.0, frame(4).size.width, frame(4).size.height));
+        let half = frame(4).size.width / 2.0;
+        assert_eq!(center.windows[0].frame, rect(0.0, 0.0, half, frame(4).size.height));
+        assert_eq!(center.windows[1].frame.origin.x, half);
+        let corner = CGPoint::new(frame(8).max().x - 2.0, frame(8).max().y - 2.0);
+        assert_eq!(hit(&workspaces, &projection, corner).map(|s| s.workspace), Some(8));
+        let gap = CGPoint::new(frame(0).max().x + GRID_GAP / 2.0, frame(0).mid().y);
+        assert_eq!(hit(&workspaces, &projection, gap), None);
     }
 }
