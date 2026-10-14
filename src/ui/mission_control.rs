@@ -155,12 +155,16 @@ fn scrolled_workspace_offset(
         - centered as f64
 }
 
-fn filter_workspaces(workspaces: &mut Vec<RuntimeWorkspaceData>, show_empty: bool) {
+fn filter_workspaces(
+    workspaces: &mut Vec<RuntimeWorkspaceData>,
+    show_empty: bool,
+) -> Vec<GridButton> {
     if grid_shape(workspaces).is_some() {
-        keep_grid_on_screen(workspaces);
+        return keep_grid_on_screen(workspaces);
     } else if !show_empty {
         workspaces.retain(|ws| !ws.windows.is_empty());
     }
+    Vec::new()
 }
 
 fn vertical_scroll(delta: CGPoint) -> bool { delta.y.abs() >= delta.x.abs() }
@@ -474,6 +478,7 @@ struct DisplayOverview {
     views: Vec<WorkspaceView>,
     icons: HashMap<i32, Option<Retained<CGImage>>>,
     look: GridLook,
+    grid_row: Option<(Retained<CALayer>, Vec<GridButton>)>,
     animate: bool,
     root: Retained<CALayer>,
     // Field order matters: unbind the surface before releasing its CGS window.
@@ -922,15 +927,15 @@ impl OverviewSession {
             .filter_map(|display| {
                 let space = display.info.space?;
                 let mut workspaces = reactor.query_workspaces(Some(space));
-                filter_workspaces(&mut workspaces, settings.show_empty_workspaces);
+                let buttons = filter_workspaces(&mut workspaces, settings.show_empty_workspaces);
 
-                Some((display, workspaces))
+                Some((display, workspaces, buttons))
             })
             .collect();
         if let Some(cache) = cache {
-            cache.prune(snapshot.iter().flat_map(|(_, ws)| ws).flat_map(|ws| &ws.windows));
+            cache.prune(snapshot.iter().flat_map(|(_, ws, _)| ws).flat_map(|ws| &ws.windows));
         }
-        for (display, workspaces) in snapshot {
+        for (display, workspaces, buttons) in snapshot {
             if workspaces.is_empty() {
                 continue;
             }
@@ -975,12 +980,14 @@ impl OverviewSession {
                 views: Vec::new(),
                 icons: HashMap::default(),
                 look: GridLook::new(settings),
+                grid_row: None,
                 animate: false,
                 root,
                 _surface: surface,
                 _window: window,
             };
             view.rebuild(cache.as_ref());
+            view.set_grid_buttons(buttons);
             if let Err(error) = view._window.order_above(None) {
                 tracing::warn!(?error, "Overview ordering failed");
                 continue;
@@ -1076,7 +1083,7 @@ impl OverviewSession {
         for (i, d) in self.displays.iter_mut().enumerate() {
             let centered_id = d.workspaces.get(d.centered).map(|ws| ws.workspace_id);
             d.workspaces = reactor.query_workspaces(d.info.space);
-            filter_workspaces(&mut d.workspaces, self.show_empty_workspaces);
+            let buttons = filter_workspaces(&mut d.workspaces, self.show_empty_workspaces);
 
             if d.workspaces.is_empty() {
                 continue;
@@ -1111,6 +1118,7 @@ impl OverviewSession {
             }
             d.animate = true;
             d.rebuild(cache);
+            d.set_grid_buttons(buttons);
         }
         let active_uuid = self.displays.get(self.active).map(|d| d.info.display_uuid.clone());
         self.displays.retain(|d| !d.workspaces.is_empty());
@@ -1153,6 +1161,9 @@ impl OverviewSession {
 
     fn begin_drag(&mut self, point: CGPoint) {
         self.end_drag();
+        if self.on_grid_row(point) {
+            return;
+        }
         let Some(d) = self.displays.iter().find(|d| contains(d.bounds, point)) else {
             return;
         };
@@ -1324,6 +1335,9 @@ impl OverviewSession {
     }
 
     fn pointer_target(&self, point: CGPoint) -> Option<(usize, Selection)> {
+        if self.on_grid_row(point) {
+            return None;
+        }
         self.displays
             .iter()
             .enumerate()
@@ -1481,6 +1495,14 @@ impl OverviewSession {
         let mut only_translated = false;
         let activate = matches!(input, Input::Activate | Input::Click(_));
         match input {
+            Input::Click(point) if self.on_grid_row(point) => {
+                // Another grid, and the overview stays open on it.
+                return self.grid_button_at(point).map(|grid| {
+                    OverviewAction::Command(crate::layout_engine::LayoutCommand::SwitchToGrid(
+                        grid + 1,
+                    ))
+                });
+            }
             Input::Move(point) | Input::Click(point) => {
                 let target = self.pointer_target(point);
                 let Some((i, selection)) = target else {

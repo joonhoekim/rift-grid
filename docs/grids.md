@@ -56,6 +56,7 @@ name), and `grid` wins when both are given.
 
 ## Overview
 
-A row of grid buttons (the grids that have windows, the one on screen
-highlighted). Clicking one, or Alt+N while the overview is open, shows that grid
-in the overview without leaving it.
+The overview shows the grid on screen. A row of grid buttons at the top lists
+the grids that have windows plus the one on screen, which is highlighted.
+Clicking a button, or pressing Alt+N while the overview is open, switches to that
+grid and the overview stays open on it.

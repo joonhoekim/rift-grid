@@ -35,12 +35,55 @@ pub(super) fn grid_focus_selection(workspaces: &[RuntimeWorkspaceData]) -> Optio
 }
 
 /// The overview shows one grid, the one on screen, every cell of it in place,
-/// empty or not.
-pub(super) fn keep_grid_on_screen(workspaces: &mut Vec<RuntimeWorkspaceData>) {
-    let on_screen = workspaces.iter().find(|ws| ws.is_active).map(|ws| ws.grid);
-    if let Some(grid) = on_screen {
-        workspaces.retain(|ws| ws.grid == grid);
+/// empty or not. Returns the grids for the button row: those with windows and
+/// the one on screen, in order.
+pub(super) fn keep_grid_on_screen(workspaces: &mut Vec<RuntimeWorkspaceData>) -> Vec<GridButton> {
+    let on_screen = workspaces.iter().find(|ws| ws.is_active).and_then(|ws| ws.grid);
+    let mut grids: Vec<_> = workspaces
+        .iter()
+        .filter(|ws| !ws.windows.is_empty() || ws.grid == on_screen)
+        .filter_map(|ws| ws.grid)
+        .collect();
+    grids.dedup();
+    if on_screen.is_some() {
+        workspaces.retain(|ws| ws.grid == on_screen);
     }
+    grids
+        .into_iter()
+        .map(|grid| GridButton { grid, on_screen: Some(grid) == on_screen })
+        .collect()
+}
+
+/// A button in the overview's grid row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct GridButton {
+    /// 0-based.
+    pub(super) grid: usize,
+    pub(super) on_screen: bool,
+}
+
+const BUTTON: CGSize = CGSize { width: 34.0, height: 26.0 };
+const BUTTON_GAP: f64 = 6.0;
+const BUTTON_PAD: f64 = 5.0;
+
+/// The grid row, centred at the top of the overview: the row's frame and each
+/// button's frame within it.
+pub(super) fn grid_button_frames(overview: CGSize, count: usize) -> (CGRect, Vec<CGRect>) {
+    let n = count as f64;
+    let width = n * BUTTON.width + (n - 1.0).max(0.0) * BUTTON_GAP + 2.0 * BUTTON_PAD;
+    let height = BUTTON.height + 2.0 * BUTTON_PAD;
+    let row = rect((overview.width - width) / 2.0, 12.0, width, height);
+    let buttons = (0..count)
+        .map(|i| {
+            rect(
+                BUTTON_PAD + i as f64 * (BUTTON.width + BUTTON_GAP),
+                BUTTON_PAD,
+                BUTTON.width,
+                BUTTON.height,
+            )
+        })
+        .collect();
+    (row, buttons)
 }
 
 /// Rows and columns when the workspaces form a grid.
@@ -257,6 +300,73 @@ pub(super) fn glide(layer: &CALayer, from: CGRect) {
 impl DisplayOverview {
     pub(super) fn grid(&self) -> Option<(usize, usize)> { grid_shape(&self.workspaces) }
 
+    /// Redraw the grid row when the grids in use or the one on screen changed.
+    pub(super) fn set_grid_buttons(&mut self, buttons: Vec<GridButton>) {
+        if self.grid_row.as_ref().is_some_and(|(_, drawn)| *drawn == buttons) {
+            return;
+        }
+        if let Some((row, _)) = self.grid_row.take() {
+            row.removeFromSuperlayer();
+        }
+        if buttons.is_empty() || self.grid().is_none() {
+            return;
+        }
+        let (frame, frames) = grid_button_frames(self.bounds.size, buttons.len());
+        let row = layer(pixel_aligned(frame, self.scale), self.scale);
+        row.setZPosition(10.0);
+        row.setCornerRadius(10.0);
+        row.setBackgroundColor(Some(&color(0.06, 0.06, 0.08, 0.72)));
+        with_disabled_actions(|| {
+            for (button, frame) in buttons.iter().zip(frames) {
+                let cell = layer(frame, self.scale);
+                cell.setCornerRadius(6.0);
+                if button.on_screen {
+                    cell.setBackgroundColor(Some(&NSColor::controlAccentColor().CGColor()));
+                } else {
+                    cell.setBackgroundColor(Some(&color(1.0, 1.0, 1.0, 0.1)));
+                }
+                let number = label(
+                    &cell,
+                    &(button.grid + 1).to_string(),
+                    rect(0.0, (frame.size.height - 16.0) / 2.0, frame.size.width, 16.0),
+                    self.scale,
+                );
+                unsafe {
+                    number.setAlignmentMode(objc2_quartz_core::kCAAlignmentCenter);
+                }
+                number.setFontSize(13.0);
+                if button.on_screen {
+                    number.setForegroundColor(Some(&color(1.0, 1.0, 1.0, 1.0)));
+                }
+                row.addSublayer(&cell);
+            }
+        });
+        self.root.addSublayer(&row);
+        self.grid_row = Some((row, buttons));
+    }
+
+    /// The grid (0-based) whose button is at `local`, a point in the overview.
+    pub(super) fn grid_button_at(&self, local: CGPoint) -> Option<usize> {
+        let (_, buttons) = self.grid_row.as_ref()?;
+        let (row, frames) = grid_button_frames(self.bounds.size, buttons.len());
+        frames.iter().zip(buttons).find_map(|(frame, button)| {
+            let frame = rect(
+                row.origin.x + frame.origin.x,
+                row.origin.y + frame.origin.y,
+                frame.size.width,
+                frame.size.height,
+            );
+            contains(frame, local).then_some(button.grid)
+        })
+    }
+
+    /// Whether `local` is on the grid row, buttons or the space between them.
+    pub(super) fn on_grid_row(&self, local: CGPoint) -> bool {
+        self.grid_row.as_ref().is_some_and(|(_, buttons)| {
+            contains(grid_button_frames(self.bounds.size, buttons.len()).0, local)
+        })
+    }
+
     pub(super) fn project(&self) -> Vec<WorkspaceProjection> {
         match self.grid() {
             Some(shape) => project_grid(
@@ -279,6 +389,19 @@ impl DisplayOverview {
 }
 
 impl OverviewSession {
+    /// The grid (0-based) whose button in the grid row is under `point`.
+    pub(super) fn grid_button_at(&self, point: CGPoint) -> Option<usize> {
+        let d = self.displays.iter().find(|d| contains(d.bounds, point))?;
+        d.grid_button_at(CGPoint::new(point.x - d.bounds.origin.x, point.y - d.bounds.origin.y))
+    }
+
+    /// Whether `point` is on a display's grid row, which covers the cells under it.
+    pub(super) fn on_grid_row(&self, point: CGPoint) -> bool {
+        self.displays.iter().find(|d| contains(d.bounds, point)).is_some_and(|d| {
+            d.on_grid_row(CGPoint::new(point.x - d.bounds.origin.x, point.y - d.bounds.origin.y))
+        })
+    }
+
     /// Follow focus changes without rebuilding the cards: re-read which cell is
     /// active and which window the system has focused, and move the outlines.
     /// Anything more than that waits for a full refresh.
@@ -290,7 +413,7 @@ impl OverviewSession {
             return;
         };
         let mut workspaces = reactor.query_workspaces(d.info.space);
-        filter_workspaces(&mut workspaces, self.show_empty_workspaces);
+        let buttons = filter_workspaces(&mut workspaces, self.show_empty_workspaces);
         let same_cards = workspaces.len() == d.workspaces.len()
             && workspaces.iter().zip(&d.workspaces).all(|(a, b)| {
                 a.index == b.index
@@ -299,6 +422,7 @@ impl OverviewSession {
         if !same_cards {
             return;
         }
+        d.set_grid_buttons(buttons);
         let active_was = d.workspaces.iter().position(|ws| ws.is_active);
         for (ws, fresh) in d.workspaces.iter_mut().zip(&workspaces) {
             ws.is_active = fresh.is_active;
@@ -487,6 +611,44 @@ mod tests {
         assert!(!GridLook { labels: false, ..look }.labels_fit(display.size));
         let empty: MissionControlSettings = toml::from_str("").unwrap();
         assert_eq!(GridLook::new(&MissionControlSettings::default()), GridLook::new(&empty));
+    }
+
+    #[test]
+    fn grid_row_lists_grids_in_use_and_the_one_on_screen() {
+        let ws = |index: usize, windows: Vec<RuntimeWindowData>, active: bool| RuntimeWorkspaceData {
+            grid_cell: Some(((index % 9) / 3, index % 3)),
+            grid: Some(index / 9),
+            is_active: active,
+            ..workspace(index, windows)
+        };
+        let tile = |id| window(id, rect(0.0, 0.0, 100.0, 100.0), false);
+        // Windows in grids 1 and 4, two of them in grid 4; grid 3 is on screen, empty.
+        let mut workspaces: Vec<_> = (0..45)
+            .map(|index| match index {
+                4 => ws(index, vec![tile(1)], false),
+                27 | 30 => ws(index, vec![tile(index as u32)], false),
+                22 => ws(index, Vec::new(), true),
+                _ => ws(index, Vec::new(), false),
+            })
+            .collect();
+        let buttons = keep_grid_on_screen(&mut workspaces);
+        assert_eq!(
+            buttons,
+            [
+                GridButton { grid: 0, on_screen: false },
+                GridButton { grid: 2, on_screen: true },
+                GridButton { grid: 3, on_screen: false },
+            ]
+        );
+        assert_eq!(workspaces.len(), 9, "only the grid on screen");
+        assert!(workspaces.iter().all(|ws| ws.grid == Some(2)));
+
+        let overview = CGSize::new(1600.0, 1000.0);
+        let (row, frames) = grid_button_frames(overview, 3);
+        assert!((row.mid().x - 800.0).abs() < 1e-9, "centred");
+        assert_eq!(frames.len(), 3);
+        assert!(frames[0].max().x < frames[1].origin.x);
+        assert!(frames.iter().all(|f| f.max().x <= row.size.width && f.max().y <= row.size.height));
     }
 
     #[test]
