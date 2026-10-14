@@ -17,6 +17,7 @@ mod applications;
 mod commands;
 mod editors;
 mod layouts;
+mod grid_pages;
 mod pages;
 pub mod process;
 mod schema;

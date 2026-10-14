@@ -1,0 +1,335 @@
+//! The workspace grid's commands: moving focus and windows between tiles, and
+//! past a cell's edge into the next cell, as subline does. Where a direction
+//! leads comes from subline-grid.
+
+use objc2_core_foundation::{CGPoint, CGRect};
+
+use super::{EventResponse, LayoutCommand, LayoutEngine};
+use crate::actor::app::WindowId;
+use crate::layout_engine::{Direction, LayoutSystem};
+use crate::model::VirtualWorkspaceId;
+use crate::model::window_store::WindowStore;
+use crate::sys::screen::SpaceId;
+
+impl LayoutEngine {
+    pub(super) fn handle_grid_command(
+        &mut self,
+        window_store: &mut WindowStore,
+        space: SpaceId,
+        command: &LayoutCommand,
+    ) -> EventResponse {
+        match *command {
+            LayoutCommand::GridFocus(direction) => self.grid_focus(window_store, space, direction),
+            LayoutCommand::GridMove(direction) => self.grid_move(window_store, space, direction),
+            LayoutCommand::GridCell(direction) => {
+                let Some(current) = self.workspaces.active_workspace(space) else {
+                    return EventResponse::default();
+                };
+                match self.workspaces.grid_neighbor(space, current, direction) {
+                    Some(target) => self.activate_workspace(window_store, space, target, None),
+                    None => EventResponse::default(),
+                }
+            }
+            _ => EventResponse::default(),
+        }
+    }
+
+    fn focused_tile(&self, space: SpaceId) -> Option<WindowId> {
+        self.focused_window.filter(|&wid| {
+            !self.floating.is_floating(wid) && self.space_with_window(wid) == Some(space)
+        })
+    }
+
+    /// A cell's tiles at the cell's own size, from its top left corner. There are no
+    /// gaps, so tiles beside each other share their sides.
+    fn cell_tiles(
+        &self,
+        space: SpaceId,
+        workspace: VirtualWorkspaceId,
+    ) -> Option<(subline_geom::Rect<f64>, Vec<(WindowId, subline_geom::Rect<f64>)>)> {
+        let size = self.workspaces[workspace].layout_state.active_size()?;
+        let layout = self.workspaces.active_layout(space, workspace)?;
+        let tiles = self.workspaces[workspace].layout_system.calculate_layout(
+            layout,
+            CGRect::new(CGPoint::new(0.0, 0.0), size),
+            self.layout_settings.stack.stack_offset,
+            &self.window_layout_constraints,
+            &crate::common::config::GapSettings::default(),
+            crate::common::config::StackLineReserve::default(),
+        );
+        let rect = |f: CGRect| {
+            subline_geom::Rect::new(f.origin.x, f.origin.y, f.size.width, f.size.height)
+        };
+        Some((
+            subline_geom::Rect::new(0.0, 0.0, size.width, size.height),
+            tiles.into_iter().map(|(wid, frame)| (wid, rect(frame))).collect(),
+        ))
+    }
+
+    /// Focus the tile beside the focused one in the active cell, or past the cell's
+    /// edge, the tile on the near side of the next cell level with the one left.
+    fn grid_focus(
+        &mut self,
+        window_store: &mut WindowStore,
+        space: SpaceId,
+        direction: Direction,
+    ) -> EventResponse {
+        let Some((ws_id, layout)) = self.workspaces.active_layout_for_space(space) else {
+            return EventResponse::default();
+        };
+        let dir = crate::model::virtual_workspace::grid_dir(direction);
+        let mut along = None;
+        if let Some(focused) = self.focused_tile(space)
+            && let Some((_, tiles)) = self.cell_tiles(space, ws_id)
+            && let Some(from) = tiles.iter().position(|(wid, _)| *wid == focused)
+        {
+            let rects: Vec<_> = tiles.iter().map(|(_, r)| *r).collect();
+            if let Some(next) = subline_grid::neighbor(&rects, from, dir) {
+                let next = tiles[next].0;
+                let response = EventResponse {
+                    changed: true,
+                    focus_window: Some(next),
+                    raise_windows: vec![next],
+                    boundary_hit: None,
+                };
+                self.apply_focus_response(window_store, space, ws_id, layout, &response);
+                return response;
+            }
+            let r = rects[from];
+            along = Some(if dir.horizontal() { r.y + r.h / 2.0 } else { r.x + r.w / 2.0 });
+        }
+        let Some(target) = self.workspaces.grid_neighbor(space, ws_id, direction) else {
+            return EventResponse::default();
+        };
+        let entry = self.cell_tiles(space, target).and_then(|(area, tiles)| {
+            let rects: Vec<_> = tiles.iter().map(|(_, r)| *r).collect();
+            let along = along.unwrap_or(if dir.horizontal() { area.h / 2.0 } else { area.w / 2.0 });
+            let wid = tiles[subline_grid::entered(&rects, area, dir, along)?].0;
+            (window_store.workspace_for_window(space, wid) == Some(target)).then_some(wid)
+        });
+        let response = self.activate_workspace(window_store, space, target, entry);
+        self.record_grid_focus(space, target, &response);
+        response
+    }
+
+    /// Note the focus a cell switch asks for right away, so the overview and the
+    /// next grid command see it before the system reports the focus change.
+    fn record_grid_focus(
+        &mut self,
+        space: SpaceId,
+        workspace: VirtualWorkspaceId,
+        response: &EventResponse,
+    ) {
+        if let Some(wid) = response.focus_window {
+            self.focused_window = Some(wid);
+            self.workspaces.set_last_focused_window(space, workspace, Some(wid));
+        }
+    }
+
+    /// Swap with the neighboring tile in the active cell, or past the cell's edge,
+    /// carry the window into the neighboring cell and follow it.
+    fn grid_move(
+        &mut self,
+        window_store: &mut WindowStore,
+        space: SpaceId,
+        direction: Direction,
+    ) -> EventResponse {
+        let Some((ws_id, layout)) = self.workspaces.active_layout_for_space(space) else {
+            return EventResponse::default();
+        };
+        let Some(wid) = self.focused_tile(space) else {
+            return EventResponse::default();
+        };
+        self.workspaces[ws_id].layout_state.last_saved = Some(layout);
+        if self.workspaces[ws_id].layout_system.move_selection(layout, direction) {
+            return EventResponse {
+                changed: true,
+                focus_window: Some(wid),
+                ..EventResponse::default()
+            };
+        }
+        let Some(target) = self.workspaces.grid_neighbor(space, ws_id, direction) else {
+            return EventResponse::default();
+        };
+        let Some(target_layout) = self.workspaces.active_layout(space, target) else {
+            return EventResponse::default();
+        };
+        self.workspaces[ws_id].layout_system.remove_window(wid);
+        if !self.workspaces.assign_window_to_workspace(window_store, space, wid, target) {
+            self.workspaces[ws_id].layout_system.add_window_after_selection(layout, wid);
+            return EventResponse::default();
+        }
+        self.workspaces[target]
+            .layout_system
+            .add_window_from_direction(target_layout, wid, direction);
+        self.workspaces.set_last_focused_window(space, ws_id, None);
+        let response = self.activate_workspace(window_store, space, target, Some(wid));
+        self.record_grid_focus(space, target, &response);
+        response
+    }
+
+}
+
+#[cfg(test)]
+mod tests {
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+
+    use super::*;
+    use crate::common::config::{LayoutMode, LayoutSettings, VirtualWorkspaceSettings};
+    use crate::layout_engine::{LayoutEvent, WindowLayoutInfo};
+
+    fn window_layout_info(window_id: WindowId, current_size: CGSize) -> WindowLayoutInfo {
+        WindowLayoutInfo {
+            window_id,
+            title: None,
+            ax_role: None,
+            ax_subrole: None,
+            is_resizable: true,
+            current_size,
+            min_size: None,
+            max_size: None,
+        }
+    }
+
+    #[test]
+    fn grid_commands_cross_cell_edges() {
+        let mut settings = VirtualWorkspaceSettings::default();
+        settings.default_workspace_count = 9;
+        settings.grid_columns = 3;
+        settings.default_workspace = 4;
+        let mut layout_settings = LayoutSettings::default();
+        layout_settings.mode = LayoutMode::Bsp;
+        let mut engine = LayoutEngine::new(&settings, &layout_settings, None);
+        let mut window_store = WindowStore::default();
+        let space = SpaceId::new(90);
+        let screen = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(1920.0, 1080.0));
+        let _ =
+            engine.handle_event(&mut window_store, LayoutEvent::SpaceExposed(space, screen.size));
+        let cell = |engine: &mut LayoutEngine, index: usize| {
+            engine.workspaces_mut().workspace_id_at(space, Some(index)).unwrap()
+        };
+        let center = cell(&mut engine, 4);
+        assert_eq!(engine.workspaces().active_workspace(space), Some(center));
+
+        let left = WindowId::new(90, 1);
+        let right = WindowId::new(90, 2);
+        for wid in [left, right] {
+            let _ = engine.handle_event(
+                &mut window_store,
+                LayoutEvent::windows_observed(
+                    space,
+                    wid.pid,
+                    vec![window_layout_info(wid, CGSize::new(0.0, 0.0))],
+                    None,
+                ),
+            );
+        }
+        let _ = engine.handle_event(&mut window_store, LayoutEvent::WindowFocused(space, left));
+        let grid = |engine: &mut LayoutEngine, store: &mut WindowStore, command| {
+            engine.handle_virtual_workspace_command(store, space, &command)
+        };
+
+        // Inside the cell, focus moves between tiles.
+        let response = grid(&mut engine, &mut window_store, LayoutCommand::GridFocus(Direction::Right));
+        assert_eq!(response.focus_window, Some(right));
+        assert_eq!(engine.workspaces().active_workspace(space), Some(center));
+
+        // Past the cell's edge, it moves to the neighboring cell.
+        let response = grid(&mut engine, &mut window_store, LayoutCommand::GridFocus(Direction::Right));
+        assert!(response.changed);
+        assert_eq!(engine.workspaces().active_workspace(space), Some(cell(&mut engine, 5)));
+        assert_eq!(response.focus_window, None, "the neighboring cell is empty");
+
+        // Coming back enters on the near edge: the right tile.
+        let response = grid(&mut engine, &mut window_store, LayoutCommand::GridFocus(Direction::Left));
+        assert_eq!(engine.workspaces().active_workspace(space), Some(center));
+        assert_eq!(response.focus_window, Some(right));
+        let _ = engine.handle_event(&mut window_store, LayoutEvent::WindowFocused(space, right));
+
+        // Carrying the window: first it swaps within the cell, then it leaves.
+        let response = grid(&mut engine, &mut window_store, LayoutCommand::GridMove(Direction::Left));
+        assert_eq!(response.focus_window, Some(right));
+        assert_eq!(engine.workspaces().active_workspace(space), Some(center));
+        let response = grid(&mut engine, &mut window_store, LayoutCommand::GridMove(Direction::Left));
+        let west = cell(&mut engine, 3);
+        assert_eq!(engine.workspaces().active_workspace(space), Some(west));
+        assert_eq!(response.focus_window, Some(right));
+        assert_eq!(window_store.workspace_for_window(space, right), Some(west));
+        assert_eq!(window_store.workspace_for_window(space, left), Some(center));
+
+        // The grid does not wrap.
+        let response = grid(&mut engine, &mut window_store, LayoutCommand::GridCell(Direction::Left));
+        assert!(!response.changed);
+        assert_eq!(engine.workspaces().active_workspace(space), Some(west));
+        let _ = grid(&mut engine, &mut window_store, LayoutCommand::GridCell(Direction::Up));
+        let response = grid(&mut engine, &mut window_store, LayoutCommand::GridCell(Direction::Up));
+        assert!(!response.changed);
+        assert_eq!(engine.workspaces().active_workspace(space), Some(cell(&mut engine, 0)));
+    }
+
+    #[test]
+    fn grid_focus_enters_the_next_cell_level_with_the_tile_left() {
+        let mut settings = VirtualWorkspaceSettings::default();
+        settings.default_workspace_count = 9;
+        settings.grid_columns = 3;
+        settings.default_workspace = 4;
+        let mut layout_settings = LayoutSettings::default();
+        layout_settings.mode = LayoutMode::Bsp;
+        let mut engine = LayoutEngine::new(&settings, &layout_settings, None);
+        let mut store = WindowStore::default();
+        let space = SpaceId::new(91);
+        let screen = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(1920.0, 1080.0));
+        let _ = engine.handle_event(&mut store, LayoutEvent::SpaceExposed(space, screen.size));
+        let open = |engine: &mut LayoutEngine, store: &mut WindowStore, idx: u32| {
+            let wid = WindowId::new(91, idx);
+            let _ = engine.handle_event(
+                store,
+                LayoutEvent::windows_observed(
+                    space,
+                    wid.pid,
+                    vec![window_layout_info(wid, CGSize::new(0.0, 0.0))],
+                    None,
+                ),
+            );
+            let _ = engine.handle_event(store, LayoutEvent::WindowFocused(space, wid));
+            wid
+        };
+        let grid = |engine: &mut LayoutEngine, store: &mut WindowStore, command| {
+            engine.handle_virtual_workspace_command(store, space, &command)
+        };
+        let cell = |engine: &mut LayoutEngine, index: usize| {
+            engine.workspaces_mut().workspace_id_at(space, Some(index)).unwrap()
+        };
+
+        // Above: a | b.
+        let _ = grid(&mut engine, &mut store, LayoutCommand::GridCell(Direction::Up));
+        let a = open(&mut engine, &mut store, 1);
+        let b = open(&mut engine, &mut store, 2);
+        // The centre: d | (e / f), each new window halving the focused tile.
+        let _ = grid(&mut engine, &mut store, LayoutCommand::GridCell(Direction::Down));
+        let d = open(&mut engine, &mut store, 3);
+        let e = open(&mut engine, &mut store, 4);
+        let f = open(&mut engine, &mut store, 5);
+        let centre = cell(&mut engine, 4);
+        let focus = |engine: &mut LayoutEngine, store: &mut WindowStore, wid| {
+            let _ = engine.handle_event(store, LayoutEvent::WindowFocused(space, wid));
+        };
+
+        // Inside the cell, by the tiles' sides.
+        focus(&mut engine, &mut store, e);
+        let response = grid(&mut engine, &mut store, LayoutCommand::GridFocus(Direction::Down));
+        assert_eq!(response.focus_window, Some(f));
+        let response = grid(&mut engine, &mut store, LayoutCommand::GridFocus(Direction::Left));
+        assert_eq!(response.focus_window, Some(d));
+        assert_eq!(engine.workspaces().active_workspace(space), Some(centre));
+
+        // Up from the left tile comes into the left one above; from the right, the right.
+        let response = grid(&mut engine, &mut store, LayoutCommand::GridFocus(Direction::Up));
+        assert_eq!(engine.workspaces().active_workspace(space), Some(cell(&mut engine, 1)));
+        assert_eq!(response.focus_window, Some(a));
+        let _ = grid(&mut engine, &mut store, LayoutCommand::GridCell(Direction::Down));
+        focus(&mut engine, &mut store, e);
+        let response = grid(&mut engine, &mut store, LayoutCommand::GridFocus(Direction::Up));
+        assert_eq!(response.focus_window, Some(b));
+    }
+}

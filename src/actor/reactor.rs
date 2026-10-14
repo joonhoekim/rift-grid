@@ -5,6 +5,7 @@
 //! changes by sending requests out to the other actors in the system.
 
 mod animation;
+mod borders;
 mod events;
 mod gesture;
 pub(crate) use crate::layout_engine::WorkspaceDropRequest as OverviewDrop;
@@ -423,7 +424,7 @@ pub struct Reactor {
     pending_mouse_focus: Option<(WindowId, Instant)>,
     mouse_inventory_hit: Option<WindowServerId>,
     drag_manager: managers::DragManager,
-    border_manager: managers::BorderManager,
+    border_manager: borders::BorderManager,
     workspace_switch_manager: managers::WorkspaceSwitchManager,
     recording_manager: managers::RecordingManager,
     communication_manager: managers::CommunicationManager,
@@ -527,7 +528,7 @@ impl Reactor {
                 preview_suppressed: false,
                 haptics_enabled: config.settings.drag_drop.haptics_enabled,
             },
-            border_manager: managers::BorderManager::default(),
+            border_manager: borders::BorderManager::default(),
             workspace_switch_manager: managers::WorkspaceSwitchManager {
                 workspace_switch_state: WorkspaceSwitchState::Inactive,
                 workspace_switch_generation: 0,
@@ -1193,34 +1194,11 @@ impl Reactor {
     fn handle_event_traced(&mut self, event: Event) { self.handle_event_inner(event) }
 
     fn handle_event_inner(&mut self, event: Event) {
-        if let Event::BorderSettle(generation) = event {
-            if let Some(borders) = &mut self.border_manager.borders {
-                borders.settle(generation);
-            }
-            return;
-        }
-        if let Event::WindowsReordered = event {
-            crate::actor::window_notify::reorder_seen();
-            let echo = self
-                .border_manager
-                .last_reorder
-                .is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(150));
-            if !echo {
-                self.border_manager.reordered = true;
-                self.update_borders(false);
-            }
+        if self.handle_border_event(&event) {
             return;
         }
         let may_make_ready = matches!(&event, Event::SpaceStateChanged(_));
-        // Visibility the borders cannot see in the reactor's own state.
-        let visibility_changed = matches!(
-            &event,
-            Event::WindowServerHidden(_)
-                | Event::WindowServerUnhidden(_)
-                | Event::ApplicationActivated(..)
-                | Event::ApplicationGloballyActivated(_)
-                | Event::ApplicationTerminated(_)
-        );
+        let visibility_changed = borders::changes_visibility(&event);
         let previously_focused_window = self.main_window();
         match self.dispatch_workflow(event) {
             Ok(mut outcome) => {
@@ -1249,143 +1227,6 @@ impl Reactor {
         self.update_borders(visibility_changed);
     }
 
-    /// Fill in what lies above each border's window: every normal-level window in
-    /// front of it on the active spaces, from any app but rift.
-    fn cover_border_targets(&self, targets: &mut [crate::ui::borders::BorderTarget]) {
-        use crate::sys::window_server::{WindowServerId, get_windows, space_window_list_for_connection};
-        let spaces: Vec<u64> = self.iter_active_spaces().map(|space| space.get()).collect();
-        let front_to_back: Vec<WindowServerId> = space_window_list_for_connection(&spaces, 0, false)
-            .into_iter()
-            .map(WindowServerId::new)
-            .collect();
-        let own = std::process::id() as i32;
-        // The query's own order is not the one asked for; keep front to back.
-        let infos: HashMap<WindowServerId, _> =
-            get_windows(&front_to_back).into_iter().map(|w| (w.id, w)).collect();
-        let stack: Vec<(WindowServerId, CGRect)> = front_to_back
-            .iter()
-            .filter_map(|id| infos.get(id))
-            .filter(|w| w.layer == 0 && w.pid != own)
-            .map(|w| (w.id, w.frame))
-            .collect();
-        for target in targets {
-            let Some(at) = stack.iter().position(|(id, _)| *id == target.window) else {
-                continue;
-            };
-            target.covered_by = stack[..at].iter().map(|(_, frame)| *frame).collect();
-        }
-    }
-
-    /// Keep a border on every visible window of the active workspaces, the focused
-    /// one in the focused colour. Cheap when nothing they show has changed.
-    fn update_borders(&mut self, visibility_changed: bool) {
-        use std::hash::{Hash, Hasher};
-
-        use crate::ui::borders::{BorderStyle, BorderTarget, Borders};
-        let settings = &self.config.settings.ui.borders;
-        if !settings.enabled {
-            self.border_manager = managers::BorderManager::default();
-            return;
-        }
-        let style = BorderStyle::new(settings);
-        // The system's main window is the focus: clicks, app switches and moves
-        // within an app all reach it. But when rift moves focus to another app's
-        // window, the main window first passes through that app's previous one;
-        // for that short while the window rift is focusing stands in.
-        let main = self.main_window();
-        let layout_focus = self.layout_manager.layout_engine.focused_window();
-        let manager = &mut self.border_manager;
-        if layout_focus != manager.layout_focus {
-            manager.layout_focus = layout_focus;
-            manager.pending = layout_focus
-                .filter(|&window| Some(window) != main)
-                .map(|window| (window, std::time::Instant::now()));
-        }
-        let focused = match manager.pending {
-            Some((window, since))
-                if Some(window) != main
-                    && since.elapsed() < std::time::Duration::from_millis(600) =>
-            {
-                Some(window)
-            }
-            _ => {
-                manager.pending = None;
-                main
-            }
-        };
-
-        let spaces: Vec<SpaceId> = self.iter_active_spaces().collect();
-        let mut candidates = Vec::new();
-        for space in spaces {
-            if self.is_fullscreen_space(space) {
-                continue;
-            }
-            for wid in self
-                .layout_manager
-                .layout_engine
-                .workspaces()
-                .windows_in_active_workspace(&self.state.windows, space)
-            {
-                let Some(window) = self.state.windows.window(wid).filter(|w| w.is_admitted())
-                else {
-                    continue;
-                };
-                let Some(wsid) =
-                    self.state.windows.record(wid).and_then(|record| record.window_server_id())
-                else {
-                    continue;
-                };
-                candidates.push(BorderTarget {
-                    window: wsid,
-                    frame: window.frame_monotonic,
-                    focused: Some(wid) == focused,
-                    covered_by: Vec::new(),
-                });
-            }
-        }
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        for target in &candidates {
-            target.window.as_u32().hash(&mut hasher);
-            target.focused.hash(&mut hasher);
-            for value in [
-                target.frame.origin.x,
-                target.frame.origin.y,
-                target.frame.size.width,
-                target.frame.size.height,
-            ] {
-                value.to_bits().hash(&mut hasher);
-            }
-        }
-        format!("{style:?}").hash(&mut hasher);
-        let signature = hasher.finish();
-        let reordered = std::mem::take(&mut self.border_manager.reordered);
-        if !visibility_changed && !reordered && self.border_manager.signature == Some(signature)
-        {
-            return;
-        }
-        self.border_manager.signature = Some(signature);
-        // A newly focused window was raised, possibly over the others' borders.
-        let reorder = reordered || self.border_manager.focus != focused;
-        self.border_manager.focus = focused;
-        if reorder {
-            self.border_manager.last_reorder = Some(std::time::Instant::now());
-        }
-        candidates.retain(|t| crate::sys::window_server::window_is_ordered_in(t.window));
-        self.cover_border_targets(&mut candidates);
-        let settle = self
-            .border_manager
-            .borders
-            .get_or_insert_with(Borders::default)
-            .update(style, &candidates, reorder);
-        if let Some((generation, after)) = settle
-            && let Some(tx) = self.communication_manager.events_tx.clone()
-        {
-            std::thread::spawn(move || {
-                std::thread::sleep(after);
-                tx.send(Event::BorderSettle(generation));
-            });
-        }
-    }
 
     fn dispatch_workflow(&mut self, mut event: Event) -> anyhow::Result<EventOutcome> {
         if let Event::AppActorExited(pid, handle) = &event {
