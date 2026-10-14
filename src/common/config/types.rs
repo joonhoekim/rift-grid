@@ -996,7 +996,7 @@ impl StackLineReserve {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default, ConfigSchema)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, ConfigSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MissionControlSettings {
     /// Include workspaces without windows in Overview.
@@ -1024,9 +1024,38 @@ pub struct MissionControlSettings {
     /// open, in milliseconds. 0 captures each window once.
     #[setting(label = "Live preview interval (milliseconds)", enabled_by = "window_previews")]
     pub live_preview_interval_ms: f64,
+    #[serde(default = "default_mission_control_grid_gap")]
+    /// Space between the cells of a workspace grid in Overview, as a fraction of the
+    /// display's shorter side, so it looks the same at any size and scale.
+    #[setting(label = "Grid cell gap", enabled_by = "enabled")]
+    pub grid_gap: f64,
+    #[serde(default = "yes")]
+    /// Show each window's app and title above its tile in a grid Overview, in the
+    /// gap between cells. Not drawn when the gap is too narrow for it.
+    #[setting(label = "Grid tile labels", enabled_by = "enabled")]
+    pub grid_labels: bool,
 }
 
 fn default_mission_control_fade_duration_ms() -> f64 { 180.0 }
+
+fn default_mission_control_grid_gap() -> f64 { 0.04 }
+
+// A missing section keeps Overview and its previews off, as before; the grid's look
+// matches what a missing key gets.
+impl Default for MissionControlSettings {
+    fn default() -> Self {
+        Self {
+            show_empty_workspaces: false,
+            window_previews: false,
+            enabled: false,
+            fade_enabled: false,
+            fade_duration_ms: 0.0,
+            live_preview_interval_ms: 0.0,
+            grid_gap: default_mission_control_grid_gap(),
+            grid_labels: true,
+        }
+    }
+}
 
 fn default_drop_zone_fraction() -> f64 { 0.25 }
 

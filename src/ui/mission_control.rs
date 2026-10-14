@@ -34,7 +34,8 @@ use crate::sys::window_server::WindowServerId;
 const GAP: f64 = 40.0;
 const CORNER: f64 = 8.0;
 const CAPTION: f64 = 48.0;
-const GRID_GAP: f64 = 24.0;
+// The app and title row above a grid tile, drawn in the gap between cells.
+const LABEL_ROW: f64 = 22.0;
 // Grid cards are bare previews with a hairline gap between tiles.
 const BARE_INSET: f64 = 1.5;
 
@@ -257,25 +258,50 @@ fn grid_shape(workspaces: &[RuntimeWorkspaceData]) -> Option<(usize, usize)> {
         .filter(|&(rows, columns)| rows > 0 && columns > 0)
 }
 
-/// The frame of one grid cell: cells keep the display's aspect ratio and the whole
-/// grid is centered in the overview.
+/// How a grid overview looks, from the overview settings.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct GridLook {
+    /// Gap between cells as a fraction of the display's shorter side.
+    gap: f64,
+    labels: bool,
+}
+
+impl GridLook {
+    fn new(settings: &MissionControlSettings) -> Self {
+        Self {
+            gap: settings.grid_gap.clamp(0.0, 0.1),
+            labels: settings.grid_labels,
+        }
+    }
+
+    fn gap_px(self, display: CGSize) -> f64 { self.gap * display.width.min(display.height) }
+
+    /// Labels sit in the gap above each tile, so they need a gap at least their height.
+    fn labels_fit(self, display: CGSize) -> bool {
+        self.labels && self.gap_px(display) >= LABEL_ROW
+    }
+}
+
+/// The frame of one grid cell: cells keep the display's aspect ratio, `gap` apart,
+/// and the whole grid is centered in the overview.
 fn grid_cell_frame(
     overview: CGSize,
     display: CGSize,
     (rows, columns): (usize, usize),
     (row, column): (usize, usize),
+    gap: f64,
 ) -> CGRect {
     let (rows_f, columns_f) = (rows as f64, columns as f64);
     let aspect = display.width / display.height;
-    let available_width = (overview.width - (columns_f + 1.0) * GRID_GAP).max(1.0);
-    let available_height = (overview.height - (rows_f + 1.0) * GRID_GAP).max(1.0);
+    let available_width = (overview.width - (columns_f + 1.0) * gap).max(1.0);
+    let available_height = (overview.height - (rows_f + 1.0) * gap).max(1.0);
     let width = (available_width / columns_f).min(available_height / rows_f * aspect);
     let height = width / aspect;
-    let total_width = columns_f * width + (columns_f - 1.0) * GRID_GAP;
-    let total_height = rows_f * height + (rows_f - 1.0) * GRID_GAP;
+    let total_width = columns_f * width + (columns_f - 1.0) * gap;
+    let total_height = rows_f * height + (rows_f - 1.0) * gap;
     rect(
-        (overview.width - total_width) / 2.0 + column as f64 * (width + GRID_GAP),
-        (overview.height - total_height) / 2.0 + row as f64 * (height + GRID_GAP),
+        (overview.width - total_width) / 2.0 + column as f64 * (width + gap),
+        (overview.height - total_height) / 2.0 + row as f64 * (height + gap),
         width,
         height,
     )
@@ -336,12 +362,17 @@ fn project_grid(
     overview: CGSize,
     workspaces: &[RuntimeWorkspaceData],
     shape: (usize, usize),
+    look: GridLook,
 ) -> Vec<WorkspaceProjection> {
+    if display.size.height <= 0.0 || display.size.width <= 0.0 {
+        return Vec::new();
+    }
+    let gap = look.gap_px(display.size);
     workspaces
         .iter()
         .enumerate()
         .filter_map(|(source, ws)| {
-            let frame = grid_cell_frame(overview, display.size, shape, ws.grid_cell?);
+            let frame = grid_cell_frame(overview, display.size, shape, ws.grid_cell?, gap);
             let scale = frame.size.width / display.size.width;
             let (windows, scene) = project_windows(ws, display, frame, scale, 0.0);
             Some(WorkspaceProjection {
@@ -366,9 +397,6 @@ fn project(
 ) -> Vec<WorkspaceProjection> {
     if display.size.height <= 0.0 || display.size.width <= 0.0 {
         return Vec::new();
-    }
-    if let Some(shape) = grid_shape(workspaces) {
-        return project_grid(display, overview, workspaces, shape);
     }
     let height = ((overview.height - 2.0 * GAP) * 0.5).max(1.0);
     let stride = height + GAP;
@@ -455,6 +483,8 @@ pub(crate) enum OverviewAction {
 struct WindowCard {
     id: WindowId,
     bare: bool,
+    /// A bare card's app and title row above the preview.
+    label: bool,
     layer: Retained<CALayer>,
     image: Retained<CALayer>,
     caption: Retained<CALayer>,
@@ -466,6 +496,7 @@ impl WindowCard {
         data: &RuntimeWindowData,
         frame: CGRect,
         bare: bool,
+        labelled: bool,
         scale: f64,
         image_contents: Option<&AnyObject>,
         icon_contents: Option<&AnyObject>,
@@ -501,13 +532,18 @@ impl WindowCard {
             scale,
         );
         unsafe {
-            title.setAlignmentMode(objc2_quartz_core::kCAAlignmentCenter);
+            title.setAlignmentMode(if bare {
+                objc2_quartz_core::kCAAlignmentLeft
+            } else {
+                objc2_quartz_core::kCAAlignmentCenter
+            });
         }
         title.setOpacity(0.65);
-        caption.setHidden(bare);
+        caption.setHidden(bare && !labelled);
         let result = Self {
             id: data.id,
             bare,
+            label: labelled,
             layer: card,
             image,
             caption,
@@ -522,6 +558,28 @@ impl WindowCard {
         self.layer.setFrame(frame);
         let image = pixel_aligned(card_image_frame(frame.size, self.bare), scale);
         self.image.setFrame(image);
+        if self.bare {
+            if self.label {
+                let icon = 16.0;
+                self.caption.setFrame(rect(
+                    image.origin.x,
+                    image.origin.y - LABEL_ROW,
+                    image.size.width,
+                    LABEL_ROW,
+                ));
+                let text_x = if self.icon.is_some() { icon + 5.0 } else { 0.0 };
+                if let Some(layer) = &self.icon {
+                    layer.setFrame(rect(0.0, (LABEL_ROW - icon) / 2.0, icon, icon));
+                }
+                self.title.setFrame(rect(
+                    text_x,
+                    (LABEL_ROW - 16.0) / 2.0,
+                    (image.size.width - text_x).max(1.0),
+                    16.0,
+                ));
+            }
+            return;
+        }
         self.caption
             .setFrame(rect(image.origin.x, image.max().y, image.size.width, CAPTION));
         if let Some(icon) = &self.icon {
@@ -549,6 +607,7 @@ struct DisplayOverview {
     projection: Vec<WorkspaceProjection>,
     views: Vec<WorkspaceView>,
     icons: HashMap<i32, Option<Retained<CGImage>>>,
+    look: GridLook,
     animate: bool,
     root: Retained<CALayer>,
     // Field order matters: unbind the surface before releasing its CGS window.
@@ -674,15 +733,28 @@ impl DisplayOverview {
         Some(visibility_changed)
     }
 
+    fn project(&self) -> Vec<WorkspaceProjection> {
+        match self.grid() {
+            Some(shape) => project_grid(
+                self.info.frame,
+                self.bounds.size,
+                &self.workspaces,
+                shape,
+                self.look,
+            ),
+            None => project(
+                self.info.frame,
+                self.bounds.size,
+                &self.workspaces,
+                self.centered,
+                self.workspace_offset,
+                &self.offsets,
+            ),
+        }
+    }
+
     fn reproject(&mut self, cache: Option<&PreviewCache>) {
-        let next = project(
-            self.info.frame,
-            self.bounds.size,
-            &self.workspaces,
-            self.centered,
-            self.workspace_offset,
-            &self.offsets,
-        );
+        let next = self.project();
         let same_cards = next.len() == self.projection.len()
             && next.iter().zip(&self.projection).all(|(a, b)| {
                 a.source == b.source
@@ -713,14 +785,7 @@ impl DisplayOverview {
     }
 
     fn rebuild(&mut self, cache: Option<&PreviewCache>) {
-        self.projection = project(
-            self.info.frame,
-            self.bounds.size,
-            &self.workspaces,
-            self.centered,
-            self.workspace_offset,
-            &self.offsets,
-        );
+        self.projection = self.project();
         let mut old_views = std::mem::take(&mut self.views);
         let mut old_cards: HashMap<_, _> = old_views
             .iter_mut()
@@ -803,7 +868,9 @@ impl DisplayOverview {
                     (container, heading, empty, backdrop)
                 };
                 container.setFrame(pixel_aligned(ws.frame, self.scale));
-                container.setMasksToBounds(true);
+                // Grid cells keep their windows inside; the labels above the top
+                // tiles reach into the gap.
+                container.setMasksToBounds(!ws.cell);
                 empty.setHidden(!data.windows.is_empty());
                 backdrop.setFrame(pixel_aligned(workspace_backdrop(ws), self.scale));
                 update_heading(&heading, data);
@@ -877,6 +944,7 @@ impl DisplayOverview {
                             data,
                             w.frame,
                             ws.cell,
+                            ws.cell && self.look.labels_fit(self.info.frame.size),
                             self.scale,
                             image.map(|i| &*(i.as_ref() as *const CGImage as *const AnyObject)),
                             icon.as_ref()
@@ -1046,6 +1114,7 @@ impl OverviewSession {
                 projection: Vec::new(),
                 views: Vec::new(),
                 icons: HashMap::default(),
+                look: GridLook::new(settings),
                 animate: false,
                 root,
                 _surface: surface,
@@ -1296,6 +1365,7 @@ impl OverviewSession {
                     source.layer.frame().size.height,
                 ),
                 source.bare,
+                false,
                 d.scale,
                 source.image.contents().as_deref(),
                 source.icon.as_ref().and_then(|icon| icon.contents()).as_deref(),
@@ -3018,7 +3088,10 @@ mod tests {
         filter_workspaces(&mut filtered, false);
         assert_eq!(filtered.len(), 9, "empty cells keep their place");
 
-        let projection = project(display, overview, &workspaces, 4, 0.0, &HashMap::default());
+        let look = GridLook { gap: 0.04, labels: true };
+        let gap = look.gap_px(display.size);
+        assert_eq!(gap, 40.0, "a fraction of the shorter side");
+        let projection = project_grid(display, overview, &workspaces, (3, 3), look);
         assert_eq!(projection.len(), 9);
         let frame = |i: usize| projection[i].frame;
         // Same size, the display's aspect ratio, inside the overview, centered.
@@ -3034,15 +3107,20 @@ mod tests {
         // Row by row from the top left.
         assert!(frame(0).max().x < frame(1).origin.x);
         assert_eq!(frame(0).origin.y, frame(2).origin.y);
-        assert_eq!(frame(0).max().y + GRID_GAP, frame(3).origin.y);
+        assert_eq!(frame(0).max().y + gap, frame(3).origin.y);
+        assert_eq!(frame(0).max().x + gap, frame(1).origin.x);
         assert_eq!(frame(0).origin.x, frame(6).origin.x);
 
         // The center cell's two tiles split it in half, and the whole cell is the hit target.
         let center = &projection[4];
-        assert_eq!(workspace_backdrop(center), rect(0.0, 0.0, frame(4).size.width, frame(4).size.height));
+        let backdrop = workspace_backdrop(center);
+        assert_eq!(backdrop.origin, CGPoint::new(0.0, 0.0));
+        assert!((backdrop.size.width - frame(4).size.width).abs() < 1e-9);
         let half = frame(4).size.width / 2.0;
-        assert_eq!(center.windows[0].frame, rect(0.0, 0.0, half, frame(4).size.height));
-        assert_eq!(center.windows[1].frame.origin.x, half);
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        let left = center.windows[0].frame;
+        assert!(close(left.size.width, half) && close(left.size.height, frame(4).size.height));
+        assert!(close(center.windows[1].frame.origin.x, half));
         // Cards are bare previews: the bottom of a tile, where a caption would sit,
         // still selects its window.
         let bottom_left = CGPoint::new(frame(4).origin.x + 4.0, frame(4).max().y - 4.0);
@@ -3056,8 +3134,15 @@ mod tests {
         );
         let corner = CGPoint::new(frame(8).max().x - 2.0, frame(8).max().y - 2.0);
         assert_eq!(hit(&workspaces, &projection, corner).map(|s| s.workspace), Some(8));
-        let gap = CGPoint::new(frame(0).max().x + GRID_GAP / 2.0, frame(0).mid().y);
-        assert_eq!(hit(&workspaces, &projection, gap), None);
+        let between = CGPoint::new(frame(0).max().x + gap / 2.0, frame(0).mid().y);
+        assert_eq!(hit(&workspaces, &projection, between), None);
+
+        // Labels go in the gap, so a gap narrower than a label row has none.
+        assert!(look.labels_fit(display.size));
+        assert!(!GridLook { gap: 0.01, ..look }.labels_fit(display.size));
+        assert!(!GridLook { labels: false, ..look }.labels_fit(display.size));
+        let empty: MissionControlSettings = toml::from_str("").unwrap();
+        assert_eq!(GridLook::new(&MissionControlSettings::default()), GridLook::new(&empty));
     }
 
     #[test]
