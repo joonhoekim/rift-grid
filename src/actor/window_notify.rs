@@ -69,6 +69,11 @@ impl Clone for Ignored {
     }
 }
 
+static REORDER_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The reactor took the pending reorder event; the next reorder sends another.
+pub fn reorder_seen() { REORDER_PENDING.store(false, std::sync::atomic::Ordering::Release); }
+
 #[derive(Debug)]
 pub enum Request {
     Subscribe(CGSEventType),
@@ -307,8 +312,15 @@ impl Dispatcher {
                     SpaceId::new(space_id),
                 ));
             }
-            CGSEventType::Known(KnownCGSEvent::WindowReordered)
-            | CGSEventType::Known(KnownCGSEvent::WindowManagerSpaceFrontConnectionChanged)
+            CGSEventType::Known(KnownCGSEvent::WindowReordered) => {
+                // Bursts of reorders collapse into one event until the reactor has
+                // seen it.
+                if !REORDER_PENDING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                    events_tx.send(Event::WindowsReordered);
+                }
+                focus_wake.notify()
+            }
+            CGSEventType::Known(KnownCGSEvent::WindowManagerSpaceFrontConnectionChanged)
             | CGSEventType::Known(KnownCGSEvent::WindowManagerGlobalFrontConnectionChanged) => {
                 focus_wake.notify()
             }

@@ -188,6 +188,16 @@ pub struct BorderManager {
     /// The visible windows, frames, focus and style the borders show.
     pub signature: Option<u64>,
     pub focus: Option<WindowId>,
+    /// The layout's focus as last seen, to notice when rift moves focus.
+    pub layout_focus: Option<WindowId>,
+    /// A window rift just moved focus to, shown until the system reports it as
+    /// the main window or this expires.
+    pub pending: Option<(WindowId, std::time::Instant)>,
+    /// Windows were reordered since the borders last learned what covers them.
+    pub reordered: bool,
+    /// When the borders were last reordered. Reorders that soon after are that
+    /// ordering's own echo.
+    pub last_reorder: Option<std::time::Instant>,
 }
 
 /// Manages refocus and cleanup state
