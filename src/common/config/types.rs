@@ -617,12 +617,23 @@ pub struct BorderSettings {
     /// How far the glow spreads out from the border.
     #[setting(label = "Glow size", unit = "pt", enabled_by = "glow")]
     pub glow_radius: f64,
+    #[serde(default = "default_border_animation_ms")]
+    /// How long the focused border takes to slide to the next focused window.
+    /// 0 moves it at once.
+    #[setting(
+        label = "Focus slide",
+        unit = "ms",
+        enabled_by = "enabled",
+        aliases = "animation move glide focus border"
+    )]
+    pub animation_ms: f64,
 }
 
 fn default_border_width() -> f64 { 2.0 }
 // macOS 26's plain windows; windows with a toolbar round more.
 fn default_border_radius() -> f64 { 16.0 }
 fn default_border_glow_radius() -> f64 { 12.0 }
+fn default_border_animation_ms() -> f64 { 180.0 }
 fn default_border_active_color() -> String { "0xffb4befe".into() }
 fn default_border_inactive_color() -> String { "0xff45475a".into() }
 
@@ -636,6 +647,7 @@ impl Default for BorderSettings {
             inactive_color: default_border_inactive_color(),
             glow: true,
             glow_radius: default_border_glow_radius(),
+            animation_ms: default_border_animation_ms(),
         }
     }
 }

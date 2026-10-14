@@ -203,6 +203,9 @@ pub enum SpaceEventKind {
 pub enum Event {
     #[serde(skip)]
     CameraFinished,
+    /// The focused window border's slide of this generation has landed.
+    #[serde(skip)]
+    BorderSettle(u64),
     #[serde(skip)]
     OverviewSelectWorkspace {
         display: String,
@@ -1187,6 +1190,12 @@ impl Reactor {
     fn handle_event_traced(&mut self, event: Event) { self.handle_event_inner(event) }
 
     fn handle_event_inner(&mut self, event: Event) {
+        if let Event::BorderSettle(generation) = event {
+            if let Some(borders) = &mut self.border_manager.borders {
+                borders.settle(generation);
+            }
+            return;
+        }
         let may_make_ready = matches!(&event, Event::SpaceStateChanged(_));
         // Visibility the borders cannot see in the reactor's own state.
         let visibility_changed = matches!(
@@ -1289,10 +1298,19 @@ impl Reactor {
         let reorder = self.border_manager.focus != focused;
         self.border_manager.focus = focused;
         candidates.retain(|t| crate::sys::window_server::window_is_ordered_in(t.window));
-        self.border_manager
+        let settle = self
+            .border_manager
             .borders
             .get_or_insert_with(Borders::default)
             .update(style, &candidates, reorder);
+        if let Some((generation, after)) = settle
+            && let Some(tx) = self.communication_manager.events_tx.clone()
+        {
+            std::thread::spawn(move || {
+                std::thread::sleep(after);
+                tx.send(Event::BorderSettle(generation));
+            });
+        }
     }
 
     fn dispatch_workflow(&mut self, mut event: Event) -> anyhow::Result<EventOutcome> {

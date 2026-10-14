@@ -5,7 +5,9 @@ use cgs::{CgsWindow, CgsWindowError, WindowSurface, WindowTransaction, with_disa
 use objc2::rc::Retained;
 use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{CGColor, CGMutablePath};
-use objc2_quartz_core::{CALayer, CAShapeLayer, kCAFillRuleEvenOdd};
+use objc2_quartz_core::{
+    CALayer, CAMediaTimingFunction, CAShapeLayer, CATransaction, kCAFillRuleEvenOdd,
+};
 use tracing::warn;
 
 use crate::common::collections::{HashMap, HashSet};
@@ -55,6 +57,8 @@ pub struct BorderStyle {
     pub inactive: Option<Rgba>,
     pub glow: bool,
     pub glow_radius: f64,
+    /// How long the focused border slides; zero jumps.
+    pub animation: std::time::Duration,
 }
 
 impl BorderStyle {
@@ -78,6 +82,9 @@ impl BorderStyle {
             inactive,
             glow: settings.glow,
             glow_radius: settings.glow_radius.clamp(1.0, 40.0),
+            animation: std::time::Duration::from_secs_f64(
+                settings.animation_ms.clamp(0.0, 1000.0) / 1000.0,
+            ),
         }
     }
 
@@ -140,6 +147,9 @@ struct Border {
     // The surface must be detached before its WindowServer window drops.
     surface: WindowSurface,
     window: CgsWindow,
+    /// Where the overlay window is. Normally the target's canvas; while the focused
+    /// border slides, the room for both ends of the slide.
+    canvas: CGRect,
     root: Retained<CALayer>,
     /// A filled plate the size of the ring, whose shadow is the glow; masked to
     /// what lies outside the window.
@@ -147,6 +157,18 @@ struct Border {
     glow_mask: Retained<CAShapeLayer>,
     ring: Retained<CALayer>,
     target: BorderTarget,
+}
+
+fn union(a: CGRect, b: CGRect) -> CGRect {
+    let x = a.origin.x.min(b.origin.x);
+    let y = a.origin.y.min(b.origin.y);
+    let right = (a.origin.x + a.size.width).max(b.origin.x + b.size.width);
+    let bottom = (a.origin.y + a.size.height).max(b.origin.y + b.size.height);
+    CGRect::new(CGPoint::new(x, y), CGSize::new(right - x, bottom - y))
+}
+
+fn shifted(rect: CGRect, by: CGPoint) -> CGRect {
+    CGRect::new(CGPoint::new(rect.origin.x + by.x, rect.origin.y + by.y), rect.size)
 }
 
 impl Border {
@@ -172,29 +194,39 @@ impl Border {
         });
         let bounds = CGRect::new(CGPoint::new(0.0, 0.0), canvas.size);
         let surface = WindowSurface::new(window.id(), bounds, &root)?;
-        let border = Self { surface, window, root, glow, glow_mask, ring, target };
-        border.draw(style);
+        let border = Self { surface, window, canvas, root, glow, glow_mask, ring, target };
+        border.place(style, true);
         border.window.order_above(Some(target.window.as_u32()))?;
         Ok(border)
     }
 
-    fn draw(&self, style: &BorderStyle) {
-        let canvas = style.canvas(self.target.frame);
+    /// Where the target's ring goes inside the overlay window.
+    fn ring_in_canvas(&self, style: &BorderStyle) -> CGRect {
+        let at = style.canvas(self.target.frame).origin;
+        let by = CGPoint::new(at.x - self.canvas.origin.x, at.y - self.canvas.origin.y);
+        shifted(style.ring(self.target.frame), by)
+    }
+
+    fn outer_radius(&self, style: &BorderStyle, ring: CGRect) -> f64 {
+        if style.radius > 0.0 { corner(ring, style.radius + style.width) } else { 0.0 }
+    }
+
+    /// Lay the layers out for the target, without animation. The glow is left off
+    /// while the border slides.
+    fn place(&self, style: &BorderStyle, glow_allowed: bool) {
+        let ring = self.ring_in_canvas(style);
+        let outer = self.outer_radius(style, ring);
         let color = style.color(self.target.focused).unwrap_or([0.0; 4]);
-        let ring = style.ring(self.target.frame);
-        let outer = if style.radius > 0.0 { corner(ring, style.radius + style.width) } else { 0.0 };
         with_disabled_actions(|| {
-            self.root.setBounds(CGRect::new(CGPoint::new(0.0, 0.0), canvas.size));
+            self.root.setBounds(CGRect::new(CGPoint::new(0.0, 0.0), self.canvas.size));
             self.ring.setFrame(ring);
             self.ring.setCornerRadius(outer);
             self.ring.setBorderWidth(style.width);
             self.ring.setBorderColor(Some(&cg_color(color)));
 
-            let glowing = style.glow && self.target.focused;
+            let glowing = glow_allowed && style.glow && self.target.focused;
             self.glow.setHidden(!glowing);
             if glowing {
-                // The glow layer spans the canvas so its mask can cover all of it;
-                // the plate inside it is drawn by its background and corner.
                 self.glow.setFrame(ring);
                 self.glow.setCornerRadius(outer);
                 self.glow.setBackgroundColor(Some(&cg_color(color)));
@@ -202,16 +234,37 @@ impl Border {
                 self.glow.setShadowOffset(CGSize::new(0.0, 0.0));
                 self.glow.setShadowRadius(style.glow_radius);
                 self.glow.setShadowOpacity(1.0);
-                let origin = ring.origin;
+                // The mask lives in the glow layer's space and covers the window.
                 self.glow_mask.setFrame(CGRect::new(
-                    CGPoint::new(-origin.x, -origin.y),
-                    canvas.size,
+                    CGPoint::new(-ring.origin.x, -ring.origin.y),
+                    self.canvas.size,
                 ));
-                let hole = style.hole(self.target.frame);
-                self.glow_mask.setPath(Some(&outside(canvas.size, hole, style.radius)));
+                let hole = CGRect::new(
+                    CGPoint::new(ring.origin.x + style.width, ring.origin.y + style.width),
+                    self.target.frame.size,
+                );
+                self.glow_mask.setPath(Some(&outside(self.canvas.size, hole, style.radius)));
             }
         });
         self.surface.flush();
+    }
+
+    /// Move or resize the overlay window to `canvas` in one WindowServer transaction.
+    fn reframe(&mut self, canvas: CGRect) -> Result<(), CgsWindowError> {
+        if canvas == self.canvas {
+            return Ok(());
+        }
+        let transaction = WindowTransaction::new()?;
+        if canvas.size != self.canvas.size {
+            transaction.set_rounded_frame(&self.window, canvas, 0.0)?;
+            self.surface
+                .set_bounds_in(&transaction, CGRect::new(CGPoint::new(0.0, 0.0), canvas.size));
+        } else {
+            transaction.move_window(&self.window, canvas.origin);
+        }
+        transaction.commit();
+        self.canvas = canvas;
+        Ok(())
     }
 
     fn update(
@@ -223,33 +276,62 @@ impl Border {
         let previous = self.target;
         self.target = target;
         let resized = previous.frame.size != target.frame.size;
-        if previous.frame != target.frame {
-            let canvas = style.canvas(target.frame);
-            let transaction = WindowTransaction::new()?;
-            if resized {
-                transaction.set_rounded_frame(&self.window, canvas, 0.0)?;
-                self.surface
-                    .set_bounds_in(&transaction, CGRect::new(CGPoint::new(0.0, 0.0), canvas.size));
-            } else {
-                transaction.move_window(&self.window, canvas.origin);
-            }
-            transaction.commit();
+        self.reframe(style.canvas(target.frame))?;
+        if resized || previous.focused != target.focused || previous.window != target.window {
+            self.place(style, true);
         }
-        if resized || previous.focused != target.focused {
-            self.draw(style);
-        }
-        if reorder || previous.focused != target.focused {
+        if reorder || previous.focused != target.focused || previous.window != target.window {
             self.window.order_above(Some(target.window.as_u32()))?;
         }
         Ok(())
     }
+
+    /// Slide the ring from where it is to `target`, over `duration`. The window
+    /// grows to hold both ends; `settle` shrinks it back once the slide is done.
+    fn slide(
+        &mut self,
+        style: &BorderStyle,
+        target: BorderTarget,
+        duration: f64,
+    ) -> Result<(), CgsWindowError> {
+        let from = style.canvas(self.target.frame);
+        self.reframe(union(from, style.canvas(target.frame)))?;
+        self.place(style, false);
+        self.target = target;
+        self.window.order_above(Some(target.window.as_u32()))?;
+        let ring = self.ring_in_canvas(style);
+        let outer = self.outer_radius(style, ring);
+        CATransaction::begin();
+        CATransaction::setAnimationDuration(duration);
+        // Fast out, gentle landing, as a spring that does not overshoot.
+        CATransaction::setAnimationTimingFunction(Some(
+            &CAMediaTimingFunction::functionWithControlPoints(0.2, 0.9, 0.25, 1.0),
+        ));
+        self.ring.setFrame(ring);
+        self.ring.setCornerRadius(outer);
+        CATransaction::commit();
+        self.surface.flush();
+        Ok(())
+    }
+
+    /// Back to the target's own canvas, with the glow, once a slide has landed.
+    fn settle(&mut self, style: &BorderStyle) -> Result<(), CgsWindowError> {
+        self.reframe(style.canvas(self.target.frame))?;
+        self.place(style, true);
+        Ok(())
+    }
 }
 
-/// The borders on screen, owned by the reactor like the drag preview.
+/// The borders on screen, owned by the reactor like the drag preview: one per
+/// unfocused window, and one focused border that slides between windows.
 #[derive(Default)]
 pub struct Borders {
     style: Option<BorderStyle>,
     borders: HashMap<WindowServerId, Border>,
+    focus: Option<Border>,
+    /// The slide in flight, by generation.
+    sliding: Option<u64>,
+    generation: u64,
 }
 
 // Owned by the reactor and only touched on its thread, as DragPreview is.
@@ -258,16 +340,28 @@ unsafe impl Send for Borders {}
 impl Borders {
     /// Show borders for exactly `targets`. `reorder` re-asserts each border just
     /// above its window, for when windows may have been raised over their borders.
-    pub fn update(&mut self, style: BorderStyle, targets: &[BorderTarget], reorder: bool) {
+    /// When the focused border starts to slide, returns the slide's generation and
+    /// how long to wait before calling `settle` with it.
+    pub fn update(
+        &mut self,
+        style: BorderStyle,
+        targets: &[BorderTarget],
+        reorder: bool,
+    ) -> Option<(u64, std::time::Duration)> {
         if self.style != Some(style) {
             self.borders.clear();
+            self.focus = None;
+            self.sliding = None;
             self.style = Some(style);
         }
-        let wanted: Vec<_> =
-            targets.iter().filter(|t| style.color(t.focused).is_some()).copied().collect();
-        let keep: HashSet<_> = wanted.iter().map(|t| t.window).collect();
+        let unfocused: Vec<_> = targets
+            .iter()
+            .filter(|t| !t.focused && style.inactive.is_some())
+            .copied()
+            .collect();
+        let keep: HashSet<_> = unfocused.iter().map(|t| t.window).collect();
         self.borders.retain(|window, _| keep.contains(window));
-        for target in wanted {
+        for target in unfocused {
             let result = match self.borders.get_mut(&target.window) {
                 Some(border) => border.update(&style, target, reorder),
                 None => Border::new(&style, target).map(|border| {
@@ -279,9 +373,67 @@ impl Borders {
                 self.borders.remove(&target.window);
             }
         }
+        self.update_focus(style, targets.iter().find(|t| t.focused).copied(), reorder)
     }
 
-    pub fn len(&self) -> usize { self.borders.len() }
+    fn update_focus(
+        &mut self,
+        style: BorderStyle,
+        target: Option<BorderTarget>,
+        reorder: bool,
+    ) -> Option<(u64, std::time::Duration)> {
+        let Some(target) = target else {
+            self.focus = None;
+            self.sliding = None;
+            return None;
+        };
+        let Some(ring) = &mut self.focus else {
+            match Border::new(&style, target) {
+                Ok(border) => self.focus = Some(border),
+                Err(error) => warn!(?error, "Focused window border failed"),
+            }
+            return None;
+        };
+        let duration = style.animation.as_secs_f64();
+        let moved_on = ring.target.window != target.window;
+        let result = if moved_on && duration > 0.0 {
+            ring.slide(&style, target, duration).map(|()| {
+                self.generation = self.generation.wrapping_add(1);
+                self.sliding = Some(self.generation);
+                // A little past the slide, so the last frame has landed.
+                Some((self.generation, style.animation + std::time::Duration::from_millis(40)))
+            })
+        } else if self.sliding.is_some() && !moved_on {
+            // Mid-slide: land wherever the window is by the time it settles.
+            ring.target = target;
+            Ok(None)
+        } else {
+            self.sliding = None;
+            ring.update(&style, target, reorder).map(|()| None)
+        };
+        result.unwrap_or_else(|error| {
+            warn!(?error, "Focused window border failed");
+            self.focus = None;
+            self.sliding = None;
+            None
+        })
+    }
+
+    /// Land the slide of generation `generation`, if it is still the latest.
+    pub fn settle(&mut self, generation: u64) {
+        if self.sliding != Some(generation) {
+            return;
+        }
+        self.sliding = None;
+        if let (Some(style), Some(ring)) = (self.style, &mut self.focus)
+            && let Err(error) = ring.settle(&style)
+        {
+            warn!(?error, "Focused window border failed");
+            self.focus = None;
+        }
+    }
+
+    pub fn len(&self) -> usize { self.borders.len() + usize::from(self.focus.is_some()) }
 }
 
 #[cfg(test)]
@@ -328,5 +480,19 @@ mod tests {
         let thin = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(20.0, 400.0));
         assert_eq!(corner(thin, 16.0), 10.0);
         assert_eq!(corner(frame, 16.0), 16.0);
+    }
+
+    #[test]
+    fn a_slide_has_room_for_both_ends() {
+        let rect = |x, y, w, h| CGRect::new(CGPoint::new(x, y), CGSize::new(w, h));
+        assert_eq!(
+            union(rect(0.0, 0.0, 100.0, 50.0), rect(300.0, -20.0, 50.0, 50.0)),
+            rect(0.0, -20.0, 350.0, 70.0)
+        );
+        let style = BorderStyle::new(&BorderSettings::default());
+        assert_eq!(style.animation, std::time::Duration::from_millis(180));
+        assert_eq!(style.width, 2.0);
+        let still = BorderStyle::new(&BorderSettings { animation_ms: 0.0, ..BorderSettings::default() });
+        assert!(still.animation.is_zero(), "0 moves the border at once");
     }
 }
