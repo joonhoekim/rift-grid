@@ -726,7 +726,10 @@ fn interface(ui: Ui, model: &Rc<Model>) -> Page {
     let row = f.schema_metadata(row, field, |s| &s.settings.ui.menu_bar);
     page = page.section(section.row(row));
     let section = f.schema_rows(
-        Section::new(&ui, "Overview").description("Requires restarting Rift."),
+        Section::new(&ui, "Overview").description(
+            "Turning Overview on or off requires restarting Rift. The rest applies the next \
+             time it opens; the grid settings shape it when workspaces form a grid.",
+        ),
         "",
         |s| &s.settings.ui.mission_control,
         |s| &mut s.settings.ui.mission_control,

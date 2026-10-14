@@ -722,3 +722,27 @@ fn grid_commands_and_columns_parse() {
         assert!(commands.contains(&expected), "{expected:?} not in {commands:?}");
     }
 }
+
+#[test]
+fn grid_settings_are_in_the_settings_app() {
+    let columns = VirtualWorkspaceSettings::field("grid_columns").unwrap();
+    assert_eq!(columns.title, "Grid columns");
+    assert!(matches!(columns.kind, FieldKind::Number { integer: true }));
+    for (key, unit, scale) in [
+        ("grid_gap", "%", 100.0),
+        ("grid_zoom", "%", 100.0),
+        ("live_preview_interval_ms", "ms", 1.0),
+    ] {
+        let field = MissionControlSettings::field(key).unwrap();
+        assert!(matches!(field.kind, FieldKind::Number { integer: false }), "{key}");
+        assert_eq!((field.unit, field.scale), (unit, scale), "{key}");
+    }
+    for key in ["grid_labels", "grid_fit"] {
+        let field = MissionControlSettings::field(key).unwrap();
+        assert!(matches!(field.kind, FieldKind::Bool), "{key}");
+    }
+    let mut settings = MissionControlSettings::default();
+    let write = MissionControlSettings::field("grid_gap").unwrap().write.unwrap();
+    write(&mut settings, FieldValue::Number(0.06)).unwrap();
+    assert_eq!(settings.grid_gap, 0.06);
+}

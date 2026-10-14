@@ -78,7 +78,7 @@ pub struct VirtualWorkspaceSettings {
     #[serde(default)]
     /// Lay workspaces out as a grid with this many columns, row by row from the
     /// top left. 0 keeps them in a line.
-    #[setting(ignore)]
+    #[setting(label = "Grid columns", aliases = "grid cells rows 3x3 layout matrix")]
     pub grid_columns: usize,
     #[serde(default)]
     /// Recheck workspace rules when a window title changes.
@@ -1022,28 +1022,53 @@ pub struct MissionControlSettings {
     #[serde(default)]
     /// Capture visible window previews again at this interval while Overview is
     /// open, in milliseconds. 0 captures each window once.
-    #[setting(label = "Live preview interval (milliseconds)", enabled_by = "window_previews")]
+    #[setting(
+        label = "Live preview interval",
+        unit = "ms",
+        enabled_by = "window_previews",
+        aliases = "refresh recapture live previews"
+    )]
     pub live_preview_interval_ms: f64,
     #[serde(default = "default_mission_control_grid_gap")]
     /// Space between the cells of a workspace grid in Overview, as a fraction of the
     /// display's shorter side, so it looks the same at any size and scale.
-    #[setting(label = "Grid cell gap", enabled_by = "enabled")]
+    #[setting(
+        label = "Grid cell gap",
+        unit = "%",
+        scale = 100.0,
+        enabled_by = "enabled",
+        aliases = "grid overview spacing cells"
+    )]
     pub grid_gap: f64,
     #[serde(default = "yes")]
     /// Show each window's app and title above its tile in a grid Overview, in the
     /// gap between cells. Not drawn when the gap is too narrow for it.
-    #[setting(label = "Grid tile labels", enabled_by = "enabled")]
+    #[setting(
+        label = "Grid tile labels",
+        enabled_by = "enabled",
+        aliases = "grid overview titles icons names"
+    )]
     pub grid_labels: bool,
     #[serde(default)]
     /// Show the whole workspace grid as soon as Overview opens. Off, Overview first
     /// shows the active cell at the grid zoom with its neighbours around it, and
     /// opening it again steps back to the whole grid.
-    #[setting(label = "Fit the whole grid", enabled_by = "enabled")]
+    #[setting(
+        label = "Fit the whole grid",
+        enabled_by = "enabled",
+        aliases = "grid overview stages whole at a glance"
+    )]
     pub grid_fit: bool,
     #[serde(default = "default_mission_control_grid_zoom")]
     /// Size of a grid cell in Overview's first stage, as a fraction of the display.
     /// The whole grid is never shown larger than this.
-    #[setting(label = "Grid zoom", enabled_by = "enabled")]
+    #[setting(
+        label = "Grid zoom",
+        unit = "%",
+        scale = 100.0,
+        enabled_by = "enabled",
+        aliases = "grid overview cell size first stage"
+    )]
     pub grid_zoom: f64,
 }
 
