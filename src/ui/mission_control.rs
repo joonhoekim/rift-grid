@@ -258,12 +258,24 @@ fn grid_shape(workspaces: &[RuntimeWorkspaceData]) -> Option<(usize, usize)> {
         .filter(|&(rows, columns)| rows > 0 && columns > 0)
 }
 
+/// How far a grid overview has stepped back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GridStage {
+    /// The active cell at the grid zoom, its neighbours around it.
+    Cell,
+    /// The whole grid.
+    Whole,
+}
+
 /// How a grid overview looks, from the overview settings.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct GridLook {
     /// Gap between cells as a fraction of the display's shorter side.
     gap: f64,
     labels: bool,
+    /// A cell's size in the first stage, as a fraction of the display.
+    zoom: f64,
+    stage: GridStage,
 }
 
 impl GridLook {
@@ -271,6 +283,12 @@ impl GridLook {
         Self {
             gap: settings.grid_gap.clamp(0.0, 0.1),
             labels: settings.grid_labels,
+            zoom: settings.grid_zoom.clamp(0.2, 0.99),
+            stage: if settings.grid_fit {
+                GridStage::Whole
+            } else {
+                GridStage::Cell
+            },
         }
     }
 
@@ -282,20 +300,35 @@ impl GridLook {
     }
 }
 
-/// The frame of one grid cell: cells keep the display's aspect ratio, `gap` apart,
-/// and the whole grid is centered in the overview.
+/// The frame of one grid cell. Cells keep the display's aspect ratio and lie `gap`
+/// apart. In the first stage a cell is `zoom` of the display and the active cell is
+/// centered; the whole grid is fitted and centered, never larger than `zoom`.
 fn grid_cell_frame(
     overview: CGSize,
     display: CGSize,
     (rows, columns): (usize, usize),
     (row, column): (usize, usize),
     gap: f64,
+    look: GridLook,
+    (active_row, active_column): (usize, usize),
 ) -> CGRect {
     let (rows_f, columns_f) = (rows as f64, columns as f64);
     let aspect = display.width / display.height;
+    let zoomed = display.width * look.zoom;
+    if look.stage == GridStage::Cell {
+        let (width, height) = (zoomed, zoomed / aspect);
+        return rect(
+            (overview.width - width) / 2.0
+                + (column as f64 - active_column as f64) * (width + gap),
+            (overview.height - height) / 2.0
+                + (row as f64 - active_row as f64) * (height + gap),
+            width,
+            height,
+        );
+    }
     let available_width = (overview.width - (columns_f + 1.0) * gap).max(1.0);
     let available_height = (overview.height - (rows_f + 1.0) * gap).max(1.0);
-    let width = (available_width / columns_f).min(available_height / rows_f * aspect);
+    let width = (available_width / columns_f).min(available_height / rows_f * aspect).min(zoomed);
     let height = width / aspect;
     let total_width = columns_f * width + (columns_f - 1.0) * gap;
     let total_height = rows_f * height + (rows_f - 1.0) * gap;
@@ -368,11 +401,17 @@ fn project_grid(
         return Vec::new();
     }
     let gap = look.gap_px(display.size);
+    let active = workspaces
+        .iter()
+        .find(|ws| ws.is_active)
+        .and_then(|ws| ws.grid_cell)
+        .unwrap_or((shape.0 / 2, shape.1 / 2));
     workspaces
         .iter()
         .enumerate()
         .filter_map(|(source, ws)| {
-            let frame = grid_cell_frame(overview, display.size, shape, ws.grid_cell?, gap);
+            let frame =
+                grid_cell_frame(overview, display.size, shape, ws.grid_cell?, gap, look, active);
             let scale = frame.size.width / display.size.width;
             let (windows, scene) = project_windows(ws, display, frame, scale, 0.0);
             Some(WorkspaceProjection {
@@ -625,6 +664,37 @@ fn set_preview_border(image: &CALayer, width: f64) {
     }
 }
 
+/// Move `layer`, already at its new frame, smoothly from where it was.
+fn glide(layer: &CALayer, from: CGRect) {
+    let to = layer.frame();
+    if from == to {
+        return;
+    }
+    let position = CABasicAnimation::animationWithKeyPath(Some(
+        &objc2_foundation::NSString::from_str("position"),
+    ));
+    let bounds = CABasicAnimation::animationWithKeyPath(Some(
+        &objc2_foundation::NSString::from_str("bounds"),
+    ));
+    unsafe {
+        position.setFromValue(Some(&*objc2_foundation::NSValue::valueWithPoint(CGPoint::new(
+            from.origin.x + from.size.width / 2.0,
+            from.origin.y + from.size.height / 2.0,
+        ))));
+        bounds.setFromValue(Some(&*objc2_foundation::NSValue::valueWithRect(rect(
+            0.0,
+            0.0,
+            from.size.width,
+            from.size.height,
+        ))));
+    }
+    for animation in [&position, &bounds] {
+        animation.setPreferredFrameRateRange(CAFrameRateRange::new(60.0, 120.0, 120.0));
+        animation.setDuration(0.2);
+        layer.addAnimation_forKey(animation, None);
+    }
+}
+
 fn color(r: f64, g: f64, b: f64, a: f64) -> CFRetained<CGColor> {
     CGColor::new_generic_rgb(r, g, b, a)
 }
@@ -820,14 +890,20 @@ impl DisplayOverview {
                     .position(|view| view.index == data.index)
                     .map(|pos| old_views.swap_remove(pos));
                 if let Some(view) = existing.as_ref().filter(|view| !view.cards.is_empty()) {
+                    let (was, backdrop_was) = (view.layer.frame(), view.backdrop.frame());
                     view.layer.setFrame(pixel_aligned(ws.frame, self.scale));
                     view.heading.setFrame(workspace_heading(ws, self.scale));
                     view.heading.setHidden(ws.cell);
                     view.backdrop.setFrame(pixel_aligned(workspace_backdrop(ws), self.scale));
+                    if self.animate {
+                        glide(&view.layer, was);
+                        glide(&view.backdrop, backdrop_was);
+                    }
                     update_heading(&view.heading, data);
                     self.views.push(existing.unwrap());
                     continue;
                 }
+                let was = existing.as_ref().map(|view| (view.layer.frame(), view.backdrop.frame()));
                 let (container, heading, empty, backdrop) = if let Some(view) = existing {
                     (view.layer, view.heading, view.empty, view.backdrop)
                 } else {
@@ -872,7 +948,17 @@ impl DisplayOverview {
                 // tiles reach into the gap.
                 container.setMasksToBounds(!ws.cell);
                 empty.setHidden(!data.windows.is_empty());
+                empty.setFrame(rect(
+                    (ws.frame.size.width - 180.0) / 2.0,
+                    ws.frame.size.height / 2.0 - 10.0,
+                    180.0,
+                    20.0,
+                ));
                 backdrop.setFrame(pixel_aligned(workspace_backdrop(ws), self.scale));
+                if let Some((container_was, backdrop_was)) = was.filter(|_| self.animate) {
+                    glide(&container, container_was);
+                    glide(&backdrop, backdrop_was);
+                }
                 update_heading(&heading, data);
                 heading.setFrame(workspace_heading(ws, self.scale));
                 heading.setHidden(ws.cell);
@@ -1282,7 +1368,7 @@ impl OverviewSession {
     /// Follow focus changes without rebuilding the cards: re-read which cell is
     /// active and which window the system has focused, and move the outlines.
     /// Anything more than that waits for a full refresh.
-    pub(crate) fn sync_focus(&mut self, reactor: &ReactorHandle) {
+    pub(crate) fn sync_focus(&mut self, reactor: &ReactorHandle, cache: Option<&PreviewCache>) {
         if self.drag.is_some() {
             return;
         }
@@ -1299,6 +1385,7 @@ impl OverviewSession {
         if !same_cards {
             return;
         }
+        let active_was = d.workspaces.iter().position(|ws| ws.is_active);
         for (ws, fresh) in d.workspaces.iter_mut().zip(&workspaces) {
             ws.is_active = fresh.is_active;
             ws.layout_focus = fresh.layout_focus;
@@ -1306,15 +1393,45 @@ impl OverviewSession {
                 w.is_focused = fresh.is_focused;
             }
         }
+        let _transaction = LayerTransaction::disabled().flush_on_commit();
+        // In the first stage the camera stays on the active cell.
+        let follow = d.look.stage == GridStage::Cell
+            && d.workspaces.iter().position(|ws| ws.is_active) != active_was;
+        if follow {
+            d.animate = true;
+            d.rebuild(cache);
+        }
         let Some(selection) = grid_focus_selection(&d.workspaces) else {
             return;
         };
-        if selection != self.selection {
-            let _transaction = LayerTransaction::disabled().flush_on_commit();
+        if selection != self.selection || follow {
             let old = (self.active, self.selection);
             self.selection = selection;
             self.highlight(Some(old));
         }
+        if follow {
+            self.sync_images(cache);
+            self.request_previews(cache);
+        }
+    }
+
+    /// Step a grid overview back from the active cell to the whole grid. False when
+    /// there is no further stage, and opening Overview again closes it.
+    pub(crate) fn step_back(&mut self, cache: Option<&PreviewCache>) -> bool {
+        let grids = self.displays.iter().filter(|d| d.grid().is_some());
+        if grids.clone().count() == 0 || grids.into_iter().all(|d| d.look.stage == GridStage::Whole) {
+            return false;
+        }
+        let _transaction = LayerTransaction::disabled().flush_on_commit();
+        for d in self.displays.iter_mut().filter(|d| d.grid().is_some()) {
+            d.look.stage = GridStage::Whole;
+            d.animate = true;
+            d.rebuild(cache);
+        }
+        self.highlight(None);
+        self.sync_images(cache);
+        self.request_previews(cache);
+        true
     }
 
     fn end_drag(&mut self) -> Option<OverviewDrag> {
@@ -3088,7 +3205,7 @@ mod tests {
         filter_workspaces(&mut filtered, false);
         assert_eq!(filtered.len(), 9, "empty cells keep their place");
 
-        let look = GridLook { gap: 0.04, labels: true };
+        let look = GridLook { gap: 0.04, labels: true, zoom: 0.99, stage: GridStage::Whole };
         let gap = look.gap_px(display.size);
         assert_eq!(gap, 40.0, "a fraction of the shorter side");
         let projection = project_grid(display, overview, &workspaces, (3, 3), look);
@@ -3196,5 +3313,45 @@ mod tests {
         // An empty active cell has no focused window.
         let ws = cells(1, [vec![tile(3, true)], vec![]], None);
         assert_eq!(select(&ws), Selection { workspace: 1, window: None });
+    }
+
+    #[test]
+    fn grid_overview_first_stage_centres_the_active_cell() {
+        let display = rect(0.0, 0.0, 1600.0, 1000.0);
+        let overview = CGSize::new(1600.0, 1000.0);
+        let mut workspaces: Vec<_> = (0..9)
+            .map(|index| RuntimeWorkspaceData {
+                grid_cell: Some((index / 3, index % 3)),
+                is_active: index == 4,
+                ..workspace(index, Vec::new())
+            })
+            .collect();
+        let look = GridLook { gap: 0.04, labels: true, zoom: 0.5, stage: GridStage::Cell };
+        let frames = |workspaces: &[RuntimeWorkspaceData], look| {
+            project_grid(display, overview, workspaces, grid_shape(workspaces).unwrap(), look)
+                .iter()
+                .map(|ws| ws.frame)
+                .collect::<Vec<_>>()
+        };
+
+        let cell = frames(&workspaces, look);
+        assert_eq!(cell[4], rect(400.0, 250.0, 800.0, 500.0), "zoom of the display, centred");
+        assert_eq!(cell[5].origin.x, cell[4].max().x + 40.0, "the neighbour a gap away");
+        assert_eq!(cell[1].max().y + 40.0, cell[4].origin.y);
+        assert!(cell[3].origin.x < 0.0 && cell[3].max().x > 0.0, "neighbours show at the edges");
+
+        // The camera is on the active cell, wherever it is.
+        workspaces[4].is_active = false;
+        workspaces[0].is_active = true;
+        assert_eq!(frames(&workspaces, look)[0], rect(400.0, 250.0, 800.0, 500.0));
+
+        // The whole grid is fitted, and the first stage is the larger one.
+        let whole = frames(&workspaces, GridLook { stage: GridStage::Whole, ..look });
+        assert!(whole[0].size.width < 800.0);
+        assert!(whole[0].origin.x >= 0.0 && whole[8].max().x <= overview.width);
+        // Never larger than the zoom, even when the grid would fit bigger.
+        let one = [RuntimeWorkspaceData { grid_cell: Some((0, 0)), ..workspace(0, Vec::new()) }];
+        let small = GridLook { stage: GridStage::Whole, zoom: 0.3, ..look };
+        assert_eq!(frames(&one, small)[0].size.width, 480.0);
     }
 }

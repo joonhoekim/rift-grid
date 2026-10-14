@@ -1034,11 +1034,24 @@ pub struct MissionControlSettings {
     /// gap between cells. Not drawn when the gap is too narrow for it.
     #[setting(label = "Grid tile labels", enabled_by = "enabled")]
     pub grid_labels: bool,
+    #[serde(default)]
+    /// Show the whole workspace grid as soon as Overview opens. Off, Overview first
+    /// shows the active cell at the grid zoom with its neighbours around it, and
+    /// opening it again steps back to the whole grid.
+    #[setting(label = "Fit the whole grid", enabled_by = "enabled")]
+    pub grid_fit: bool,
+    #[serde(default = "default_mission_control_grid_zoom")]
+    /// Size of a grid cell in Overview's first stage, as a fraction of the display.
+    /// The whole grid is never shown larger than this.
+    #[setting(label = "Grid zoom", enabled_by = "enabled")]
+    pub grid_zoom: f64,
 }
 
 fn default_mission_control_fade_duration_ms() -> f64 { 180.0 }
 
 fn default_mission_control_grid_gap() -> f64 { 0.04 }
+
+fn default_mission_control_grid_zoom() -> f64 { 0.5 }
 
 // A missing section keeps Overview and its previews off, as before; the grid's look
 // matches what a missing key gets.
@@ -1053,6 +1066,8 @@ impl Default for MissionControlSettings {
             live_preview_interval_ms: 0.0,
             grid_gap: default_mission_control_grid_gap(),
             grid_labels: true,
+            grid_fit: false,
+            grid_zoom: default_mission_control_grid_zoom(),
         }
     }
 }

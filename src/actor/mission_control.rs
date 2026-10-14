@@ -166,13 +166,13 @@ impl MissionControlActor {
                 _ = async { if let Some(timer) = &mut live_timer { timer.await } else { std::future::pending().await } } => {
                     live_timer = None;
                     if let Some(session) = &mut self.session {
-                        session.sync_focus(&self.reactor);
+                        session.sync_focus(&self.reactor, self.cache.as_ref());
                         session.recapture(self.cache.as_ref());
                     }
                 }
                 _ = async { if let Some(timer) = &mut focus_timer { timer.await } else { std::future::pending().await } } => {
                     focus_timer = None;
-                    if let Some(session) = &mut self.session { session.sync_focus(&self.reactor); }
+                    if let Some(session) = &mut self.session { session.sync_focus(&self.reactor, self.cache.as_ref()); }
                 }
                 _ = async { if let Some(timer) = &mut edge_timer { timer.await } else { std::future::pending().await } } => {
                     edge_timer = None;
@@ -256,8 +256,11 @@ impl MissionControlActor {
                 }
             }
             Event::ShowAll => {
-                if self.session.is_some() {
-                    self.close();
+                // Opening it again steps a grid overview back to the whole grid, then closes.
+                if let Some(session) = &mut self.session {
+                    if !session.step_back(self.cache.as_ref()) {
+                        self.close();
+                    }
                 } else if self.settings.enabled {
                     self.generation = self.generation.wrapping_add(1);
                     self.session = OverviewSession::new(
