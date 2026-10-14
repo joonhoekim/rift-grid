@@ -5170,6 +5170,12 @@ impl Reactor {
                 continue;
             };
 
+            // Native visibility does not imply Rift management is enabled. Do
+            // not let input claim gestures that the reactor will reject.
+            if !self.is_space_active(space) {
+                continue;
+            }
+
             // Keep first occurrence only if multiple screens briefly report the same space.
             if modes.iter().any(|(existing, _)| *existing == space) {
                 continue;
@@ -5192,7 +5198,7 @@ impl Reactor {
             modes.push((space, mode));
         }
 
-        if modes.is_empty() || (!changed && modes.len() == last_modes.len()) {
+        if !changed && modes.len() == last_modes.len() {
             return;
         }
 
