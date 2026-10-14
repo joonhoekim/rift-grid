@@ -2312,7 +2312,10 @@ impl LayoutEngine {
             | LayoutCommand::SwitchToLastWorkspace
             | LayoutCommand::GridFocus(_)
             | LayoutCommand::GridMove(_)
-            | LayoutCommand::GridCell(_) => EventResponse::default(),
+            | LayoutCommand::GridCell(_)
+            | LayoutCommand::GridCenter
+            | LayoutCommand::SwitchToGrid(_)
+            | LayoutCommand::MoveWindowToGrid(_) => EventResponse::default(),
             LayoutCommand::JoinWindow(direction) => {
                 self.workspaces[workspace_id].layout_state.last_saved = Some(layout);
                 self.workspaces[workspace_id]
@@ -2745,7 +2748,12 @@ impl LayoutEngine {
             LayoutCommand::SwitchToWorkspace(workspace_index) => {
                 self.switch_to_workspace(window_store, space, *workspace_index, None)
             }
-            LayoutCommand::GridFocus(_) | LayoutCommand::GridMove(_) | LayoutCommand::GridCell(_) => {
+            LayoutCommand::GridFocus(_)
+            | LayoutCommand::GridMove(_)
+            | LayoutCommand::GridCell(_)
+            | LayoutCommand::GridCenter
+            | LayoutCommand::SwitchToGrid(_)
+            | LayoutCommand::MoveWindowToGrid(_) => {
                 self.handle_grid_command(window_store, space, command)
             }
             LayoutCommand::MoveWindowToWorkspace {
@@ -3884,6 +3892,7 @@ mod tests {
         settings.app_rules = vec![AppWorkspaceRule {
             app_id: Some("com.example.Tool".into()),
             workspace: Some(WorkspaceSelector::Index(1)),
+            grid: None,
             floating: true,
             position: Some(AppRulePosition { x: 0.4, y: 0.7 }),
             size: Some(AppRuleSize { w: Some(640.0), h: Some(480.0) }),
@@ -4013,6 +4022,7 @@ mod tests {
         settings.app_rules = vec![AppWorkspaceRule {
             app_id: Some("com.example.Editor".into()),
             workspace: None,
+            grid: None,
             floating: false,
             position: None,
             size: Some(AppRuleSize { w: Some(234.0), h: None }),

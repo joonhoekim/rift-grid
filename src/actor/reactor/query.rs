@@ -375,6 +375,7 @@ impl Reactor {
                     window_count,
                     windows: frames,
                     grid_cell: self.layout_manager.layout_engine.workspaces().grid_cell(index),
+                    grid: self.layout_manager.layout_engine.workspaces().grid_of(index),
                     layout_mode: self
                         .layout_manager
                         .layout_engine
@@ -531,6 +532,7 @@ impl Reactor {
                 window_count: windows.len(),
                 windows,
                 grid_cell: self.layout_manager.layout_engine.workspaces().grid_cell(index),
+                grid: self.layout_manager.layout_engine.workspaces().grid_of(index),
                 layout_focus: space_id.and_then(|space| {
                     self.layout_manager
                         .layout_engine

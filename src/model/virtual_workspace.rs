@@ -184,6 +184,9 @@ pub struct WorkspaceStore {
     prevent_wrapping: bool,
     #[serde(skip)]
     grid_columns: usize,
+    /// Each grid's current cell, per display.
+    #[serde(skip)]
+    grid_current: HashMap<(SpaceId, usize), VirtualWorkspaceId>,
     #[serde(skip)]
     pub workspace_rules: Vec<crate::common::config::WorkspaceLayoutRule>,
     #[serde(skip)]
@@ -312,7 +315,7 @@ impl WorkspaceStore {
         config: &VirtualWorkspaceSettings,
         layout_settings: &LayoutSettings,
     ) -> Self {
-        let target_count = config.default_workspace_count.max(1).min(MAX_WORKSPACES);
+        let target_count = grid::workspace_count(config).max(1).min(MAX_WORKSPACES);
         let default_workspace = config.default_workspace.min(target_count - 1);
 
         Self {
@@ -323,12 +326,13 @@ impl WorkspaceStore {
             #[cfg(test)]
             test_app_rules: crate::model::AppRuleEngine::new(&config.app_rules),
             max_workspaces: MAX_WORKSPACES,
-            default_workspace_count: config.default_workspace_count,
+            default_workspace_count: grid::workspace_count(config),
             default_workspace_names: config.workspace_names.clone(),
             default_workspace,
             workspace_auto_back_and_forth: config.workspace_auto_back_and_forth,
             prevent_wrapping: config.prevent_wrapping,
             grid_columns: config.grid_columns,
+            grid_current: HashMap::default(),
             workspace_rules: config.workspace_rules.clone(),
             default_layout_mode: layout_settings.mode,
             layout_settings: layout_settings.clone(),
@@ -348,7 +352,7 @@ impl WorkspaceStore {
         self.workspace_rules = config.workspace_rules.clone();
         self.default_layout_mode = layout_settings.mode;
         self.layout_settings = layout_settings.clone();
-        self.default_workspace_count = config.default_workspace_count;
+        self.default_workspace_count = grid::workspace_count(config);
         self.default_workspace_names = config.workspace_names.clone();
         self.workspace_auto_back_and_forth = config.workspace_auto_back_and_forth;
         self.prevent_wrapping = config.prevent_wrapping;
@@ -366,7 +370,7 @@ impl WorkspaceStore {
             // current config remain authoritative after startup restore and config reload.
             if let Some(workspaces) = self.workspaces_by_space.get(&space) {
                 for (index, &workspace) in workspaces.iter().enumerate() {
-                    if let Some(name) = self.default_workspace_names.get(index)
+                    if let Some(name) = self.configured_name(index)
                         && let Some(workspace) = self.workspaces.get_mut(workspace)
                     {
                         workspace.name = name.clone();
@@ -375,7 +379,7 @@ impl WorkspaceStore {
             }
             while self.workspaces_by_space.get(&space).unwrap().len() < target_count {
                 let idx = self.workspaces_by_space.get(&space).unwrap().len();
-                let name = if let Some(n) = self.default_workspace_names.get(idx) {
+                let name = if let Some(n) = self.configured_name(idx) {
                     n.clone()
                 } else {
                     let name = format!("Workspace {}", self.workspace_counter);
@@ -422,11 +426,7 @@ impl WorkspaceStore {
         let mut ids = Vec::new();
         let count = self.default_workspace_count.max(1).min(self.max_workspaces);
         for i in 0..count {
-            let name = self
-                .default_workspace_names
-                .get(i)
-                .cloned()
-                .unwrap_or_else(|| format!("Workspace {}", i + 1));
+            let name = self.configured_name(i).unwrap_or_else(|| format!("Workspace {}", i + 1));
 
             let mode = self.resolve_layout_mode_for_workspace(i, &name);
             let ws = VirtualWorkspace::new(name, space, mode, &self.layout_settings);
@@ -649,6 +649,7 @@ impl WorkspaceStore {
                 && self.workspaces.get(workspace_id).map(|w| w.space) == Some(space)
             {
                 self.active_workspace_per_space.insert(space, (active, workspace_id));
+                self.remember_grid_cell(space, workspace_id);
                 true
             } else {
                 error!(
@@ -1024,10 +1025,13 @@ impl WorkspaceStore {
         &mut self,
         space: SpaceId,
         selector: Option<&WorkspaceSelector>,
+        grid: Option<usize>,
         existing: Option<WindowWorkspaceInfo>,
         preserve_existing: bool,
     ) -> Result<VirtualWorkspaceId, WorkspaceError> {
-        let selected = selector.and_then(|selector| self.resolve_workspace(space, selector));
+        let selected = grid
+            .and_then(|grid| self.grid_current_cell(space, grid.checked_sub(1)?))
+            .or_else(|| selector.and_then(|selector| self.resolve_workspace(space, selector)));
         if selector.is_some() && selected.is_none() {
             warn!(
                 ?space,
@@ -1117,10 +1121,11 @@ impl WorkspaceStore {
             }));
         }
 
-        let (workspace, floating, position, size, focus) =
-            rule_decision.map_or((None, false, None, None, false), |decision| {
+        let (workspace, grid, floating, position, size, focus) =
+            rule_decision.map_or((None, None, false, None, None, false), |decision| {
                 (
                     decision.workspace,
+                    decision.grid,
                     decision.floating,
                     decision.position,
                     decision.size,
@@ -1130,6 +1135,7 @@ impl WorkspaceStore {
         let workspace_id = self.resolve_rule_workspace_with_policy(
             space,
             workspace.as_ref(),
+            grid,
             existing_assignment,
             preserve_existing,
         )?;
@@ -1561,6 +1567,7 @@ mod tests {
         settings.app_rules = vec![AppWorkspaceRule {
             app_id: Some("com.example.unmanaged".into()),
             workspace: None,
+            grid: None,
             floating: false,
             position: None,
             size: None,

@@ -64,14 +64,17 @@ pub fn handle_command_layout(
     // is known after it runs.
     let is_grid_command = matches!(
         cmd,
-        LayoutCommand::GridFocus(_) | LayoutCommand::GridMove(_) | LayoutCommand::GridCell(_)
-    );
-    let requires_workspace_space = matches!(
-        cmd,
         LayoutCommand::GridFocus(_)
             | LayoutCommand::GridMove(_)
             | LayoutCommand::GridCell(_)
-            | LayoutCommand::NextWorkspace(_)
+            | LayoutCommand::GridCenter
+            | LayoutCommand::SwitchToGrid(_)
+            | LayoutCommand::MoveWindowToGrid(_)
+    );
+    let requires_workspace_space = is_grid_command
+        || matches!(
+            cmd,
+            LayoutCommand::NextWorkspace(_)
             | LayoutCommand::PrevWorkspace(_)
             | LayoutCommand::SwitchToWorkspace(_)
             | LayoutCommand::MoveWindowToWorkspace { follow: true, .. }
@@ -79,12 +82,10 @@ pub fn handle_command_layout(
             | LayoutCommand::CreateWorkspace
             | LayoutCommand::SwitchToLastWorkspace
     );
-    let is_virtual_workspace_command = matches!(
-        cmd,
-        LayoutCommand::GridFocus(_)
-            | LayoutCommand::GridMove(_)
-            | LayoutCommand::GridCell(_)
-            | LayoutCommand::NextWorkspace(_)
+    let is_virtual_workspace_command = is_grid_command
+        || matches!(
+            cmd,
+            LayoutCommand::NextWorkspace(_)
             | LayoutCommand::PrevWorkspace(_)
             | LayoutCommand::SwitchToWorkspace(_)
             | LayoutCommand::MoveWindowToWorkspace { .. }
@@ -118,7 +119,7 @@ pub fn handle_command_layout(
         workspace_space.and_then(|space| layout.layout_engine.workspaces().active_workspace(space));
 
     let response = match &cmd {
-        LayoutCommand::GridFocus(_) | LayoutCommand::GridMove(_) | LayoutCommand::GridCell(_) => {
+        _ if is_grid_command => {
             match workspace_space {
                 Some(space) if layout.layout_engine.workspaces().grid_enabled() => layout
                     .layout_engine

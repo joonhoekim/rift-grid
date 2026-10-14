@@ -115,6 +115,11 @@ pub struct AppWorkspaceRule {
     /// Target workspace index (0 based) OR workspace name. If None, window goes to active workspace.
     #[setting(custom)]
     pub workspace: Option<WorkspaceSelector>,
+    /// Workspace grid: send the window to grid N's (1-based) current cell. Wins over
+    /// `workspace`.
+    #[serde(default)]
+    #[setting(custom)]
+    pub grid: Option<usize>,
     #[serde(default)]
     #[setting(custom)]
     pub floating: bool,
@@ -798,6 +803,10 @@ pub struct MenuBarSettings {
     /// Folder containing custom layout indicator images.
     #[setting(label = "Layout folder", custom, enabled_by = "enabled")]
     pub layout_folder: PathBuf,
+    #[serde(default)]
+    /// With workspaces in grids, which grids get a map.
+    #[setting(label = "Grid maps", choices, enabled_by = "enabled", aliases = "grid map 3x3")]
+    pub grid_maps: super::GridMaps,
 }
 
 impl MenuBarSettings {
@@ -820,6 +829,7 @@ impl Default for MenuBarSettings {
             active_label: ActiveWorkspaceLabel::default(),
             display_style: WorkspaceDisplayStyle::default(),
             layout_folder: default_layout_folder(),
+            grid_maps: super::GridMaps::default(),
         }
     }
 }

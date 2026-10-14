@@ -21,6 +21,7 @@ pub struct WindowRuleContext<'a> {
 pub struct AppRuleDecision {
     pub manage: Option<bool>,
     pub workspace: Option<WorkspaceSelector>,
+    pub grid: Option<usize>,
     pub floating: bool,
     pub position: Option<AppRulePosition>,
     pub size: Option<AppRuleSize>,
@@ -229,6 +230,7 @@ impl AppRuleEngine {
             let mut decision = rule.action.clone();
             if !rule.matches_title() {
                 decision.workspace = None;
+                decision.grid = None;
                 decision.focus = false;
             }
             decision
@@ -263,6 +265,7 @@ impl CompiledRule {
         let AppWorkspaceRule {
             app_id,
             workspace,
+            grid,
             floating,
             position,
             size,
@@ -308,6 +311,7 @@ impl CompiledRule {
             action: AppRuleDecision {
                 manage,
                 workspace,
+                grid,
                 floating,
                 position,
                 size,
@@ -384,6 +388,7 @@ mod tests {
             Some(AppRuleDecision {
                 manage: Some(true),
                 workspace: None,
+                grid: None,
                 floating: true,
                 position: Some(AppRulePosition { x: 0.4, y: 0.7 }),
                 size: Some(AppRuleSize { w: Some(640.0), h: Some(480.0) }),

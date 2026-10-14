@@ -119,6 +119,7 @@ fn app_rule_geometry_validation_rejects_invalid_values() {
     settings.app_rules.push(AppWorkspaceRule {
         app_id: Some("com.example.Tool".into()),
         workspace: None,
+        grid: None,
         floating: false,
         position: Some(AppRulePosition { x: -0.1, y: 1.1 }),
         size: Some(AppRuleSize {

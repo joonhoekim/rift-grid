@@ -156,8 +156,9 @@ fn scrolled_workspace_offset(
 }
 
 fn filter_workspaces(workspaces: &mut Vec<RuntimeWorkspaceData>, show_empty: bool) {
-    // Every cell keeps its place in a grid, empty or not.
-    if !show_empty && grid_shape(workspaces).is_none() {
+    if grid_shape(workspaces).is_some() {
+        keep_grid_on_screen(workspaces);
+    } else if !show_empty {
         workspaces.retain(|ws| !ws.windows.is_empty());
     }
 }
@@ -2208,6 +2209,7 @@ mod tests {
             window_count: windows.len(),
             windows,
             grid_cell: None,
+            grid: None,
             layout_focus: None,
         }
     }

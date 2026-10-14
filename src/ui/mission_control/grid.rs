@@ -34,6 +34,15 @@ pub(super) fn grid_focus_selection(workspaces: &[RuntimeWorkspaceData]) -> Optio
     })
 }
 
+/// The overview shows one grid, the one on screen, every cell of it in place,
+/// empty or not.
+pub(super) fn keep_grid_on_screen(workspaces: &mut Vec<RuntimeWorkspaceData>) {
+    let on_screen = workspaces.iter().find(|ws| ws.is_active).map(|ws| ws.grid);
+    if let Some(grid) = on_screen {
+        workspaces.retain(|ws| ws.grid == grid);
+    }
+}
+
 /// Rows and columns when the workspaces form a grid.
 pub(super) fn grid_shape(workspaces: &[RuntimeWorkspaceData]) -> Option<(usize, usize)> {
     workspaces
@@ -380,6 +389,7 @@ mod tests {
             window_count: windows.len(),
             windows,
             grid_cell: None,
+            grid: None,
             layout_focus: None,
         }
     }

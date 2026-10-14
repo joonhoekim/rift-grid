@@ -85,6 +85,12 @@ pub enum LayoutCommand {
     GridMove(Direction),
     /// Workspace grid: go to the neighboring cell.
     GridCell(Direction),
+    /// Workspace grid: go to the centre cell of the grid on screen.
+    GridCenter,
+    /// Workspace grid: show grid N (1-based) at its current cell.
+    SwitchToGrid(usize),
+    /// Workspace grid: send the focused window to grid N's (1-based) current cell.
+    MoveWindowToGrid(usize),
     SwapWindows(WindowId, WindowId),
     AdjustMasterRatio(f64),
     AdjustMasterCount {

@@ -354,6 +354,7 @@ struct MenuIconLayout {
     size: CGSize,
     workspaces: Vec<WorkspaceRenderData>,
     grid_cells: Vec<(CGRect, f64)>,
+    grid_labels: Vec<(f64, CachedTextLine)>,
     separators: Vec<f64>,
     separator_line: Option<CachedTextLine>,
 }
@@ -372,6 +373,7 @@ struct WorkspaceRenderInput<'a> {
     label: Cow<'a, str>,
     show_windows: bool,
     grid_cell: Option<(usize, usize)>,
+    grid: Option<usize>,
 }
 
 fn render_inputs<'a>(
@@ -388,23 +390,29 @@ fn render_inputs<'a>(
             display
                 .workspaces
                 .iter()
-                .filter(move |workspace| grid || match settings.mode {
+                .filter(move |workspace| if grid {
+                    grid_map::shown(display, workspace, settings)
+                } else {
+                    match settings.mode {
                     MenuBarDisplayMode::All => {
                         settings.show_empty || workspace.window_count > 0 || workspace.is_active
                     }
                     MenuBarDisplayMode::Active => workspace.is_active,
-                })
+                }})
                 .map(move |workspace| WorkspaceRenderInput {
                     display_uuid: &display.display_uuid,
                     space: display.space,
                     workspace,
-                    label: if show_windows || grid {
+                    label: if grid {
+                        grid_map::label(display, settings)
+                    } else if show_windows {
                         Cow::Borrowed("")
                     } else {
                         workspace_label(workspace, settings.active_label)
                     },
                     show_windows: show_windows && !grid,
                     grid_cell: workspace.grid_cell.filter(|_| grid),
+                    grid: workspace.grid.filter(|_| grid),
                 })
         })
         .collect()
@@ -423,6 +431,7 @@ struct WorkspaceRenderKey {
     label: String,
     show_windows: bool,
     grid_cell: Option<(usize, usize)>,
+    grid: Option<usize>,
     occupied: bool,
     is_active: bool,
     window_count: usize,
@@ -440,6 +449,7 @@ impl MenuIconRenderKey {
                 label: input.label.to_string(),
                 show_windows: input.show_windows,
                 grid_cell: input.grid_cell,
+                grid: input.grid,
                 occupied: input.grid_cell.is_some() && input.workspace.window_count > 0,
                 is_active: input.workspace.is_active,
                 window_count: input
@@ -479,6 +489,7 @@ impl MenuIconRenderKey {
                     && key.label == input.label
                     && key.show_windows == input.show_windows
                     && key.grid_cell == input.grid_cell
+                    && key.grid == input.grid
                     && key.occupied
                         == (input.grid_cell.is_some() && input.workspace.window_count > 0)
                     && key.is_active == input.workspace.is_active
@@ -1220,6 +1231,7 @@ mod layout_library_tests {
             window_count: 0,
             windows: Vec::new(),
             grid_cell: None,
+            grid: None,
         }
     }
 
@@ -1490,6 +1502,7 @@ mod layout_library_tests {
             label: Cow::Borrowed("1"),
             show_windows: false,
             grid_cell: None,
+            grid: None,
         }]);
 
         assert!(key.matches_inputs(&[WorkspaceRenderInput {
@@ -1499,6 +1512,7 @@ mod layout_library_tests {
             label: Cow::Borrowed("1"),
             show_windows: false,
             grid_cell: None,
+            grid: None,
         }]));
 
         workspace.is_active = false;
@@ -1509,6 +1523,7 @@ mod layout_library_tests {
             label: Cow::Borrowed("1"),
             show_windows: false,
             grid_cell: None,
+            grid: None,
         }]));
     }
 
@@ -1600,7 +1615,11 @@ fn build_layout(
     text_attrs: &NSDictionary<NSAttributedStringKey, AnyObject>,
 ) -> MenuIconLayout {
     if !inputs.is_empty() && inputs.iter().all(|input| input.grid_cell.is_some()) {
-        return grid_map::build_grid_layout(inputs, || Some(separator_text_line()));
+        return grid_map::build_grid_layout(
+            inputs,
+            || Some(separator_text_line()),
+            |text| build_cached_text_line(text, text_attrs),
+        );
     }
     let count = inputs.len();
     let mut workspaces = Vec::with_capacity(count);
@@ -1692,6 +1711,7 @@ fn build_layout(
     MenuIconLayout {
         workspaces,
         grid_cells: Vec::new(),
+        grid_labels: Vec::new(),
         separators,
         separator_line,
         size: CGSize::new(width, height),
@@ -1723,18 +1743,7 @@ fn draw_menu_icon(cg: &CGContext, bounds: CGRect, layout: &MenuIconLayout) {
     CGContext::set_rgb_stroke_color(Some(cg), 1.0, 1.0, 1.0, 1.0);
     CGContext::set_line_width(Some(cg), BORDER_WIDTH);
 
-    for &(cell, alpha) in &layout.grid_cells {
-        add_rounded_rect(
-            cg,
-            cell.origin.x,
-            cell.origin.y + y_offset,
-            cell.size.width,
-            cell.size.height,
-            1.0,
-        );
-        CGContext::set_rgb_fill_color(Some(cg), 1.0, 1.0, 1.0, alpha);
-        CGContext::fill_path(Some(cg));
-    }
+    grid_map::draw(cg, layout, y_offset, &foreground);
 
     for workspace in layout.workspaces.iter() {
         let is_label = workspace.label_line.is_some();

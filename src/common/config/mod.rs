@@ -1,10 +1,12 @@
 //! Source documents are editable; runtime configs contain expanded hotkeys.
 mod borders;
 mod document;
+mod grid;
 mod parse;
 mod schema;
 mod types;
 pub use borders::BorderSettings;
+pub use grid::GridMaps;
 pub use document::ConfigDocument;
 pub use schema::*;
 pub use types::*;

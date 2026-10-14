@@ -363,6 +363,12 @@ enum LayoutCommands {
     GridMove { direction: String },
     /// Workspace grid: go to the neighboring cell
     GridCell { direction: String },
+    /// Workspace grid: go to the centre cell of the grid on screen
+    GridCenter,
+    /// Workspace grid: show grid N (1-9) at its current cell
+    SwitchGrid { grid: usize },
+    /// Workspace grid: send the focused window to grid N's (1-9) current cell
+    MoveToGrid { grid: usize },
 }
 
 #[derive(Subcommand)]
@@ -987,6 +993,15 @@ fn map_layout_command(cmd: LayoutCommands) -> Result<CliCommand, String> {
         LayoutCommands::GridCell { direction } => Ok(CliCommand::Reactor(
             reactor::Command::Layout(LC::GridCell(direction.into())),
         )),
+        LayoutCommands::GridCenter => {
+            Ok(CliCommand::Reactor(reactor::Command::Layout(LC::GridCenter)))
+        }
+        LayoutCommands::SwitchGrid { grid } => {
+            Ok(CliCommand::Reactor(reactor::Command::Layout(LC::SwitchToGrid(grid))))
+        }
+        LayoutCommands::MoveToGrid { grid } => {
+            Ok(CliCommand::Reactor(reactor::Command::Layout(LC::MoveWindowToGrid(grid))))
+        }
         LayoutCommands::JoinWindow { direction } => Ok(CliCommand::Reactor(
             reactor::Command::Layout(LC::JoinWindow(direction.into())),
         )),
