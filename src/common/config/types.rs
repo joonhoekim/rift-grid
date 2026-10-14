@@ -613,10 +613,16 @@ pub struct BorderSettings {
     /// A soft glow around the focused window's border.
     #[setting(label = "Glow", enabled_by = "enabled")]
     pub glow: bool,
+    #[serde(default = "default_border_glow_radius")]
+    /// How far the glow spreads out from the border.
+    #[setting(label = "Glow size", unit = "pt", enabled_by = "glow")]
+    pub glow_radius: f64,
 }
 
 fn default_border_width() -> f64 { 5.0 }
-fn default_border_radius() -> f64 { 10.0 }
+// macOS 26's plain windows; windows with a toolbar round more.
+fn default_border_radius() -> f64 { 16.0 }
+fn default_border_glow_radius() -> f64 { 12.0 }
 fn default_border_active_color() -> String { "0xffb4befe".into() }
 fn default_border_inactive_color() -> String { "0xff45475a".into() }
 
@@ -629,6 +635,7 @@ impl Default for BorderSettings {
             active_color: default_border_active_color(),
             inactive_color: default_border_inactive_color(),
             glow: true,
+            glow_radius: default_border_glow_radius(),
         }
     }
 }

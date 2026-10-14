@@ -4,8 +4,8 @@
 use cgs::{CgsWindow, CgsWindowError, WindowSurface, WindowTransaction, with_disabled_actions};
 use objc2::rc::Retained;
 use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
-use objc2_core_graphics::CGColor;
-use objc2_quartz_core::CALayer;
+use objc2_core_graphics::{CGColor, CGMutablePath};
+use objc2_quartz_core::{CALayer, CAShapeLayer, kCAFillRuleEvenOdd};
 use tracing::warn;
 
 use crate::common::collections::{HashMap, HashSet};
@@ -48,6 +48,7 @@ pub struct BorderStyle {
     /// None leaves unfocused windows without a border.
     pub inactive: Option<Rgba>,
     pub glow: bool,
+    pub glow_radius: f64,
 }
 
 impl BorderStyle {
@@ -70,6 +71,7 @@ impl BorderStyle {
             active,
             inactive,
             glow: settings.glow,
+            glow_radius: settings.glow_radius.clamp(1.0, 40.0),
         }
     }
 
@@ -78,7 +80,13 @@ impl BorderStyle {
     }
 
     /// Room around the ring for the glow to fade out in.
-    fn pad(&self) -> f64 { if self.glow { self.width * 2.0 } else { 0.0 } }
+    fn pad(&self) -> f64 { if self.glow { self.glow_radius * 2.0 } else { 0.0 } }
+
+    /// The window inside the canvas.
+    pub fn hole(&self, frame: CGRect) -> CGRect {
+        let inset = self.pad() + self.width;
+        CGRect::new(CGPoint::new(inset, inset), frame.size)
+    }
 
     /// The overlay window's frame for a window at `frame`.
     pub fn canvas(&self, frame: CGRect) -> CGRect {
@@ -101,11 +109,36 @@ impl BorderStyle {
 
 fn cg_color([r, g, b, a]: Rgba) -> CFRetained<CGColor> { CGColor::new_generic_rgb(r, g, b, a) }
 
+/// A rounded rectangle's corner radius, kept within what CoreGraphics accepts.
+fn corner(rect: CGRect, radius: f64) -> f64 {
+    radius.min(rect.size.width / 2.0).min(rect.size.height / 2.0).max(0.0)
+}
+
+/// Everything in `canvas` but the rounded `hole`, so the glow never reaches into
+/// the window it surrounds.
+fn outside(canvas: CGSize, hole: CGRect, radius: f64) -> CFRetained<CGMutablePath> {
+    let path = CGMutablePath::new();
+    let r = corner(hole, radius);
+    unsafe {
+        CGMutablePath::add_rect(
+            Some(&path),
+            std::ptr::null(),
+            CGRect::new(CGPoint::new(0.0, 0.0), canvas),
+        );
+        CGMutablePath::add_rounded_rect(Some(&path), std::ptr::null(), hole, r, r);
+    }
+    path
+}
+
 struct Border {
     // The surface must be detached before its WindowServer window drops.
     surface: WindowSurface,
     window: CgsWindow,
     root: Retained<CALayer>,
+    /// A filled plate the size of the ring, whose shadow is the glow; masked to
+    /// what lies outside the window.
+    glow: Retained<CALayer>,
+    glow_mask: Retained<CAShapeLayer>,
     ring: Retained<CALayer>,
     target: BorderTarget,
 }
@@ -118,17 +151,22 @@ impl Border {
         // No WindowServer shadow of its own.
         window.set_tags(1 << 3)?;
         let root = CALayer::layer();
+        let glow = CALayer::layer();
+        let glow_mask = CAShapeLayer::layer();
         let ring = CALayer::layer();
         with_disabled_actions(|| {
             root.setAnchorPoint(CGPoint::new(0.0, 0.0));
             root.setPosition(CGPoint::new(0.0, 0.0));
             root.setContentsScale(2.0);
             root.setOpaque(false);
+            glow_mask.setFillRule(unsafe { kCAFillRuleEvenOdd });
+            unsafe { glow.setMask(Some(&glow_mask)) };
+            root.addSublayer(&glow);
             root.addSublayer(&ring);
         });
         let bounds = CGRect::new(CGPoint::new(0.0, 0.0), canvas.size);
         let surface = WindowSurface::new(window.id(), bounds, &root)?;
-        let border = Self { surface, window, root, ring, target };
+        let border = Self { surface, window, root, glow, glow_mask, ring, target };
         border.draw(style);
         border.window.order_above(Some(target.window.as_u32()))?;
         Ok(border)
@@ -137,21 +175,35 @@ impl Border {
     fn draw(&self, style: &BorderStyle) {
         let canvas = style.canvas(self.target.frame);
         let color = style.color(self.target.focused).unwrap_or([0.0; 4]);
+        let ring = style.ring(self.target.frame);
+        let outer = if style.radius > 0.0 { corner(ring, style.radius + style.width) } else { 0.0 };
         with_disabled_actions(|| {
             self.root.setBounds(CGRect::new(CGPoint::new(0.0, 0.0), canvas.size));
-            self.ring.setFrame(style.ring(self.target.frame));
-            self.ring.setCornerRadius(if style.radius > 0.0 {
-                style.radius + style.width
-            } else {
-                0.0
-            });
+            self.ring.setFrame(ring);
+            self.ring.setCornerRadius(outer);
             self.ring.setBorderWidth(style.width);
             self.ring.setBorderColor(Some(&cg_color(color)));
-            let glow = style.glow && self.target.focused;
-            self.ring.setShadowColor(Some(&cg_color(color)));
-            self.ring.setShadowOffset(CGSize::new(0.0, 0.0));
-            self.ring.setShadowRadius(style.width);
-            self.ring.setShadowOpacity(if glow { 0.9 } else { 0.0 });
+
+            let glowing = style.glow && self.target.focused;
+            self.glow.setHidden(!glowing);
+            if glowing {
+                // The glow layer spans the canvas so its mask can cover all of it;
+                // the plate inside it is drawn by its background and corner.
+                self.glow.setFrame(ring);
+                self.glow.setCornerRadius(outer);
+                self.glow.setBackgroundColor(Some(&cg_color(color)));
+                self.glow.setShadowColor(Some(&cg_color(color)));
+                self.glow.setShadowOffset(CGSize::new(0.0, 0.0));
+                self.glow.setShadowRadius(style.glow_radius);
+                self.glow.setShadowOpacity(1.0);
+                let origin = ring.origin;
+                self.glow_mask.setFrame(CGRect::new(
+                    CGPoint::new(-origin.x, -origin.y),
+                    canvas.size,
+                ));
+                let hole = style.hole(self.target.frame);
+                self.glow_mask.setPath(Some(&outside(canvas.size, hole, style.radius)));
+            }
         });
         self.surface.flush();
     }
@@ -246,14 +298,14 @@ mod tests {
         let settings = BorderSettings { enabled: true, ..BorderSettings::default() };
         let style = BorderStyle::new(&settings);
         let frame = CGRect::new(CGPoint::new(100.0, 50.0), CGSize::new(800.0, 600.0));
-        // Width 5 and a glow of twice that around it.
-        assert_eq!(style.canvas(frame), CGRect::new(CGPoint::new(85.0, 35.0), CGSize::new(830.0, 630.0)));
-        assert_eq!(style.ring(frame), CGRect::new(CGPoint::new(10.0, 10.0), CGSize::new(810.0, 610.0)));
-        // The ring's inner edge is the window's edge.
-        let ring = style.ring(frame);
-        let canvas = style.canvas(frame);
+        // Width 5, and twice the glow's 12 around it for the glow to fade out.
+        assert_eq!(style.canvas(frame), CGRect::new(CGPoint::new(71.0, 21.0), CGSize::new(858.0, 658.0)));
+        assert_eq!(style.ring(frame), CGRect::new(CGPoint::new(24.0, 24.0), CGSize::new(810.0, 610.0)));
+        // The ring's inner edge, and the hole the glow leaves, are the window's edge.
+        let (ring, canvas, hole) = (style.ring(frame), style.canvas(frame), style.hole(frame));
         assert_eq!(canvas.origin.x + ring.origin.x + style.width, frame.origin.x);
         assert_eq!(canvas.origin.y + ring.origin.y + style.width, frame.origin.y);
+        assert_eq!((canvas.origin.x + hole.origin.x, hole.size), (frame.origin.x, frame.size));
 
         let plain = BorderStyle::new(&BorderSettings { glow: false, ..settings.clone() });
         assert_eq!(plain.canvas(frame), CGRect::new(CGPoint::new(95.0, 45.0), CGSize::new(810.0, 610.0)));
@@ -261,5 +313,10 @@ mod tests {
         assert_eq!(style.color(true), Some(style.active));
         let none = BorderStyle::new(&BorderSettings { inactive_color: String::new(), ..settings });
         assert_eq!(none.color(false), None, "no unfocused borders");
+
+        // Corners never exceed half a side, which CoreGraphics rejects.
+        let thin = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(20.0, 400.0));
+        assert_eq!(corner(thin, 16.0), 10.0);
+        assert_eq!(corner(frame, 16.0), 16.0);
     }
 }

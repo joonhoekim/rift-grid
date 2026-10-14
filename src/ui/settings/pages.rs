@@ -736,6 +736,16 @@ fn interface(ui: Ui, model: &Rc<Model>) -> Page {
     );
     page = page.section(section);
     let section = f.schema_rows(
+        Section::new(&ui, "Window Borders").description(
+            "A ring around each window, the focused one in its own color. Colors are \
+             0xAARRGGBB or #RRGGBB.",
+        ),
+        "",
+        |s| &s.settings.ui.borders,
+        |s| &mut s.settings.ui.borders,
+    );
+    page = page.section(section);
+    let section = f.schema_rows(
         Section::new(&ui, "Stack Tabs").description("tabs beside stacked windows."),
         "",
         |s| &s.settings.ui.stack_line,
