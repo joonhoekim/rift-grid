@@ -417,6 +417,7 @@ pub struct Reactor {
     pending_mouse_focus: Option<(WindowId, Instant)>,
     mouse_inventory_hit: Option<WindowServerId>,
     drag_manager: managers::DragManager,
+    border_manager: managers::BorderManager,
     workspace_switch_manager: managers::WorkspaceSwitchManager,
     recording_manager: managers::RecordingManager,
     communication_manager: managers::CommunicationManager,
@@ -520,6 +521,7 @@ impl Reactor {
                 preview_suppressed: false,
                 haptics_enabled: config.settings.drag_drop.haptics_enabled,
             },
+            border_manager: managers::BorderManager::default(),
             workspace_switch_manager: managers::WorkspaceSwitchManager {
                 workspace_switch_state: WorkspaceSwitchState::Inactive,
                 workspace_switch_generation: 0,
@@ -1186,6 +1188,15 @@ impl Reactor {
 
     fn handle_event_inner(&mut self, event: Event) {
         let may_make_ready = matches!(&event, Event::SpaceStateChanged(_));
+        // Visibility the borders cannot see in the reactor's own state.
+        let visibility_changed = matches!(
+            &event,
+            Event::WindowServerHidden(_)
+                | Event::WindowServerUnhidden(_)
+                | Event::ApplicationActivated(..)
+                | Event::ApplicationGloballyActivated(_)
+                | Event::ApplicationTerminated(_)
+        );
         let previously_focused_window = self.main_window();
         match self.dispatch_workflow(event) {
             Ok(mut outcome) => {
@@ -1211,6 +1222,77 @@ impl Reactor {
         }
         self.retire_presentations();
         self.drag_manager.sync_motion_gate();
+        self.update_borders(visibility_changed);
+    }
+
+    /// Keep a border on every visible window of the active workspaces, the focused
+    /// one in the focused colour. Cheap when nothing they show has changed.
+    fn update_borders(&mut self, visibility_changed: bool) {
+        use std::hash::{Hash, Hasher};
+
+        use crate::ui::borders::{BorderStyle, BorderTarget, Borders};
+        let settings = &self.config.settings.ui.borders;
+        if !settings.enabled {
+            self.border_manager = managers::BorderManager::default();
+            return;
+        }
+        let style = BorderStyle::new(settings);
+        let focused = self.main_window();
+        let spaces: Vec<SpaceId> = self.iter_active_spaces().collect();
+        let mut candidates = Vec::new();
+        for space in spaces {
+            if self.is_fullscreen_space(space) {
+                continue;
+            }
+            for wid in self
+                .layout_manager
+                .layout_engine
+                .workspaces()
+                .windows_in_active_workspace(&self.state.windows, space)
+            {
+                let Some(window) = self.state.windows.window(wid).filter(|w| w.is_admitted())
+                else {
+                    continue;
+                };
+                let Some(wsid) =
+                    self.state.windows.record(wid).and_then(|record| record.window_server_id())
+                else {
+                    continue;
+                };
+                candidates.push(BorderTarget {
+                    window: wsid,
+                    frame: window.frame_monotonic,
+                    focused: Some(wid) == focused,
+                });
+            }
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for target in &candidates {
+            target.window.as_u32().hash(&mut hasher);
+            target.focused.hash(&mut hasher);
+            for value in [
+                target.frame.origin.x,
+                target.frame.origin.y,
+                target.frame.size.width,
+                target.frame.size.height,
+            ] {
+                value.to_bits().hash(&mut hasher);
+            }
+        }
+        format!("{style:?}").hash(&mut hasher);
+        let signature = hasher.finish();
+        if !visibility_changed && self.border_manager.signature == Some(signature) {
+            return;
+        }
+        self.border_manager.signature = Some(signature);
+        // A newly focused window was raised, possibly over the others' borders.
+        let reorder = self.border_manager.focus != focused;
+        self.border_manager.focus = focused;
+        candidates.retain(|t| crate::sys::window_server::window_is_ordered_in(t.window));
+        self.border_manager
+            .borders
+            .get_or_insert_with(Borders::default)
+            .update(style, &candidates, reorder);
     }
 
     fn dispatch_workflow(&mut self, mut event: Event) -> anyhow::Result<EventOutcome> {

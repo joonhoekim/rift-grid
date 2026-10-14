@@ -181,6 +181,15 @@ impl WorkspaceSwitchManager {
     }
 }
 
+/// Window borders and what they were last drawn from.
+#[derive(Default)]
+pub struct BorderManager {
+    pub borders: Option<crate::ui::borders::Borders>,
+    /// The visible windows, frames, focus and style the borders show.
+    pub signature: Option<u64>,
+    pub focus: Option<WindowId>,
+}
+
 /// Manages refocus and cleanup state
 pub struct RefocusManager {
     pub stale_cleanup_state: super::StaleCleanupState,
