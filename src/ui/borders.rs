@@ -275,9 +275,20 @@ impl Border {
     ) -> Result<(), CgsWindowError> {
         let previous = self.target;
         self.target = target;
-        let resized = previous.frame.size != target.frame.size;
-        self.reframe(style.canvas(target.frame))?;
-        if resized || previous.focused != target.focused || previous.window != target.window {
+        if previous.window == target.window && previous.frame.size == target.frame.size {
+            // Only moved: carry the overlay along and leave the layers alone. Moving
+            // the window and re-placing the layers reach the screen separately, and
+            // doing both shows the ring out of place for a frame.
+            let by = CGPoint::new(
+                target.frame.origin.x - previous.frame.origin.x,
+                target.frame.origin.y - previous.frame.origin.y,
+            );
+            self.reframe(shifted(self.canvas, by))?;
+            if previous.focused != target.focused {
+                self.place(style, true);
+            }
+        } else {
+            self.reframe(style.canvas(target.frame))?;
             self.place(style, true);
         }
         if reorder || previous.focused != target.focused || previous.window != target.window {
@@ -286,37 +297,59 @@ impl Border {
         Ok(())
     }
 
-    /// Slide the ring from where it is to `target`, over `duration`. The window
-    /// grows to hold both ends; `settle` shrinks it back once the slide is done.
+    /// Where the ring is on screen right now, mid-slide included: the presentation
+    /// layer has the animation's current value.
+    fn ring_on_screen(&self, style: &BorderStyle) -> CGRect {
+        let frame = unsafe { self.ring.presentationLayer() }
+            .map(|layer| layer.frame())
+            .unwrap_or_else(|| self.ring_in_canvas(style));
+        shifted(frame, self.canvas.origin)
+    }
+
+    /// Slide the ring from where it is on screen to `target`, over `duration`. The
+    /// window grows to hold both ends; `settle` shrinks it back once it has landed.
     fn slide(
         &mut self,
         style: &BorderStyle,
         target: BorderTarget,
         duration: f64,
     ) -> Result<(), CgsWindowError> {
-        let from = style.canvas(self.target.frame);
-        self.reframe(union(from, style.canvas(target.frame)))?;
-        self.place(style, false);
+        let from = self.ring_on_screen(style);
+        let at = style.canvas(target.frame).origin;
+        let to = shifted(style.ring(target.frame), at);
+        // Room for the glow at the far end, so landing needs no resize.
+        let canvas = union(from, style.canvas(target.frame));
+        self.reframe(canvas)?;
+        let local = |r: CGRect| shifted(r, CGPoint::new(-canvas.origin.x, -canvas.origin.y));
+        let color = style.color(true).unwrap_or([0.0; 4]);
+        with_disabled_actions(|| {
+            self.ring.removeAllAnimations();
+            self.root.setBounds(CGRect::new(CGPoint::new(0.0, 0.0), canvas.size));
+            self.glow.setHidden(true);
+            self.ring.setFrame(local(from));
+            self.ring.setCornerRadius(self.outer_radius(style, from));
+            self.ring.setBorderWidth(style.width);
+            self.ring.setBorderColor(Some(&cg_color(color)));
+        });
+        self.surface.flush();
         self.target = target;
         self.window.order_above(Some(target.window.as_u32()))?;
-        let ring = self.ring_in_canvas(style);
-        let outer = self.outer_radius(style, ring);
         CATransaction::begin();
         CATransaction::setAnimationDuration(duration);
         // Fast out, gentle landing, as a spring that does not overshoot.
         CATransaction::setAnimationTimingFunction(Some(
             &CAMediaTimingFunction::functionWithControlPoints(0.2, 0.9, 0.25, 1.0),
         ));
-        self.ring.setFrame(ring);
-        self.ring.setCornerRadius(outer);
+        self.ring.setFrame(local(to));
+        self.ring.setCornerRadius(self.outer_radius(style, to));
         CATransaction::commit();
         self.surface.flush();
         Ok(())
     }
 
-    /// Back to the target's own canvas, with the glow, once a slide has landed.
+    /// Bring the glow back once a slide has landed. The overlay keeps the size it
+    /// slid in, which already has room for the glow, so nothing moves.
     fn settle(&mut self, style: &BorderStyle) -> Result<(), CgsWindowError> {
-        self.reframe(style.canvas(self.target.frame))?;
         self.place(style, true);
         Ok(())
     }

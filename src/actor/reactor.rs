@@ -1246,7 +1246,10 @@ impl Reactor {
             return;
         }
         let style = BorderStyle::new(settings);
-        let focused = self.main_window();
+        // The layout's focus, not the frontmost app's main window: rift sets it the
+        // moment it moves focus and WindowServer focus updates it, while the main
+        // window passes through the app's previous one on the way.
+        let focused = self.layout_manager.layout_engine.focused_window();
         let spaces: Vec<SpaceId> = self.iter_active_spaces().collect();
         let mut candidates = Vec::new();
         for space in spaces {
