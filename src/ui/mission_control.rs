@@ -892,6 +892,8 @@ pub struct OverviewSession {
     drag: Option<OverviewDrag>,
     drop: Option<crate::actor::reactor::OverviewDrop>,
     pressed: Option<CGPoint>,
+    /// When rift last ran a command while the overview was open.
+    rift_focus_at: Option<std::time::Instant>,
 }
 
 impl Drop for OverviewSession {
@@ -1013,7 +1015,7 @@ impl OverviewSession {
         let ws = &displays[active].workspaces[displays[active].centered];
         let selection = displays[active]
             .grid()
-            .and_then(|_| grid_focus_selection(&displays[active].workspaces))
+            .and_then(|_| grid_focus_selection(&displays[active].workspaces, false))
             .unwrap_or_else(|| Selection {
                 workspace: ws.index,
                 window: ws.windows.iter().find(|w| w.is_focused).map(|w| w.id),
@@ -1029,6 +1031,7 @@ impl OverviewSession {
             drag: None,
             drop: None,
             pressed: None,
+            rift_focus_at: None,
         };
         session.highlight(None);
         // Cached/fallback layers are already visible; fresh capture starts on the next run-loop turn.
@@ -1070,7 +1073,18 @@ impl OverviewSession {
         self.request_previews(cache);
     }
 
+    /// Show what a command rift just ran did.
     pub(crate) fn refresh(
+        &mut self,
+        reactor: &ReactorHandle,
+        cache: Option<&PreviewCache>,
+        moved: Option<WindowId>,
+    ) {
+        self.rift_focus_at = Some(std::time::Instant::now());
+        self.reload(reactor, cache, moved);
+    }
+
+    fn reload(
         &mut self,
         reactor: &ReactorHandle,
         cache: Option<&PreviewCache>,
@@ -1138,7 +1152,7 @@ impl OverviewSession {
         // In a grid the selection is the real focus.
         if let Some(d) = self.displays.get(self.active)
             && d.grid().is_some()
-            && let Some(selection) = grid_focus_selection(&d.workspaces)
+            && let Some(selection) = grid_focus_selection(&d.workspaces, self.rift_moved_focus())
         {
             self.selection = selection;
         }

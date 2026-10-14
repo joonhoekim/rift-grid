@@ -27,15 +27,18 @@ the two are the same.
 
 ## Moving
 
+The seed config follows subline's ijkl preset, with Alt as Mod.
+
 | Key (seed config) | Command | What it does |
 | --- | --- | --- |
 | Alt+1..9 | `switch_to_grid = N` | Show grid N at its current cell |
-| Alt+Shift+1..9 | `move_window_to_grid = N` | Send the focused window to grid N's current cell; focus stays |
+| Alt+Ctrl+1..9 | `move_window_to_grid = N` | Send the focused window to grid N's current cell; focus stays |
 | Alt+IJKL / arrows | `grid_focus` | Tile beside, or the next cell of this grid past its edge |
 | Alt+Shift+IJKL / arrows | `grid_move` | Swap with the tile beside, or carry the window into the next cell |
 | Alt+Cmd+IJKL | `grid_cell` | Next cell of this grid |
-| Alt+Cmd+H | `switch_to_workspace = 4` | Centre cell of grid 1 |
+| Alt+H | `grid_center` | Centre cell of the grid on screen |
 | Alt+Tab | `switch_to_last_workspace` | The previous cell, whichever grid it is in |
+| Alt+O | `show_mission_control_all` | Overview; again for the whole grid, again to close |
 
 Cells never lead into another grid: moving past the grid's edge stops.
 
@@ -56,7 +59,8 @@ name), and `grid` wins when both are given.
 
 ## Overview
 
-The overview shows the grid on screen. A row of grid buttons at the top lists
+The overview shows the grid on screen and follows it as it changes: focus
+moves, windows that open or close, and grids that are switched to or filled. A row of grid buttons at the top lists
 the grids that have windows plus the one on screen, which is highlighted.
 Clicking a button, or pressing Alt+N while the overview is open, switches to that
 grid and the overview stays open on it.

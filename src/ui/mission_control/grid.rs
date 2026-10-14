@@ -23,14 +23,27 @@ pub(super) fn card_image_frame(size: CGSize, bare: bool) -> CGRect {
     preview_frame(size)
 }
 
+/// How long after rift moves the focus the overview shows rift's target rather
+/// than the system's focus, which still reports the window before it.
+const RIFT_FOCUS_BRIDGE: std::time::Duration = std::time::Duration::from_millis(600);
+
 /// The selection a grid overview shows: the active cell, and the window the
 /// system reports focused when it is in that cell. Right after rift moves the
-/// focus the system has not caught up, so the layout's focus stands in for it.
-pub(super) fn grid_focus_selection(workspaces: &[RuntimeWorkspaceData]) -> Option<Selection> {
+/// focus (`rift_moved`) the system has not caught up, so the layout's focus
+/// stands in for it.
+pub(super) fn grid_focus_selection(
+    workspaces: &[RuntimeWorkspaceData],
+    rift_moved: bool,
+) -> Option<Selection> {
     let ws = workspaces.iter().find(|ws| ws.is_active)?;
+    let system = ws.windows.iter().find(|w| w.is_focused).map(|w| w.id);
     Some(Selection {
         workspace: ws.index,
-        window: ws.windows.iter().find(|w| w.is_focused).map(|w| w.id).or(ws.layout_focus),
+        window: if rift_moved {
+            ws.layout_focus.or(system)
+        } else {
+            system.or(ws.layout_focus)
+        },
     })
 }
 
@@ -389,6 +402,11 @@ impl DisplayOverview {
 }
 
 impl OverviewSession {
+    /// Whether rift moved the focus a moment ago, so the system's focus may lag.
+    pub(super) fn rift_moved_focus(&self) -> bool {
+        self.rift_focus_at.is_some_and(|at| at.elapsed() < RIFT_FOCUS_BRIDGE)
+    }
+
     /// The grid (0-based) whose button in the grid row is under `point`.
     pub(super) fn grid_button_at(&self, point: CGPoint) -> Option<usize> {
         let d = self.displays.iter().find(|d| contains(d.bounds, point))?;
@@ -409,6 +427,7 @@ impl OverviewSession {
         if self.drag.is_some() {
             return;
         }
+        let rift_moved = self.rift_moved_focus();
         let Some(d) = self.displays.get_mut(self.active).filter(|d| d.grid().is_some()) else {
             return;
         };
@@ -420,6 +439,8 @@ impl OverviewSession {
                     && a.windows.iter().map(|w| w.id).eq(b.windows.iter().map(|w| w.id))
             });
         if !same_cards {
+            // Windows came or went, or the grid changed: rebuild.
+            self.reload(reactor, cache, None);
             return;
         }
         d.set_grid_buttons(buttons);
@@ -439,7 +460,7 @@ impl OverviewSession {
             d.animate = true;
             d.rebuild(cache);
         }
-        let Some(selection) = grid_focus_selection(&d.workspaces) else {
+        let Some(selection) = grid_focus_selection(&d.workspaces, rift_moved) else {
             return;
         };
         if selection != self.selection || follow {
@@ -690,7 +711,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let id = |n| Some(WindowId::new(123, n));
-        let select = |ws: &[RuntimeWorkspaceData]| grid_focus_selection(ws).unwrap();
+        let select = |ws: &[RuntimeWorkspaceData]| grid_focus_selection(ws, false).unwrap();
 
         // The system's focus wins over the layout's within the active cell.
         let ws = cells(1, [vec![], vec![tile(1, false), tile(2, true)]], id(1));
@@ -699,6 +720,9 @@ mod tests {
         // focus stands in.
         let ws = cells(1, [vec![tile(3, true)], vec![tile(1, false)]], id(1));
         assert_eq!(select(&ws), Selection { workspace: 1, window: id(1) });
+        // Right after rift moved the focus, its target wins until the system catches up.
+        let ws = cells(1, [vec![], vec![tile(1, false), tile(2, true)]], id(1));
+        assert_eq!(grid_focus_selection(&ws, true).unwrap(), Selection { workspace: 1, window: id(1) });
         // An empty active cell has no focused window.
         let ws = cells(1, [vec![tile(3, true)], vec![]], None);
         assert_eq!(select(&ws), Selection { workspace: 1, window: None });

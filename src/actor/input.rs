@@ -972,7 +972,13 @@ impl Input {
                                 self.transition_binding_mode(target);
                             }
                             WmCommand::ReactorCommand(command) => {
-                                self.events_tx.send(Event::Command(command.clone()))
+                                self.events_tx.send(Event::Command(command.clone()));
+                                // The overview stays open and shows what the command did.
+                                if self.mission_control_active.get() {
+                                    self.send_overview(
+                                        super::mission_control::Event::RefreshCurrentWorkspace,
+                                    );
+                                }
                             }
                             _ => self.wm_sender.send(WmEvent::Command(cmd.clone())),
                         }
