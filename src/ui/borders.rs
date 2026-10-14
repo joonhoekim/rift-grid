@@ -40,6 +40,12 @@ pub fn parse_color(text: &str) -> Option<Rgba> {
     }
 }
 
+/// `0xAARRGGBB`, the form JankyBorders and the config's defaults use.
+pub fn format_color([r, g, b, a]: Rgba) -> String {
+    let byte = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+    format!("0x{:02x}{:02x}{:02x}{:02x}", byte(a), byte(r), byte(g), byte(b))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BorderStyle {
     pub width: f64,
@@ -288,6 +294,10 @@ mod tests {
         assert_eq!(parse_color("0x80000000"), Some([0.0, 0.0, 0.0, 128.0 / 255.0]));
         assert_eq!(parse_color("#ff0000"), Some([1.0, 0.0, 0.0, 1.0]));
         assert_eq!(parse_color("#00ff0080"), Some([0.0, 1.0, 0.0, 128.0 / 255.0]));
+        assert_eq!(format_color([180.0 / 255.0, 190.0 / 255.0, 254.0 / 255.0, 1.0]), "0xffb4befe");
+        for text in ["0xffb4befe", "0x80123456"] {
+            assert_eq!(format_color(parse_color(text).unwrap()), text, "a picked color reads back");
+        }
         for bad in ["", "red", "0xfff", "#12345", "0xgg000000"] {
             assert_eq!(parse_color(bad), None, "{bad}");
         }
@@ -295,7 +305,7 @@ mod tests {
 
     #[test]
     fn the_ring_sits_outside_the_window_with_room_for_the_glow() {
-        let settings = BorderSettings { enabled: true, ..BorderSettings::default() };
+        let settings = BorderSettings { enabled: true, width: 5.0, ..BorderSettings::default() };
         let style = BorderStyle::new(&settings);
         let frame = CGRect::new(CGPoint::new(100.0, 50.0), CGSize::new(800.0, 600.0));
         // Width 5, and twice the glow's 12 around it for the glow to fade out.

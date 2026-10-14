@@ -217,12 +217,21 @@ const MANUAL: &[(usize, Option<usize>, &str, &str, &str)] = &[
         "mouse cursor movement",
     ),
     (
-        6,
+        7,
         None,
-        "Interface",
         "Overview",
-        "window previews fade transitions",
+        "Overview",
+        "window previews fade transitions grid mission control",
     ),
+    (
+        8,
+        None,
+        "Window Borders",
+        "Window Borders",
+        "border outline ring glow focus jankyborders",
+    ),
+    (8, None, "Window Borders", "Focused color", "active border colour"),
+    (8, None, "Window Borders", "Unfocused color", "inactive border colour"),
     (
         6,
         None,
@@ -230,38 +239,38 @@ const MANUAL: &[(usize, Option<usize>, &str, &str, &str)] = &[
         "Stack Line",
         "stackline indicator color position thickness interaction",
     ),
-    (7, None, "Advanced", "Startup commands", "launch run shell exec"),
+    (9, None, "Advanced", "Startup commands", "launch run shell exec"),
     (
-        7,
+        9,
         None,
         "Advanced",
         "Autofocus blacklist",
         "focus exclude ignore app",
     ),
     (
-        7,
+        9,
         None,
         "Advanced",
         "Reload config when edited externally",
         "configuration file automatic reload toml",
     ),
     (
-        7,
+        9,
         None,
         "Advanced",
         "Configuration file",
         "open config path toml reload",
     ),
     (
-        8,
+        10,
         None,
         "About",
         "Check for Updates…",
         "version latest release update",
     ),
-    (8, None, "About", "Documentation", "docs help guide manual"),
-    (8, None, "About", "Release Notes", "changelog version changes"),
-    (8, None, "About", "Sponsor Rift", "donate support sponsorship"),
+    (10, None, "About", "Documentation", "docs help guide manual"),
+    (10, None, "About", "Release Notes", "changelog version changes"),
+    (10, None, "About", "Sponsor Rift", "donate support sponsorship"),
 ];
 
 // Schema registration supplies navigation context, not duplicate field lists.
@@ -291,7 +300,7 @@ fn catalog() -> &'static [Entry] {
         }
         let mut out = Vec::new();
         append::<Settings>(&mut out, "general", 0, None, "General › Window behavior");
-        append::<Settings>(&mut out, "advanced", 7, None, "Advanced");
+        append::<Settings>(&mut out, "advanced", 9, None, "Advanced");
         append::<Settings>(&mut out, "pointer", 5, None, "Mouse & Trackpad › Focus");
         append::<VirtualWorkspaceSettings>(&mut out, "", 2, None, "Workspaces");
         append::<GestureSettings>(&mut out, "main", 5, None, "Mouse & Trackpad › Workspace swipes");
@@ -311,7 +320,8 @@ fn catalog() -> &'static [Entry] {
         );
         append::<DragDropSettings>(&mut out, "", 5, None, "Mouse & Trackpad › Drag & Drop");
         append::<MenuBarSettings>(&mut out, "", 6, None, "Interface › Menu Bar");
-        append::<MissionControlSettings>(&mut out, "", 6, None, "Interface › Overview");
+        append::<MissionControlSettings>(&mut out, "", 7, None, "Overview");
+        append::<BorderSettings>(&mut out, "", 8, None, "Window Borders");
         append::<StackLineSettings>(&mut out, "", 6, None, "Interface › Stack Line");
         append::<LayoutSettings>(&mut out, "", 1, Some(0), "Layouts › Default behavior");
         for (scope, (title, _)) in LAYOUT_PAGES[..7].iter().enumerate() {

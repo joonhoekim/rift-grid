@@ -603,11 +603,11 @@ pub struct BorderSettings {
     pub radius: f64,
     #[serde(default = "default_border_active_color")]
     /// The focused window's border, as 0xAARRGGBB or #RRGGBB[AA].
-    #[setting(label = "Focused color", enabled_by = "enabled", aliases = "active colour")]
+    #[setting(label = "Focused color", custom, aliases = "active colour")]
     pub active_color: String,
     #[serde(default = "default_border_inactive_color")]
     /// The other windows' borders, as 0xAARRGGBB or #RRGGBB[AA]. Empty draws none.
-    #[setting(label = "Unfocused color", enabled_by = "enabled", aliases = "inactive colour")]
+    #[setting(label = "Unfocused color", custom, aliases = "inactive colour")]
     pub inactive_color: String,
     #[serde(default = "yes")]
     /// A soft glow around the focused window's border.
@@ -619,7 +619,7 @@ pub struct BorderSettings {
     pub glow_radius: f64,
 }
 
-fn default_border_width() -> f64 { 5.0 }
+fn default_border_width() -> f64 { 2.0 }
 // macOS 26's plain windows; windows with a toolbar round more.
 fn default_border_radius() -> f64 { 16.0 }
 fn default_border_glow_radius() -> f64 { 12.0 }

@@ -37,7 +37,7 @@ pub struct Request {
 }
 
 /// Sidebar categories; a category's index is its page id.
-pub(super) const CATEGORIES: [(&str, &str); 9] = [
+pub(super) const CATEGORIES: [(&str, &str); 11] = [
     ("General", "gearshape"),
     ("Layouts", "rectangle.split.2x2"),
     ("Workspaces", "square.grid.2x2"),
@@ -45,6 +45,8 @@ pub(super) const CATEGORIES: [(&str, &str); 9] = [
     ("Keyboard", "keyboard"),
     ("Mouse & Trackpad", "computermouse"),
     ("Interface", "macwindow"),
+    ("Overview", "square.grid.3x3"),
+    ("Window Borders", "square.dashed"),
     ("Advanced", "slider.horizontal.3"),
     ("About", "info.circle"),
 ];
