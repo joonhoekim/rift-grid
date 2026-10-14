@@ -199,6 +199,16 @@ fn deserialize_workspace_order<'de, D: serde::Deserializer<'de>>(
     Ok(spaces)
 }
 
+pub(crate) fn grid_dir(dir: Direction) -> subline_grid::Dir {
+    match dir {
+        Direction::Left => subline_grid::Dir::Left,
+        Direction::Right => subline_grid::Dir::Right,
+        Direction::Up => subline_grid::Dir::Up,
+        Direction::Down => subline_grid::Dir::Down,
+    }
+}
+
+/// `count` workspaces read row by row into `columns` columns; the last row may be short.
 pub(crate) fn grid_neighbor_index(
     index: usize,
     count: usize,
@@ -208,14 +218,9 @@ pub(crate) fn grid_neighbor_index(
     if columns == 0 || index >= count {
         return None;
     }
-    let (row, column) = (index / columns, index % columns);
-    let target = match dir {
-        Direction::Left => (column > 0).then(|| index - 1)?,
-        Direction::Right => (column + 1 < columns).then(|| index + 1)?,
-        Direction::Up => (row > 0).then(|| index - columns)?,
-        Direction::Down => index + columns,
-    };
-    (target < count).then_some(target)
+    subline_grid::Grid::new(count.div_ceil(columns), columns)
+        .towards(index, grid_dir(dir))
+        .filter(|&target| target < count)
 }
 
 impl std::ops::Index<VirtualWorkspaceId> for WorkspaceStore {

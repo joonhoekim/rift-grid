@@ -1,0 +1,3 @@
+# subline is a private repository: fetch it with git so its credential helper applies.
+[net]
+git-fetch-with-cli = true
