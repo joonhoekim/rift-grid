@@ -1,0 +1,38 @@
+#!/bin/sh -e
+#
+# Run every test and keep each one's result, so that a macOS update can be
+# checked by what changed rather than by what fails: a few upstream tests read
+# the live WindowServer and fail on some machines whatever the code.
+#
+#   tools/test-baseline
+#
+# Results go to ~/.local/state/rift-grid/tests-macos-VERSION-COMMIT.txt, one
+# "ok|FAILED name" a line, with the full output beside it. When a run from
+# another macOS version is there, the tests whose result changed are listed.
+
+here="$(cd "$(dirname "$0")" && pwd)"
+state="$HOME/.local/state/rift-grid"
+mkdir -p "$state"
+version="$(sw_vers -productVersion)"
+commit="$(git -C "$here" rev-parse --short HEAD)"
+out="$state/tests-macos-$version-$commit"
+cd "$here/.."
+cargo test --workspace --no-fail-fast 2>&1 | tee "$out.log" \
+	| sed -n -E 's/^test (.*) \.\.\. (ok|FAILED|ignored).*/\2 \1/p' | sort -k2 > "$out.txt"
+if cargo test --test settings_native -- --ignored --verify >> "$out.log" 2>&1; then
+	echo "ok settings_native::verify" >> "$out.txt"
+else
+	echo "FAILED settings_native::verify" >> "$out.txt"
+fi
+awk '{ n[$1]++ } END { for (s in n) printf "%s %d\n", s, n[s] }' "$out.txt"
+echo "saved $out.txt"
+
+previous="$(ls -t "$state"/tests-macos-*.txt 2>/dev/null | grep -v "tests-macos-$version-" | head -1)"
+if [ -n "$previous" ]; then
+	echo "compared with $(basename "$previous"):"
+	if diff "$previous" "$out.txt" >/dev/null; then
+		echo "  no change"
+	else
+		diff "$previous" "$out.txt" | sed -n 's/^</  was/p; s/^>/  now/p'
+	fi
+fi

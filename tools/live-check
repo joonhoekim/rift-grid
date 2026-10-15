@@ -1,0 +1,49 @@
+#!/bin/sh -e
+#
+# Check the running rift against the macOS it runs on, and compare with the
+# last run on another macOS version. Unit tests cover the logic; this covers
+# what a macOS update can break: the event tap, border windows ordered above
+# their window, the overlays of the Overview and of moves between cells, and
+# windows moved off screen and back.
+#
+#   tools/live-check                 on the display rift has active
+#   tools/live-check DISPLAY-UUID    on that display (rift-cli query displays)
+#
+# It switches that display to two empty cells side by side, opens two test
+# windows there, moves to the neighbor and back, opens and closes the Overview,
+# and returns to the cell it was on. It takes about 15 seconds; keep hands off
+# the mouse and keyboard meanwhile. It needs Xcode's command line tools (swiftc),
+# and the terminal it runs in needs Screen Recording access to see window
+# frames and layers.
+#
+# Results go to ~/.local/state/rift-grid/live-macos-VERSION-COMMIT.txt. When a
+# run from another macOS version is there, the checks whose result changed are
+# listed after the run.
+
+here="$(cd "$(dirname "$0")" && pwd)"
+state="$HOME/.local/state/rift-grid"
+mkdir -p "$state"
+source="$here/live-check.swift"
+binary="$state/live-check-$(shasum "$source" | cut -c1-12)"
+if [ ! -x "$binary" ]; then
+	echo "building $(basename "$binary")"
+	swiftc -O "$source" -o "$binary"
+fi
+
+version="$(sw_vers -productVersion)"
+commit="$(git -C "$here" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+out="$state/live-macos-$version-$commit.txt"
+status=0
+LIVE_CHECK_OUT="$out" "$binary" check "$@" || status=$?
+echo "saved $out"
+
+previous="$(ls -t "$state"/live-macos-*.txt 2>/dev/null | grep -v "live-macos-$version-" | head -1)"
+if [ -n "$previous" ]; then
+	echo "compared with $(basename "$previous"):"
+	if diff "$previous" "$out" >/dev/null; then
+		echo "  no change"
+	else
+		diff "$previous" "$out" | sed -n 's/^</  was/p; s/^>/  now/p'
+	fi
+fi
+exit "$status"

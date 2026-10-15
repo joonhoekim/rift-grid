@@ -53,6 +53,24 @@ settings window; `--lib` does not build it.
 One test, `empty_active_space_membership_during_wake_race_does_not_blank_known_active_windows`,
 fails on upstream too.
 
+## After a macOS update
+
+Unit tests cover logic and hardly touch macOS, so an update is checked in two
+steps, each compared with the last run on the previous macOS version:
+
+    tools/test-baseline    every test's result; lists the ones that changed
+    tools/live-check       the running rift: event tap, border windows and their
+                           order, windows moved off screen and back, the move
+                           slide and grid map, the Overview's windows
+
+Run both before updating to record the baseline, and again after. Results are
+kept in `~/.local/state/rift-grid/`. A few upstream tests read the live
+WindowServer and fail on some machines whatever the code; comparing results
+rather than counting failures leaves them out. `live-check` takes over a
+display for about 15 seconds (two empty cells side by side, two test windows);
+keep hands off meanwhile. If something it checks changed, the facts below are
+where to look first.
+
 ## macOS facts the borders depend on
 
 Found by experiment on macOS 26/27; recheck when macOS changes:
