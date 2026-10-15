@@ -27,6 +27,7 @@ source="$here/live-check.swift"
 binary="$state/live-check-$(shasum "$source" | cut -c1-12)"
 if [ ! -x "$binary" ]; then
 	echo "building $(basename "$binary")"
+	rm -f "$state"/live-check-*
 	swiftc -O "$source" -o "$binary"
 fi
 
