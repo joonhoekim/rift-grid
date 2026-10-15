@@ -1,15 +1,14 @@
 # rift-grid
 
 A fork of [rift](https://github.com/acsandmann/rift) that lays the virtual
-workspaces out as a grid, as [subline](https://github.com/joonhoekim/subline)
-does on Linux, and draws window borders in place of JankyBorders. Branch
+workspaces out as a grid and draws window borders in place of JankyBorders. Branch
 `grid`; `main` mirrors upstream.
 
 ## What the fork adds
 
 | Feature | Where | Settings |
 | --- | --- | --- |
-| Grids of cells (see [docs/grids.md](docs/grids.md)): `switch_to_grid`, `move_window_to_grid`, `grid_focus`, `grid_move`, `grid_cell`, `grid_center`, `focus_recent_window`, app rules' `grid` | `layout_engine/engine/grid.rs`, `model/virtual_workspace/grid.rs`; topology from subline's `subline-grid` | `[virtual_workspaces] grid_columns` |
+| Grids of cells (see [docs/grids.md](docs/grids.md)): `switch_to_grid`, `move_window_to_grid`, `grid_focus`, `grid_move`, `grid_cell`, `grid_center`, `focus_recent_window`, app rules' `grid` | `layout_engine/engine/grid.rs`, `model/virtual_workspace/grid.rs`; topology in `common/grid_nav.rs` | `[virtual_workspaces] grid_columns` |
 | Grid overview: two stages, follows the real focus, live previews, labels in the gaps | `ui/mission_control/grid.rs` | `[settings.ui.mission_control] grid_*`, `live_preview_interval_ms` |
 | Menu bar 3x3 maps, one per grid in use | `ui/menu_bar/grid_map.rs` | `[settings.ui.menu_bar] grid_maps` |
 | Window borders: sliding focused border, glow, hidden under the windows above | `ui/borders.rs`, `actor/reactor/borders.rs` | `[settings.ui.borders]`, `common/config/borders.rs` |
@@ -32,12 +31,7 @@ The second compiles the settings app's sources on their own and opens a hidden
 settings window; `--lib` does not build it.
 
 One test, `empty_active_space_membership_during_wake_race_does_not_blank_known_active_windows`,
-fails on upstream too. Install with `apps/rift-grid` in nixos-config, which
-builds, signs with the machine's local identity and restarts rift.
-
-subline's crates are a private git dependency pinned by `rev` in `Cargo.toml`;
-cargo fetches them with the git CLI (`.cargo/config.toml`), so `gh auth` must be
-set up. Move the `rev` forward to take subline's changes.
+fails on upstream too.
 
 ## macOS facts the borders depend on
 

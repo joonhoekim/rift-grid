@@ -1,8 +1,9 @@
 //! Workspaces as a grid of cells, read row by row from the top left. Where a
-//! direction leads comes from subline-grid.
+//! direction leads comes from `common::grid_nav`.
 
 use super::{Direction, SpaceId, VirtualWorkspaceId, WorkspaceStore};
 use crate::common::config::VirtualWorkspaceSettings;
+use crate::common::grid_nav;
 
 /// Grids per display, one per number key.
 pub const GRID_COUNT: usize = 9;
@@ -16,12 +17,12 @@ pub(super) fn workspace_count(config: &VirtualWorkspaceSettings) -> usize {
     }
 }
 
-pub(crate) fn grid_dir(dir: Direction) -> subline_grid::Dir {
+pub(crate) fn grid_dir(dir: Direction) -> grid_nav::Dir {
     match dir {
-        Direction::Left => subline_grid::Dir::Left,
-        Direction::Right => subline_grid::Dir::Right,
-        Direction::Up => subline_grid::Dir::Up,
-        Direction::Down => subline_grid::Dir::Down,
+        Direction::Left => grid_nav::Dir::Left,
+        Direction::Right => grid_nav::Dir::Right,
+        Direction::Up => grid_nav::Dir::Up,
+        Direction::Down => grid_nav::Dir::Down,
     }
 }
 
@@ -35,7 +36,7 @@ pub(crate) fn grid_neighbor_index(
     if columns == 0 || index >= count {
         return None;
     }
-    subline_grid::Grid::new(count.div_ceil(columns), columns)
+    grid_nav::Grid::new(count.div_ceil(columns), columns)
         .towards(index, grid_dir(dir))
         .filter(|&target| target < count)
 }

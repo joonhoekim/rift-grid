@@ -1,11 +1,12 @@
 //! The workspace grid's commands: moving focus and windows between tiles, and
-//! past a cell's edge into the next cell, as subline does. Where a direction
-//! leads comes from subline-grid.
+//! past a cell's edge into the next cell. Where a direction leads comes from
+//! `common::grid_nav`.
 
 use objc2_core_foundation::{CGPoint, CGRect};
 
 use super::{EventResponse, LayoutCommand, LayoutEngine};
 use crate::actor::app::WindowId;
+use crate::common::grid_nav;
 use crate::layout_engine::{Direction, LayoutSystem};
 use crate::model::VirtualWorkspaceId;
 use crate::model::window_store::WindowStore;
@@ -150,7 +151,7 @@ impl LayoutEngine {
         &self,
         space: SpaceId,
         workspace: VirtualWorkspaceId,
-    ) -> Option<(subline_geom::Rect<f64>, Vec<(WindowId, subline_geom::Rect<f64>)>)> {
+    ) -> Option<(grid_nav::Rect, Vec<(WindowId, grid_nav::Rect)>)> {
         let size = self.workspaces[workspace].layout_state.active_size()?;
         let layout = self.workspaces.active_layout(space, workspace)?;
         let tiles = self.workspaces[workspace].layout_system.calculate_layout(
@@ -162,10 +163,10 @@ impl LayoutEngine {
             crate::common::config::StackLineReserve::default(),
         );
         let rect = |f: CGRect| {
-            subline_geom::Rect::new(f.origin.x, f.origin.y, f.size.width, f.size.height)
+            grid_nav::Rect::new(f.origin.x, f.origin.y, f.size.width, f.size.height)
         };
         Some((
-            subline_geom::Rect::new(0.0, 0.0, size.width, size.height),
+            grid_nav::Rect::new(0.0, 0.0, size.width, size.height),
             tiles.into_iter().map(|(wid, frame)| (wid, rect(frame))).collect(),
         ))
     }
@@ -188,7 +189,7 @@ impl LayoutEngine {
             && let Some(from) = tiles.iter().position(|(wid, _)| *wid == focused)
         {
             let rects: Vec<_> = tiles.iter().map(|(_, r)| *r).collect();
-            if let Some(next) = subline_grid::neighbor(&rects, from, dir) {
+            if let Some(next) = grid_nav::neighbor(&rects, from, dir) {
                 let next = tiles[next].0;
                 let response = EventResponse {
                     changed: true,
@@ -216,7 +217,7 @@ impl LayoutEngine {
             } else {
                 area.w / 2.0
             });
-            let wid = tiles[subline_grid::entered(&rects, area, dir, along)?].0;
+            let wid = tiles[grid_nav::entered(&rects, area, dir, along)?].0;
             (window_store.workspace_for_window(space, wid) == Some(target)).then_some(wid)
         });
         let response = self.activate_workspace(window_store, space, target, entry);

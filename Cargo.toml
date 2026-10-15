@@ -198,9 +198,6 @@ rustc-hash = "2.1.1"
 rift-client = { path = "crates/rift-client" }
 rift-protocol = { path = "crates/rift-protocol" }
 multitouch = "0.3.2"
-# subline's workspace grid: where a direction leads between cells and tiles.
-subline-grid = { git = "https://github.com/joonhoekim/subline.git", rev = "553ee9050e872e0a6774b631d7fb1b4e7caf8946" }
-subline-geom = { git = "https://github.com/joonhoekim/subline.git", rev = "553ee9050e872e0a6774b631d7fb1b4e7caf8946" }
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"

@@ -64,7 +64,7 @@ pub(super) fn shown(
         || (settings.grid_maps == GridMaps::All && in_use(display, workspace.grid))
 }
 
-/// The number before a cell's map: every map's, as on subline's strip, or a lone
+/// The number before a cell's map: every map's, or a lone
 /// map's when other grids are in use and it would not be clear which grid is on
 /// screen.
 pub(super) fn label(

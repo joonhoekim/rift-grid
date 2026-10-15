@@ -1328,8 +1328,6 @@ dependencies = [
  "static_assertions",
  "strum",
  "strum_macros",
- "subline-geom",
- "subline-grid",
  "tempfile",
  "test-log",
  "test_bin",
@@ -1588,19 +1586,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "subline-geom"
-version = "0.1.0"
-source = "git+https://github.com/joonhoekim/subline.git?rev=553ee9050e872e0a6774b631d7fb1b4e7caf8946#553ee9050e872e0a6774b631d7fb1b4e7caf8946"
-
-[[package]]
-name = "subline-grid"
-version = "0.1.0"
-source = "git+https://github.com/joonhoekim/subline.git?rev=553ee9050e872e0a6774b631d7fb1b4e7caf8946#553ee9050e872e0a6774b631d7fb1b4e7caf8946"
-dependencies = [
- "subline-geom",
 ]
 
 [[package]]

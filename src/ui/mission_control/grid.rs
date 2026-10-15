@@ -1,6 +1,6 @@
 //! The grid overview: every workspace a cell at its row and column, in two stages
-//! (the active cell and its neighbours, then the whole grid) as in subline, and
-//! following the real focus.
+//! (the active cell and its neighbours, then the whole grid), following the real
+//! focus.
 
 use super::*;
 use crate::common::config::GridFollow;

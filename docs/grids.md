@@ -1,6 +1,6 @@
 # Grids of cells
 
-Workspaces come in two levels, as in subline: a **grid** is a context (one
+Workspaces come in two levels: a **grid** is a context (one
 project, one kind of work), and a **cell** of the grid is what a display shows.
 Most work fits in one 3x3 grid; more grids keep separate contexts apart.
 
@@ -20,14 +20,11 @@ display gets 9 grids x 9 cells = 81 workspaces; grid g (1-based) is workspaces
 `9(g-1) .. 9(g-1)+8`, read row by row from the top left. Grids are per display:
 each display has its own grid 1 to 9.
 
-subline goes further (each grid belongs to one display, Mod+N goes to the display
-that has grid N, grids move between displays from the overview). That can be
-layered on later as a table of which display owns which grid; with one display
-the two are the same.
+A later step could give each grid to one display instead (Alt+N goes to the
+display that has grid N, grids move between displays from the overview), as a
+table of which display owns which grid; with one display the two are the same.
 
 ## Moving
-
-The seed config follows subline's ijkl preset, with Alt as Mod.
 
 | Key (seed config) | Command | What it does |
 | --- | --- | --- |
@@ -53,8 +50,7 @@ name), and `grid` wins when both are given.
 `[settings.ui.menu_bar] grid_maps`:
 
 - `"all"` (default): a 3x3 map per grid, side by side, each after its number,
-  for the grids that have windows plus the grid on screen, as on subline's
-  strip. The grid on screen, number and map, is drawn at full strength.
+  for the grids that have windows plus the grid on screen. The grid on screen, number and map, is drawn at full strength.
 - `"active"`: one map, the grid on screen, after its number when more than one
   grid has windows.
 
@@ -72,13 +68,12 @@ grid and the overview stays open on it. The last button, "+", is the first grid
 not in use yet. Dropping a window's tile on a button sends the window to that
 grid's current cell, as Alt+Ctrl+N does; the overview stays where it is.
 
-Stages, as in subline: the overview opens on the active cell at `grid_zoom` with
+Stages: the overview opens on the active cell at `grid_zoom` with
 its neighbours around it; opening it again shows the whole grid, and a third time
 closes it. Esc steps back out a stage at a time: from the whole grid to the cell
 stage, from there out of the overview. `grid_fit = true` makes the whole grid the
 only stage.
 
 When the active cell changes in the first stage, the camera moves as
-`[settings.ui.mission_control] grid_follow` says: `"reveal"` (default, subline's
-default too) moves only as far as it takes to show the active cell whole, a gap
+`[settings.ui.mission_control] grid_follow` says: `"reveal"` (default) moves only as far as it takes to show the active cell whole, a gap
 from the edges; `"center"` centres the active cell every time.
