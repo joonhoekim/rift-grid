@@ -28,6 +28,11 @@ impl MainWindowTracker {
                     frontmost_is_quiet: Quiet::No,
                     main_window,
                 });
+                // On a cold start no activation has been seen yet; the app that is
+                // frontmost as rift finds it stands in until one is.
+                if is_frontmost && self.global_frontmost.is_none() {
+                    self.global_frontmost = Some(pid);
+                }
                 (pid, Quiet::No)
             }
             &Event::ApplicationThreadTerminated(pid) => {
@@ -131,6 +136,28 @@ mod tests {
     use super::super::{Event, Quiet, Reactor, SpaceId, WindowId};
     use super::{AppState, MainWindowTracker};
     use crate::layout_engine::LayoutEngine;
+
+    #[test]
+    fn the_frontmost_app_found_at_a_cold_start_has_the_focus() {
+        let window = WindowId::new(9, 1);
+        let mut tracker = MainWindowTracker::default();
+        let (tx, _rx) = crate::actor::channel();
+        let launched = |pid, is_frontmost, main_window| Event::ApplicationLaunched {
+            pid,
+            info: crate::sys::app::AppInfo { bundle_id: None, localized_name: None },
+            handle: crate::actor::app::AppThreadHandle::new_for_test(tx.clone()),
+            is_frontmost,
+            main_window,
+            visible_windows: Vec::new(),
+            window_server_info: Vec::new(),
+        };
+        assert_eq!(tracker.handle_event(&launched(8, false, Some(WindowId::new(8, 1)))), None);
+        assert_eq!(tracker.handle_event(&launched(9, true, Some(window))), Some(window));
+        assert_eq!(tracker.main_window(), Some(window));
+        // An activation seen since wins over what was found at start.
+        let _ = tracker.handle_event(&Event::ApplicationGloballyActivated(8));
+        assert_eq!(tracker.main_window(), Some(WindowId::new(8, 1)));
+    }
 
     #[test]
     fn window_server_focus_supersedes_ax_focus_events() {
