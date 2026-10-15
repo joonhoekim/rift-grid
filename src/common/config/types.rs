@@ -1082,6 +1082,15 @@ pub struct MissionControlSettings {
         aliases = "grid overview cell size first stage"
     )]
     pub grid_zoom: f64,
+    #[serde(default)]
+    /// How the first stage of a grid Overview moves when the active cell changes.
+    #[setting(
+        label = "Grid camera",
+        choices,
+        enabled_by = "enabled",
+        aliases = "grid overview follow focus reveal centre center"
+    )]
+    pub grid_follow: super::GridFollow,
 }
 
 fn default_mission_control_fade_duration_ms() -> f64 { 180.0 }
@@ -1105,6 +1114,7 @@ impl Default for MissionControlSettings {
             grid_labels: true,
             grid_fit: false,
             grid_zoom: default_mission_control_grid_zoom(),
+            grid_follow: super::GridFollow::default(),
         }
     }
 }

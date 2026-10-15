@@ -16,3 +16,16 @@ pub enum GridMaps {
     #[setting(label = "The grid on screen")]
     Active,
 }
+
+/// How a grid Overview's first stage moves when the active cell changes.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy, Default, ConfigEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum GridFollow {
+    /// Only as far as it takes to show the active cell whole.
+    #[default]
+    #[setting(label = "Just enough to show it")]
+    Reveal,
+    /// Centre the active cell every time.
+    #[setting(label = "Centre it")]
+    Center,
+}

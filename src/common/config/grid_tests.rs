@@ -53,6 +53,14 @@ fn grid_settings_are_in_the_settings_app() {
         let field = MissionControlSettings::field(key).unwrap();
         assert!(matches!(field.kind, FieldKind::Bool), "{key}");
     }
+    let follow = MissionControlSettings::field("grid_follow").unwrap();
+    let FieldKind::Choice(choices) = follow.kind else {
+        panic!("grid_follow is a choice")
+    };
+    assert_eq!(choices.len(), 2);
+    let parsed: MissionControlSettings = toml::from_str("grid_follow = \"center\"").unwrap();
+    assert_eq!(parsed.grid_follow, crate::common::config::GridFollow::Center);
+    assert_eq!(MissionControlSettings::default().grid_follow, Default::default());
     let mut settings = MissionControlSettings::default();
     let write = MissionControlSettings::field("grid_gap").unwrap().write.unwrap();
     write(&mut settings, FieldValue::Number(0.06)).unwrap();

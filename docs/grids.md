@@ -64,3 +64,14 @@ moves, windows that open or close, and grids that are switched to or filled. A r
 the grids that have windows plus the one on screen, which is highlighted.
 Clicking a button, or pressing Alt+N while the overview is open, switches to that
 grid and the overview stays open on it.
+
+Stages, as in subline: the overview opens on the active cell at `grid_zoom` with
+its neighbours around it; opening it again shows the whole grid, and a third time
+closes it. Esc steps back out a stage at a time: from the whole grid to the cell
+stage, from there out of the overview. `grid_fit = true` makes the whole grid the
+only stage.
+
+When the active cell changes in the first stage, the camera moves as
+`[settings.ui.mission_control] grid_follow` says: `"reveal"` (default, subline's
+default too) moves only as far as it takes to show the active cell whole, a gap
+from the edges; `"center"` centres the active cell every time.

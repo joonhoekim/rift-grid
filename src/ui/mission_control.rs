@@ -479,6 +479,8 @@ struct DisplayOverview {
     icons: HashMap<i32, Option<Retained<CGImage>>>,
     look: GridLook,
     grid_row: Option<(Retained<CALayer>, Vec<GridButton>)>,
+    /// Where a grid overview's first stage looks, in cells; none until it opens.
+    camera: std::cell::Cell<Option<(f64, f64)>>,
     animate: bool,
     root: Retained<CALayer>,
     // Field order matters: unbind the surface before releasing its CGS window.
@@ -983,6 +985,7 @@ impl OverviewSession {
                 icons: HashMap::default(),
                 look: GridLook::new(settings),
                 grid_row: None,
+                camera: Default::default(),
                 animate: false,
                 root,
                 _surface: surface,

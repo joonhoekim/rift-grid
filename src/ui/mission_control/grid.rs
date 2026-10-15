@@ -3,6 +3,7 @@
 //! following the real focus.
 
 use super::*;
+use crate::common::config::GridFollow;
 
 // The app and title row above a grid tile, drawn in the gap between cells.
 pub(super) const LABEL_ROW: f64 = 22.0;
@@ -129,6 +130,9 @@ pub(super) struct GridLook {
     /// A cell's size in the first stage, as a fraction of the display.
     zoom: f64,
     stage: GridStage,
+    /// The whole grid is the only stage.
+    fit: bool,
+    follow: GridFollow,
 }
 
 impl GridLook {
@@ -142,6 +146,8 @@ impl GridLook {
             } else {
                 GridStage::Cell
             },
+            fit: settings.grid_fit,
+            follow: settings.grid_follow,
         }
     }
 
@@ -154,8 +160,9 @@ impl GridLook {
 }
 
 /// The frame of one grid cell. Cells keep the display's aspect ratio and lie `gap`
-/// apart. In the first stage a cell is `zoom` of the display and the active cell is
-/// centered; the whole grid is fitted and centered, never larger than `zoom`.
+/// apart. In the first stage a cell is `zoom` of the display and the camera, a
+/// point in cells, is at the centre; the whole grid is fitted and centered, never
+/// larger than `zoom`.
 pub(super) fn grid_cell_frame(
     overview: CGSize,
     display: CGSize,
@@ -163,7 +170,7 @@ pub(super) fn grid_cell_frame(
     (row, column): (usize, usize),
     gap: f64,
     look: GridLook,
-    (active_row, active_column): (usize, usize),
+    (camera_row, camera_column): (f64, f64),
 ) -> CGRect {
     let (rows_f, columns_f) = (rows as f64, columns as f64);
     let aspect = display.width / display.height;
@@ -171,10 +178,8 @@ pub(super) fn grid_cell_frame(
     if look.stage == GridStage::Cell {
         let (width, height) = (zoomed, zoomed / aspect);
         return rect(
-            (overview.width - width) / 2.0
-                + (column as f64 - active_column as f64) * (width + gap),
-            (overview.height - height) / 2.0
-                + (row as f64 - active_row as f64) * (height + gap),
+            (overview.width - width) / 2.0 + (column as f64 - camera_column) * (width + gap),
+            (overview.height - height) / 2.0 + (row as f64 - camera_row) * (height + gap),
             width,
             height,
         );
@@ -190,6 +195,46 @@ pub(super) fn grid_cell_frame(
         (overview.height - total_height) / 2.0 + row as f64 * (height + gap),
         width,
         height,
+    )
+}
+
+/// Where the first stage's camera goes when the active cell is `active`: on it when
+/// it centres or has no place yet, otherwise it stays unless the active cell would
+/// not show whole, a margin from the edges, and then moves only that far. A cell
+/// too large to show whole with its margins is centred.
+pub(super) fn follow_camera(
+    camera: Option<(f64, f64)>,
+    (row, column): (usize, usize),
+    overview: CGSize,
+    display: CGSize,
+    look: GridLook,
+) -> (f64, f64) {
+    let active = (row as f64, column as f64);
+    let Some((camera_row, camera_column)) = camera.filter(|_| look.follow == GridFollow::Reveal)
+    else {
+        return active;
+    };
+    let gap = look.gap_px(display);
+    let margin = gap.max(8.0);
+    let width = display.width * look.zoom;
+    let height = width * display.height / display.width;
+    // Along one axis: the camera, the active cell, a cell's size and the view's.
+    let axis = |camera: f64, cell: f64, size: f64, view: f64| {
+        let stride = size + gap;
+        let room = view / 2.0 - size / 2.0 - margin;
+        if room < 0.0 {
+            return cell;
+        }
+        let offset = (cell - camera) * stride;
+        if offset.abs() <= room {
+            camera
+        } else {
+            camera + (offset - room * offset.signum()) / stride
+        }
+    };
+    (
+        axis(camera_row, active.0, height, overview.height),
+        axis(camera_column, active.1, width, overview.width),
     )
 }
 
@@ -243,7 +288,17 @@ fn project_windows(
     (windows, scene)
 }
 
-/// Every cell of the grid at once, each a scaled copy of the display.
+/// The active cell, or the middle one when no cell is active.
+fn active_cell(workspaces: &[RuntimeWorkspaceData], shape: (usize, usize)) -> (usize, usize) {
+    workspaces
+        .iter()
+        .find(|ws| ws.is_active)
+        .and_then(|ws| ws.grid_cell)
+        .unwrap_or((shape.0 / 2, shape.1 / 2))
+}
+
+/// Every cell of the grid at once, each a scaled copy of the display, with the
+/// camera on the active cell.
 pub(super) fn project_grid(
     display: CGRect,
     overview: CGSize,
@@ -251,21 +306,29 @@ pub(super) fn project_grid(
     shape: (usize, usize),
     look: GridLook,
 ) -> Vec<WorkspaceProjection> {
+    let (row, column) = active_cell(workspaces, shape);
+    project_grid_at(display, overview, workspaces, shape, look, (row as f64, column as f64))
+}
+
+/// Every cell of the grid at once, the first stage's camera at `camera`.
+pub(super) fn project_grid_at(
+    display: CGRect,
+    overview: CGSize,
+    workspaces: &[RuntimeWorkspaceData],
+    shape: (usize, usize),
+    look: GridLook,
+    camera: (f64, f64),
+) -> Vec<WorkspaceProjection> {
     if display.size.height <= 0.0 || display.size.width <= 0.0 {
         return Vec::new();
     }
     let gap = look.gap_px(display.size);
-    let active = workspaces
-        .iter()
-        .find(|ws| ws.is_active)
-        .and_then(|ws| ws.grid_cell)
-        .unwrap_or((shape.0 / 2, shape.1 / 2));
     workspaces
         .iter()
         .enumerate()
         .filter_map(|(source, ws)| {
             let frame =
-                grid_cell_frame(overview, display.size, shape, ws.grid_cell?, gap, look, active);
+                grid_cell_frame(overview, display.size, shape, ws.grid_cell?, gap, look, camera);
             let scale = frame.size.width / display.size.width;
             let (windows, scene) = project_windows(ws, display, frame, scale, 0.0);
             Some(WorkspaceProjection {
@@ -382,13 +445,24 @@ impl DisplayOverview {
 
     pub(super) fn project(&self) -> Vec<WorkspaceProjection> {
         match self.grid() {
-            Some(shape) => project_grid(
-                self.info.frame,
-                self.bounds.size,
-                &self.workspaces,
-                shape,
-                self.look,
-            ),
+            Some(shape) => {
+                let camera = follow_camera(
+                    self.camera.get(),
+                    active_cell(&self.workspaces, shape),
+                    self.bounds.size,
+                    self.info.frame.size,
+                    self.look,
+                );
+                self.camera.set(Some(camera));
+                project_grid_at(
+                    self.info.frame,
+                    self.bounds.size,
+                    &self.workspaces,
+                    shape,
+                    self.look,
+                    camera,
+                )
+            }
             None => project(
                 self.info.frame,
                 self.bounds.size,
@@ -493,6 +567,29 @@ impl OverviewSession {
         true
     }
 
+    /// Esc: step a grid overview in from the whole grid to the active cell. False
+    /// when it is already there, or the whole grid is its only stage, and Esc
+    /// closes it.
+    pub(crate) fn step_in(&mut self, cache: Option<&PreviewCache>) -> bool {
+        let whole = |d: &DisplayOverview| {
+            d.grid().is_some() && d.look.stage == GridStage::Whole && !d.look.fit
+        };
+        if !self.displays.iter().any(whole) {
+            return false;
+        }
+        let _transaction = LayerTransaction::disabled().flush_on_commit();
+        for d in self.displays.iter_mut().filter(|d| whole(d)) {
+            d.look.stage = GridStage::Cell;
+            d.camera.set(None);
+            d.animate = true;
+            d.rebuild(cache);
+        }
+        self.highlight(None);
+        self.sync_images(cache);
+        self.request_previews(cache);
+        true
+    }
+
     /// Capture the visible windows again. Cards keep their current image until
     /// the new one arrives.
     pub(crate) fn recapture(&mut self, cache: Option<&PreviewCache>) {
@@ -577,7 +674,14 @@ mod tests {
         filter_workspaces(&mut filtered, false);
         assert_eq!(filtered.len(), 9, "empty cells keep their place");
 
-        let look = GridLook { gap: 0.04, labels: true, zoom: 0.99, stage: GridStage::Whole };
+        let look = GridLook {
+            gap: 0.04,
+            labels: true,
+            zoom: 0.99,
+            stage: GridStage::Whole,
+            fit: false,
+            follow: GridFollow::Center,
+        };
         let gap = look.gap_px(display.size);
         assert_eq!(gap, 40.0, "a fraction of the shorter side");
         let projection = project_grid(display, overview, &workspaces, (3, 3), look);
@@ -673,6 +777,40 @@ mod tests {
     }
 
     #[test]
+    fn reveal_moves_the_camera_only_to_show_the_active_cell() {
+        let display = CGSize::new(1600.0, 1000.0);
+        let look = GridLook {
+            gap: 0.04,
+            labels: true,
+            zoom: 0.5,
+            stage: GridStage::Cell,
+            fit: false,
+            follow: GridFollow::Reveal,
+        };
+        let camera = |camera, active| follow_camera(camera, active, display, display, look);
+        // Opening: on the active cell.
+        assert_eq!(camera(None, (1, 1)), (1.0, 1.0));
+        // A cell is 800x500 with a 40 gap; the view has room for a neighbour's
+        // whole cell only if it fits within 1600/2 - 400 - 40 = 360 of the centre.
+        // The next cell is 840 away: the camera moves 480 of 840.
+        let (row, column) = camera(Some((1.0, 1.0)), (1, 2));
+        assert_eq!(row, 1.0);
+        assert!((column - (1.0 + 480.0 / 840.0)).abs() < 1e-9);
+        // Back to the cell it came from: that cell is now 480 off centre, past the
+        // 360 of room, so the camera moves 120 back, not all the way.
+        let (_, back) = camera(Some((row, column)), (1, 1));
+        assert!((back - (column - 120.0 / 840.0)).abs() < 1e-9);
+        // An active cell already on show leaves the camera where it is.
+        assert_eq!(camera(Some((1.2, 1.3)), (1, 1)), (1.2, 1.3));
+        // Centring puts the camera on the active cell every time.
+        let centre = GridLook { follow: GridFollow::Center, ..look };
+        assert_eq!(follow_camera(Some((1.0, 1.0)), (1, 2), display, display, centre), (1.0, 2.0));
+        // A cell larger than the view with its margins is centred.
+        let big = GridLook { zoom: 0.99, ..look };
+        assert_eq!(follow_camera(Some((1.0, 1.0)), (1, 2), display, display, big), (1.0, 2.0));
+    }
+
+    #[test]
     fn expiring_the_schedule_recaptures_only_settled_windows() {
         let mut schedule = PreviewSchedule::default();
         for id in 1..=3 {
@@ -739,7 +877,14 @@ mod tests {
                 ..workspace(index, Vec::new())
             })
             .collect();
-        let look = GridLook { gap: 0.04, labels: true, zoom: 0.5, stage: GridStage::Cell };
+        let look = GridLook {
+            gap: 0.04,
+            labels: true,
+            zoom: 0.5,
+            stage: GridStage::Cell,
+            fit: false,
+            follow: GridFollow::Center,
+        };
         let frames = |workspaces: &[RuntimeWorkspaceData], look| {
             project_grid(display, overview, workspaces, grid_shape(workspaces).unwrap(), look)
                 .iter()

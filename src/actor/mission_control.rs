@@ -295,7 +295,12 @@ impl MissionControlActor {
                 }
                 self.settings = settings;
             }
-            Event::Input(Input::Dismiss) => self.close(),
+            Event::Input(Input::Dismiss) => {
+                // Esc steps out a stage at a time, as in subline.
+                if !self.session.as_mut().is_some_and(|s| s.step_in(self.cache.as_ref())) {
+                    self.close();
+                }
+            }
             Event::Input(input) => {
                 let action = self
                     .session
