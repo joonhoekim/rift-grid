@@ -141,6 +141,13 @@ fn update_heading(heading: &CATextLayer, data: &RuntimeWorkspaceData) {
     }
 }
 
+/// "Empty workspace" in the middle of a card: a text layer draws its line from
+/// the top, so the frame is one line high.
+fn empty_label_frame(card: CGSize) -> CGRect {
+    const LINE: f64 = 15.0;
+    rect((card.width - 180.0) / 2.0, (card.height - LINE) / 2.0, 180.0, LINE)
+}
+
 fn rect(x: f64, y: f64, w: f64, h: f64) -> CGRect {
     CGRect::new(CGPoint::new(x, y), CGSize::new(w, h))
 }
@@ -713,14 +720,10 @@ impl DisplayOverview {
                     let empty = label(
                         &container,
                         "Empty workspace",
-                        rect(
-                            (ws.frame.size.width - 180.0) / 2.0,
-                            ws.frame.size.height / 2.0 - 10.0,
-                            180.0,
-                            20.0,
-                        ),
+                        empty_label_frame(ws.frame.size),
                         self.scale,
                     );
+                    unsafe { empty.setAlignmentMode(objc2_quartz_core::kCAAlignmentCenter) };
                     empty.setForegroundColor(Some(&color(0.94, 0.94, 0.97, 0.38)));
                     (container, heading, empty, backdrop)
                 };
@@ -729,12 +732,7 @@ impl DisplayOverview {
                 // tiles reach into the gap.
                 container.setMasksToBounds(!ws.cell);
                 empty.setHidden(!data.windows.is_empty());
-                empty.setFrame(rect(
-                    (ws.frame.size.width - 180.0) / 2.0,
-                    ws.frame.size.height / 2.0 - 10.0,
-                    180.0,
-                    20.0,
-                ));
+                empty.setFrame(empty_label_frame(ws.frame.size));
                 backdrop.setFrame(pixel_aligned(workspace_backdrop(ws), self.scale));
                 if let Some((container_was, backdrop_was)) = was.filter(|_| self.animate) {
                     glide(&container, container_was);
