@@ -70,6 +70,7 @@ pub fn handle_command_layout(
             | LayoutCommand::GridCenter
             | LayoutCommand::SwitchToGrid(_)
             | LayoutCommand::MoveWindowToGrid(_)
+            | LayoutCommand::FocusRecentWindow
     );
     let requires_workspace_space = is_grid_command
         || matches!(

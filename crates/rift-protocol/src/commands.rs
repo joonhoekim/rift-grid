@@ -91,6 +91,9 @@ pub enum LayoutCommand {
     SwitchToGrid(usize),
     /// Workspace grid: send the focused window to grid N's (1-based) current cell.
     MoveWindowToGrid(usize),
+    /// Focus the window that had the focus before the current one, in whatever
+    /// cell it is; again goes back.
+    FocusRecentWindow,
     SwapWindows(WindowId, WindowId),
     AdjustMasterRatio(f64),
     AdjustMasterCount {

@@ -185,6 +185,8 @@ pub struct LayoutEngine {
     startup_restore_pending: bool,
     /// Legacy strip commands report boundary excess; workspace arbitration lives here.
     scroll_boundary: Option<((VirtualWorkspaceId, LayoutId, Direction), f64)>,
+    /// Windows by when they last had the focus, for focus_recent_window.
+    recent: grid::RecentWindows,
 }
 
 pub(crate) struct WorkspaceLayoutQuerySnapshot {
@@ -1512,6 +1514,7 @@ impl LayoutEngine {
             floating_positions: FloatingPositionStore::default(),
             app_rules: AppRuleEngine::new(&virtual_workspace_config.app_rules),
             focused_window: None,
+            recent: Default::default(),
             window_layout_constraints: HashMap::default(),
             workspaces,
             layout_settings: layout_settings.clone(),
@@ -1853,6 +1856,7 @@ impl LayoutEngine {
             LayoutEvent::WindowFocused(space, wid) => {
                 if self.floating.is_floating(wid) {
                     self.focused_window = Some(wid);
+                    self.recent.focused(wid);
                     self.floating.set_last_focus(Some(wid));
                 } else if let Some((ws_id, layout)) = self.workspaces.active_layout_for_space(space)
                 {
@@ -1864,6 +1868,7 @@ impl LayoutEngine {
                         return EventResponse::default();
                     }
                     self.focused_window = Some(wid);
+                    self.recent.focused(wid);
                     let selection_changed =
                         self.workspaces[ws_id].layout_system.selected_window(layout) != Some(wid);
                     let _ = self.workspaces[ws_id].layout_system.select_window(layout, wid);
@@ -2315,7 +2320,8 @@ impl LayoutEngine {
             | LayoutCommand::GridCell(_)
             | LayoutCommand::GridCenter
             | LayoutCommand::SwitchToGrid(_)
-            | LayoutCommand::MoveWindowToGrid(_) => EventResponse::default(),
+            | LayoutCommand::MoveWindowToGrid(_)
+            | LayoutCommand::FocusRecentWindow => EventResponse::default(),
             LayoutCommand::JoinWindow(direction) => {
                 self.workspaces[workspace_id].layout_state.last_saved = Some(layout);
                 self.workspaces[workspace_id]
@@ -2753,7 +2759,8 @@ impl LayoutEngine {
             | LayoutCommand::GridCell(_)
             | LayoutCommand::GridCenter
             | LayoutCommand::SwitchToGrid(_)
-            | LayoutCommand::MoveWindowToGrid(_) => {
+            | LayoutCommand::MoveWindowToGrid(_)
+            | LayoutCommand::FocusRecentWindow => {
                 self.handle_grid_command(window_store, space, command)
             }
             LayoutCommand::MoveWindowToWorkspace {

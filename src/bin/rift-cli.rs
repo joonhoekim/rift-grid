@@ -369,6 +369,8 @@ enum LayoutCommands {
     SwitchGrid { grid: usize },
     /// Workspace grid: send the focused window to grid N's (1-9) current cell
     MoveToGrid { grid: usize },
+    /// Focus the window focused before this one, in whatever cell it is; again goes back
+    FocusRecent,
 }
 
 #[derive(Subcommand)]
@@ -1001,6 +1003,9 @@ fn map_layout_command(cmd: LayoutCommands) -> Result<CliCommand, String> {
         }
         LayoutCommands::MoveToGrid { grid } => {
             Ok(CliCommand::Reactor(reactor::Command::Layout(LC::MoveWindowToGrid(grid))))
+        }
+        LayoutCommands::FocusRecent => {
+            Ok(CliCommand::Reactor(reactor::Command::Layout(LC::FocusRecentWindow)))
         }
         LayoutCommands::JoinWindow { direction } => Ok(CliCommand::Reactor(
             reactor::Command::Layout(LC::JoinWindow(direction.into())),

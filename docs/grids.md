@@ -37,7 +37,7 @@ The seed config follows subline's ijkl preset, with Alt as Mod.
 | Alt+Shift+IJKL / arrows | `grid_move` | Swap with the tile beside, or carry the window into the next cell |
 | Alt+Cmd+IJKL | `grid_cell` | Next cell of this grid |
 | Alt+H | `grid_center` | Centre cell of the grid on screen |
-| Alt+Tab | `switch_to_last_workspace` | The previous cell, whichever grid it is in |
+| Alt+Tab | `focus_recent_window` | The window focused before this one, whichever cell or grid it is in; again goes back |
 | Alt+O | `show_mission_control_all` | Overview; again for the whole grid, again to close |
 
 Cells never lead into another grid: moving past the grid's edge stops.

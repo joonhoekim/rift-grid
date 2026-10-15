@@ -11,6 +11,23 @@ use crate::model::VirtualWorkspaceId;
 use crate::model::window_store::WindowStore;
 use crate::sys::screen::SpaceId;
 
+/// Windows by when they last had the focus, the latest first.
+#[derive(Default)]
+pub(super) struct RecentWindows(std::collections::VecDeque<WindowId>);
+
+impl RecentWindows {
+    const KEEP: usize = 64;
+
+    pub(super) fn focused(&mut self, wid: WindowId) {
+        if self.0.front() == Some(&wid) {
+            return;
+        }
+        self.0.retain(|&w| w != wid);
+        self.0.push_front(wid);
+        self.0.truncate(Self::KEEP);
+    }
+}
+
 impl LayoutEngine {
     /// The grid (0-based) shown on `space`.
     pub(crate) fn active_grid(&self, space: SpaceId) -> Option<usize> {
@@ -81,8 +98,31 @@ impl LayoutEngine {
                     },
                 )
             }
+            LayoutCommand::FocusRecentWindow => self.focus_recent_window(window_store),
             _ => EventResponse::default(),
         }
+    }
+
+    /// Focus the window that had the focus before the focused one, showing its
+    /// cell first when it is in another one.
+    fn focus_recent_window(&mut self, window_store: &WindowStore) -> EventResponse {
+        let current = self.focused_window;
+        let target = self.recent.0.iter().copied().filter(|&wid| Some(wid) != current).find_map(
+            |wid| {
+                let assignment = window_store.workspace_info_for_window(wid)?;
+                Some((wid, assignment.space, assignment.workspace_id))
+            },
+        );
+        let Some((wid, target_space, workspace)) = target else {
+            return EventResponse::default();
+        };
+        if self.workspaces.active_workspace(target_space) == Some(workspace) {
+            return EventResponse {
+                focus_window: Some(wid),
+                ..EventResponse::default()
+            };
+        }
+        self.activate_workspace(window_store, target_space, workspace, Some(wid))
     }
 
     fn focused_tile(&self, space: SpaceId) -> Option<WindowId> {
@@ -502,5 +542,25 @@ mod tests {
         let _ = run(&mut engine, &mut store, LayoutCommand::MoveWindowToGrid(1));
         assert_eq!(store.workspace_for_window(space, wid), Some(cell(&mut engine, 5)));
         assert_eq!(active(&engine), Some(cell(&mut engine, 13)), "focus stays in grid 2");
+
+        // The window focused before is reached wherever it is, and back again.
+        let other = WindowId::new(92, 2);
+        let _ = engine.handle_event(
+            &mut store,
+            LayoutEvent::windows_observed(
+                space,
+                other.pid,
+                vec![window_layout_info(other, CGSize::new(0.0, 0.0))],
+                None,
+            ),
+        );
+        let _ = engine.handle_event(&mut store, LayoutEvent::WindowFocused(space, other));
+        let back = run(&mut engine, &mut store, LayoutCommand::FocusRecentWindow);
+        assert_eq!(active(&engine), Some(cell(&mut engine, 5)), "the sent window's cell");
+        assert_eq!(back.focus_window, Some(wid));
+        let _ = engine.handle_event(&mut store, LayoutEvent::WindowFocused(space, wid));
+        let again = run(&mut engine, &mut store, LayoutCommand::FocusRecentWindow);
+        assert_eq!(active(&engine), Some(cell(&mut engine, 13)));
+        assert_eq!(again.focus_window, Some(other));
     }
 }
