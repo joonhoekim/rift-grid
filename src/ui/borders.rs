@@ -1,12 +1,19 @@
-//! Window borders: one click-through WindowServer window per bordered window,
-//! ordered just above it, drawing a ring outside its edge.
+//! Window borders: click-through WindowServer windows around each bordered
+//! window, ordered just above it, drawing a ring outside its edge. A border is
+//! four bands around the window rather than one window over it: a WindowServer
+//! window costs its whole area at the display's scale, and the middle of a
+//! border is empty.
 
 use cgs::{CgsWindow, CgsWindowError, WindowSurface, WindowTransaction, with_disabled_actions};
 use objc2::rc::Retained;
 use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
-use objc2_core_graphics::{CGColor, CGMutablePath};
+use objc2::runtime::AnyObject;
+use objc2_core_graphics::{
+    CGBitmapContextCreate, CGBitmapContextCreateImage, CGColor, CGColorSpace, CGContext,
+    CGImage, CGImageAlphaInfo, CGMutablePath,
+};
 use objc2_quartz_core::{
-    CALayer, CAMediaTimingFunction, CAShapeLayer, CATransaction, kCAFillRuleEvenOdd,
+    CALayer, CAMediaTimingFunction, CAShapeLayer, CATransaction,
 };
 use tracing::warn;
 
@@ -171,6 +178,65 @@ fn corner(rect: CGRect, radius: f64) -> f64 {
     radius.min(rect.size.width / 2.0).min(rect.size.height / 2.0).max(0.0)
 }
 
+/// The glow around a ring as a nine-slice image: corners `corner` points square,
+/// a stretchable point between them. Drawn once rather than by a CoreAnimation
+/// shadow, which renders from what lies in each band's window and so would differ
+/// at the bands' ends.
+fn glow_image(style: &BorderStyle, color: Rgba) -> Option<(CFRetained<CGImage>, f64)> {
+    thread_local! {
+        static CACHE: std::cell::RefCell<Option<(String, CFRetained<CGImage>, f64)>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    let key = format!("{:?}", (color, style.width, style.radius, style.glow_radius));
+    if let Some(hit) = CACHE.with_borrow(|c| {
+        c.as_ref().filter(|(k, ..)| *k == key).map(|(_, image, corner)| (image.clone(), *corner))
+    }) {
+        return Some(hit);
+    }
+    const SCALE: f64 = 2.0;
+    let pad = style.pad();
+    // The corner holds its curve and everything the blur spreads from it, so the
+    // stretched edges carry only the straight sides' glow.
+    let corner_size = (2.0 * pad + style.width + style.radius).ceil() + 1.0;
+    let side = 2.0 * corner_size + 1.0;
+    let pixels = (side * SCALE) as usize;
+    let space = CGColorSpace::new_device_rgb()?;
+    let context = unsafe {
+        CGBitmapContextCreate(
+            std::ptr::null_mut(),
+            pixels,
+            pixels,
+            8,
+            pixels * 4,
+            Some(&space),
+            CGImageAlphaInfo::PremultipliedLast.0,
+        )
+    }?;
+    let cg = Some(&*context);
+    CGContext::scale_ctm(cg, SCALE, SCALE);
+    let all = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(side, side));
+    let ring = grown(all, -pad);
+    let hole = grown(ring, -style.width);
+    // Never inside the window.
+    CGContext::add_path(cg, Some(&outside(all.size, hole, style.radius)));
+    CGContext::eo_clip(cg);
+    let outer = Ring::outer_radius(style, ring);
+    let plate = CGMutablePath::new();
+    unsafe { CGMutablePath::add_rounded_rect(Some(&plate), std::ptr::null(), ring, outer, outer) };
+    CGContext::set_shadow_with_color(
+        cg,
+        CGSize::new(0.0, 0.0),
+        3.0 * style.glow_radius,
+        Some(&cg_color(color)),
+    );
+    CGContext::set_rgb_fill_color(cg, color[0], color[1], color[2], color[3]);
+    CGContext::add_path(cg, Some(&plate));
+    CGContext::fill_path(cg);
+    let image = CGBitmapContextCreateImage(cg)?;
+    CACHE.with_borrow_mut(|c| *c = Some((key, image.clone(), corner_size)));
+    Some((image, corner_size))
+}
+
 /// Everything in `canvas` but the rounded `hole`, so the glow never reaches into
 /// the window it surrounds.
 fn outside(canvas: CGSize, hole: CGRect, radius: f64) -> CFRetained<CGMutablePath> {
@@ -188,14 +254,13 @@ fn outside(canvas: CGSize, hole: CGRect, radius: f64) -> CFRetained<CGMutablePat
 }
 
 /// The layers that draw one ring. A group the size of the ring and its glow holds
-/// the ring and, below it, a plate the size of the ring whose shadow is the glow,
-/// masked to what lies outside the window. Masks render offscreen at their layer's
-/// size, so they sit on the group, never on a whole display's root.
+/// the ring and, below it, the glow, a nine-slice image stretched over the group.
+/// Masks render offscreen at their layer's size, so they sit on the group, never
+/// on a whole display's root.
 struct Ring {
     root: Retained<CALayer>,
     group: Retained<CALayer>,
     glow: Retained<CALayer>,
-    glow_mask: Retained<CAShapeLayer>,
     ring: Retained<CALayer>,
     /// Leaves out what windows above the target cover.
     clip: Retained<CAShapeLayer>,
@@ -213,7 +278,6 @@ impl Ring {
         let root = CALayer::layer();
         let group = CALayer::layer();
         let glow = CALayer::layer();
-        let glow_mask = CAShapeLayer::layer();
         let ring = CALayer::layer();
         let clip = CAShapeLayer::layer();
         with_disabled_actions(|| {
@@ -226,14 +290,13 @@ impl Ring {
             // Unflipped, anything not symmetric about the window (what covers it, the
             // ends of a slide) lands mirrored top to bottom.
             root.setGeometryFlipped(true);
-            glow_mask.setFillRule(unsafe { kCAFillRuleEvenOdd });
-            unsafe { glow.setMask(Some(&glow_mask)) };
+            glow.setContentsScale(2.0);
             glow.setHidden(true);
             group.addSublayer(&glow);
             group.addSublayer(&ring);
             root.addSublayer(&group);
         });
-        Self { root, group, glow, glow_mask, ring, clip }
+        Self { root, group, glow, ring, clip }
     }
 
     fn outer_radius(style: &BorderStyle, ring: CGRect) -> f64 {
@@ -264,20 +327,20 @@ impl Ring {
                 self.ring.setFrame(inner);
                 self.ring.setCornerRadius(outer);
             }
-            let glowing = glow && style.glow && slide.is_none();
-            self.glow.setHidden(!glowing);
-            if glowing {
-                self.glow.setFrame(inner);
-                self.glow.setCornerRadius(outer);
-                self.glow.setBackgroundColor(Some(&cg_color(color)));
-                self.glow.setShadowColor(Some(&cg_color(color)));
-                self.glow.setShadowOffset(CGSize::new(0.0, 0.0));
-                self.glow.setShadowRadius(style.glow_radius);
-                self.glow.setShadowOpacity(1.0);
-                // The mask lives in the glow layer's space and covers the group.
-                self.glow_mask.setFrame(CGRect::new(CGPoint::new(-pad, -pad), group.size));
-                let hole = CGRect::new(CGPoint::new(pad + style.width, pad + style.width), window.size);
-                self.glow_mask.setPath(Some(&outside(group.size, hole, style.radius)));
+            let image = (glow && style.glow && slide.is_none())
+                .then(|| glow_image(style, color))
+                .flatten();
+            self.glow.setHidden(image.is_none());
+            if let Some((image, corner)) = image {
+                let side = 2.0 * corner + 1.0;
+                self.glow.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), group.size));
+                unsafe {
+                    self.glow.setContents(Some(&*(&*image as *const CGImage as *const AnyObject)));
+                }
+                self.glow.setContentsCenter(CGRect::new(
+                    CGPoint::new(corner / side, corner / side),
+                    CGSize::new(1.0 / side, 1.0 / side),
+                ));
             }
         });
         if let Some(duration) = slide {
@@ -339,14 +402,84 @@ impl Ring {
     }
 }
 
-/// An unfocused window's border: an overlay window the size of the ring and glow,
-/// ordered just above the window.
-struct Border {
+/// The parts of a canvas the ring and its glow reach: bands `depth` deep along
+/// each edge, or the whole canvas when the bands would meet.
+fn bands(canvas: CGSize, depth: f64) -> Vec<CGRect> {
+    let rect = |x, y, w, h| CGRect::new(CGPoint::new(x, y), CGSize::new(w, h));
+    let (w, h) = (canvas.width, canvas.height);
+    if 2.0 * depth >= w || 2.0 * depth >= h {
+        return vec![rect(0.0, 0.0, w, h)];
+    }
+    vec![
+        rect(0.0, 0.0, w, depth),
+        rect(0.0, h - depth, w, depth),
+        rect(0.0, depth, depth, h - 2.0 * depth),
+        rect(w - depth, depth, depth, h - 2.0 * depth),
+    ]
+}
+
+impl BorderStyle {
+    /// How far into the canvas the ring and its glow reach from each edge: the
+    /// glow's room, the ring, and the window's corners, which the ring follows in.
+    fn depth(&self) -> f64 { (self.pad() + self.width + self.radius).ceil() + 1.0 }
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGSWindowSetShadowProperties(window: u32, properties: *const AnyObject) -> i32;
+}
+
+/// Turn off a window's WindowServer shadow. The no-shadow tag does not, and with a
+/// border in bands each band's shadow falls on the next.
+fn without_shadow(window: &CgsWindow) {
+    let key = objc2_foundation::NSString::from_str("com.apple.WindowShadowDensity");
+    let none = objc2_foundation::NSNumber::new_i64(0);
+    let properties = objc2_foundation::NSDictionary::from_slices(&[&*key], &[&*none]);
+    let result = unsafe {
+        CGSWindowSetShadowProperties(window.id(), Retained::as_ptr(&properties).cast())
+    };
+    if result != 0 {
+        warn!(result, "Border window keeps its shadow");
+    }
+}
+
+/// One band of a border: an overlay window showing that part of the ring.
+struct Band {
     // The surface must be detached before its WindowServer window drops.
     surface: WindowSurface,
     window: CgsWindow,
-    canvas: CGRect,
     ring: Ring,
+    /// Where the band is in the canvas.
+    rect: CGRect,
+}
+
+impl Band {
+    fn new(canvas: CGRect, rect: CGRect) -> Result<Self, CgsWindowError> {
+        let window = CgsWindow::new_compositor(shifted(rect, canvas.origin), 0.0)?;
+        window.set_alpha(1.0)?;
+        window.set_tags(1 << 3)?;
+        without_shadow(&window);
+        let ring = Ring::new(rect.size);
+        let surface = WindowSurface::new(
+            window.id(),
+            CGRect::new(CGPoint::new(0.0, 0.0), rect.size),
+            &ring.root,
+        )?;
+        let band = Self { surface, window, ring, rect };
+        band.show_rect();
+        Ok(band)
+    }
+
+    /// The band's layers draw in canvas coordinates; its root shows its part.
+    fn show_rect(&self) {
+        with_disabled_actions(|| self.ring.root.setBounds(self.rect));
+    }
+}
+
+/// An unfocused window's border: bands around the window, ordered just above it.
+struct Border {
+    bands: Vec<Band>,
+    canvas: CGRect,
     target: BorderTarget,
     visible: bool,
 }
@@ -362,39 +495,47 @@ fn local(rect: CGRect, origin: CGPoint) -> CGRect {
 impl Border {
     fn new(style: &BorderStyle, target: BorderTarget) -> Result<Self, CgsWindowError> {
         let canvas = style.canvas(target.frame);
-        let window = CgsWindow::new_compositor(canvas, 0.0)?;
-        window.set_alpha(1.0)?;
-        // No WindowServer shadow of its own.
-        window.set_tags(1 << 3)?;
-        let ring = Ring::new(canvas.size);
-        let bounds = CGRect::new(CGPoint::new(0.0, 0.0), canvas.size);
-        let surface = WindowSurface::new(window.id(), bounds, &ring.root)?;
-        let wid = target.window.as_u32();
-        let border = Self { surface, window, canvas, ring, target, visible: true };
+        let bands = bands(canvas.size, style.depth())
+            .into_iter()
+            .map(|rect| Band::new(canvas, rect))
+            .collect::<Result<_, _>>()?;
+        let border = Self { bands, canvas, target, visible: true };
         border.draw(style);
-        border.window.order_above(Some(wid))?;
+        border.order()?;
         Ok(border)
+    }
+
+    fn order(&self) -> Result<(), CgsWindowError> {
+        for band in &self.bands {
+            band.window.order_above(Some(self.target.window.as_u32()))?;
+        }
+        Ok(())
     }
 
     fn set_visible(&mut self, visible: bool) -> Result<(), CgsWindowError> {
         if self.visible != visible {
-            self.window.set_alpha(if visible { 1.0 } else { 0.0 })?;
+            for band in &self.bands {
+                band.window.set_alpha(if visible { 1.0 } else { 0.0 })?;
+            }
             self.visible = visible;
         }
         Ok(())
     }
 
+    fn covers(&self) -> Vec<CGRect> {
+        self.target.covered_by.iter().map(|r| local(*r, self.canvas.origin)).collect()
+    }
+
     fn draw(&self, style: &BorderStyle) {
-        with_disabled_actions(|| {
-            self.ring.root.setBounds(CGRect::new(CGPoint::new(0.0, 0.0), self.canvas.size));
-        });
         let color = style.color(self.target.focused).unwrap_or([0.0; 4]);
         let window = local(self.target.frame, self.canvas.origin);
-        self.ring.draw(style, window, color, self.target.focused, None);
-        let covers: Vec<_> =
-            self.target.covered_by.iter().map(|r| local(*r, self.canvas.origin)).collect();
-        self.ring.clip(&covers);
-        self.surface.flush();
+        let covers = self.covers();
+        for band in &self.bands {
+            band.show_rect();
+            band.ring.draw(style, window, color, self.target.focused, None);
+            band.ring.clip(&covers);
+        }
+        CATransaction::flush();
     }
 
     fn update(
@@ -405,31 +546,56 @@ impl Border {
     ) -> Result<(), CgsWindowError> {
         let previous = std::mem::replace(&mut self.target, target);
         let canvas = style.canvas(self.target.frame);
-        if canvas != self.canvas {
-            let transaction = WindowTransaction::new()?;
-            if canvas.size != self.canvas.size {
-                transaction.set_rounded_frame(&self.window, canvas, 0.0)?;
-                self.surface
-                    .set_bounds_in(&transaction, CGRect::new(CGPoint::new(0.0, 0.0), canvas.size));
+        let resized = canvas.size != self.canvas.size;
+        let moved = canvas.origin != self.canvas.origin;
+        if resized {
+            let rects = bands(canvas.size, style.depth());
+            if rects.len() == self.bands.len() {
+                let transaction = WindowTransaction::new()?;
+                for (band, rect) in self.bands.iter_mut().zip(rects) {
+                    band.rect = rect;
+                    transaction.set_rounded_frame(&band.window, shifted(rect, canvas.origin), 0.0)?;
+                    band.surface.set_bounds_in(
+                        &transaction,
+                        CGRect::new(CGPoint::new(0.0, 0.0), rect.size),
+                    );
+                }
+                transaction.commit();
             } else {
-                // Only moved: the layers keep their place in the overlay.
-                transaction.move_window(&self.window, canvas.origin);
+                // The bands meet or part: new ones, shown as the old ones were.
+                self.bands = rects
+                    .into_iter()
+                    .map(|rect| Band::new(canvas, rect))
+                    .collect::<Result<_, _>>()?;
+                if !self.visible {
+                    for band in &self.bands {
+                        band.window.set_alpha(0.0)?;
+                    }
+                }
+                self.canvas = canvas;
+                self.draw(style);
+                return self.order();
+            }
+        } else if moved {
+            // Only moved: the layers keep their place in the bands.
+            let transaction = WindowTransaction::new()?;
+            for band in &self.bands {
+                transaction.move_window(&band.window, shifted(band.rect, canvas.origin).origin);
             }
             transaction.commit();
         }
-        let resized = canvas.size != self.canvas.size;
-        let moved = canvas.origin != self.canvas.origin;
         self.canvas = canvas;
         if resized || previous.focused != self.target.focused {
             self.draw(style);
         } else if moved || previous.covered_by != self.target.covered_by {
-            let covers: Vec<_> =
-                self.target.covered_by.iter().map(|r| local(*r, self.canvas.origin)).collect();
-            self.ring.clip(&covers);
-            self.surface.flush();
+            let covers = self.covers();
+            for band in &self.bands {
+                band.ring.clip(&covers);
+            }
+            CATransaction::flush();
         }
         if reorder {
-            self.window.order_above(Some(self.target.window.as_u32()))?;
+            self.order()?;
         }
         Ok(())
     }
@@ -450,6 +616,7 @@ impl Slider {
         let window = CgsWindow::new_compositor(canvas, 0.0)?;
         window.set_alpha(0.0)?;
         window.set_tags(1 << 3)?;
+        without_shadow(&window);
         let ring = Ring::new(canvas.size);
         let bounds = CGRect::new(CGPoint::new(0.0, 0.0), canvas.size);
         let surface = WindowSurface::new(window.id(), bounds, &ring.root)?;
@@ -530,7 +697,7 @@ impl FocusBorder {
     ) -> Result<Option<(u64, std::time::Duration)>, CgsWindowError> {
         let Some(target) = target else {
             self.border = None;
-            if let Some(slider) = &self.slider {
+            if let Some(slider) = self.slider.take() {
                 slider.hide();
             }
             self.sliding = None;
@@ -585,7 +752,9 @@ impl FocusBorder {
         if let Some(border) = &mut self.border {
             border.set_visible(true)?;
         }
-        if let Some(slider) = &self.slider {
+        // The slider spans both ends of a slide, as large as a display; it is made
+        // again for the next one rather than kept.
+        if let Some(slider) = self.slider.take() {
             slider.hide();
         }
         Ok(())
@@ -727,6 +896,23 @@ mod tests {
         assert_eq!(style.animation, std::time::Duration::from_millis(180));
         let still = BorderStyle::new(&BorderSettings { animation_ms: 0.0, ..BorderSettings::default() });
         assert!(still.animation.is_zero(), "0 moves the border at once");
+    }
+
+    #[test]
+    fn a_border_is_bands_around_the_window() {
+        let rect = |x, y, w, h| CGRect::new(CGPoint::new(x, y), CGSize::new(w, h));
+        let style = BorderStyle::new(&BorderSettings::default());
+        // Glow room 24, ring 2, corners 16, and a point to spare.
+        assert_eq!(style.depth(), 43.0);
+        let canvas = CGSize::new(1000.0, 600.0);
+        let parts = bands(canvas, 43.0);
+        assert_eq!(parts.len(), 4);
+        let area: f64 = parts.iter().map(|r| r.size.width * r.size.height).sum();
+        assert_eq!(area, 1000.0 * 600.0 - 914.0 * 514.0, "everything but the middle, once");
+        assert_eq!(parts[0], rect(0.0, 0.0, 1000.0, 43.0));
+        assert_eq!(parts[3], rect(957.0, 43.0, 43.0, 514.0));
+        // A window too small for bands to part is one band.
+        assert_eq!(bands(CGSize::new(80.0, 600.0), 43.0), vec![rect(0.0, 0.0, 80.0, 600.0)]);
     }
 
     #[test]

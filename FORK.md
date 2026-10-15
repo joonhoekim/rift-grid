@@ -46,8 +46,14 @@ Found by experiment on macOS 26/27; recheck when macOS changes:
 - Moving a WindowServer window and changing its layers reach the screen
   separately, so a border never moves its window while its layers move: a slide
   runs on a separate overlay.
-- A border surface is the size of its window at the display's scale; a whole
-  display's overlay costs tens of MB.
+- A WindowServer window's surface costs its whole area at the display's scale
+  (a 1671x1375 window at 2x is about 36 MB). A border is therefore four bands
+  around its window, and the slider is made for each slide and dropped after.
+- The no-shadow tag (bit 3) leaves a window its WindowServer shadow; it takes
+  `CGSWindowSetShadowProperties` with `com.apple.WindowShadowDensity` 0. Without
+  it each band's shadow falls on the next.
+- A CoreAnimation shadow is drawn only from what lies in its window, so a glow
+  split over bands fades at their ends; the glow is a nine-slice image instead.
 - The frontmost app's main window passes through that app's previous main window
   when focus moves to another app's window; the borders bridge that with the
   window rift is focusing for up to 600 ms.
