@@ -4,6 +4,25 @@ A fork of [rift](https://github.com/acsandmann/rift) that lays the virtual
 workspaces out as a grid and draws window borders in place of JankyBorders. Branch
 `grid`; `main` mirrors upstream.
 
+## Why
+
+rift-grid started from subline, a Wayland compositor for Linux by the same
+author, which is not public. The aim was to work on macOS the way subline works
+on Linux. rift was already the window manager of choice there, so this is a fork
+of rift that builds on what rift does well.
+
+What subline set out to do, and this fork does on rift:
+
+- Place workspaces in a spatial model, a grid of cells, so that each cell is
+  easy to remember and to reach.
+- Name a cell by where it is, not by a number: the centre, the top left, the
+  left, the bottom left, or as an offset from -1 to 1 on each axis. A place in a
+  square is easier to picture than a number from 1 to 9.
+- Move by direction: going from the centre to the bottom right is more natural
+  than going from 1 to 9.
+- Show the whole n x n grid from above in the overview, rather than workspaces
+  in one row or wrapped into rows.
+
 ## What the fork adds
 
 | Feature | Where | Settings |
