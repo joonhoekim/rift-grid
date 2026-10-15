@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use objc2::rc::autoreleasepool;
 use objc2::runtime::AnyObject;
 use objc2::{class, msg_send};
+use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
 use tracing::info;
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -86,4 +87,23 @@ pub fn ensure_accessibility_permission() {
     );
 
     std::process::exit(1);
+}
+
+/// Screen Recording backs the overview previews and the grid motion snapshots.
+/// Both only preflight it and quietly fall back without it, so nothing would
+/// ever make macOS list Rift under Screen Recording. Ask once at startup
+/// instead. Unlike accessibility this does not block: Rift works without it,
+/// and macOS applies the grant only after a restart anyway.
+pub fn request_screen_capture_permission() {
+    if CGPreflightScreenCaptureAccess() {
+        return;
+    }
+
+    info!("Screen Recording permission is not granted; prompting user for permission now.");
+
+    if !CGRequestScreenCaptureAccess() {
+        println!(
+            "Rift has no Screen Recording permission, so overview previews are off. Enable it in System Settings > Privacy & Security > Screen & System Audio Recording, then restart Rift."
+        );
+    }
 }
