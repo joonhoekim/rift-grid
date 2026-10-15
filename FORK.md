@@ -26,6 +26,10 @@ Merge rather than rebase, so `grid` never needs a force push:
     git fetch upstream
     git merge upstream/main
     cargo test --lib
+    cargo test --test settings_native -- --ignored --verify
+
+The second compiles the settings app's sources on their own and opens a hidden
+settings window; `--lib` does not build it.
 
 One test, `empty_active_space_membership_during_wake_race_does_not_blank_known_active_windows`,
 fails on upstream too. Install with `apps/rift-grid` in nixos-config, which
