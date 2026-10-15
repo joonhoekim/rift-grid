@@ -131,7 +131,10 @@ pub fn run(ui: Ui) {
             "search works after an empty result"
         );
         change_text(&search, "");
-        assert_eq!(find::<NSOutlineView>(&root).unwrap().numberOfRows(), 9);
+        assert_eq!(
+            find::<NSOutlineView>(&root).unwrap().numberOfRows(),
+            super::CATEGORIES.len() as isize
+        );
         let sidebar = find::<NSOutlineView>(&root).unwrap();
         sidebar.selectRowIndexes_byExtendingSelection(
             &objc2_foundation::NSIndexSet::indexSetWithIndex(1),

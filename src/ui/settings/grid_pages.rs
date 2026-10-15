@@ -33,10 +33,10 @@ fn border_color(
     );
     let well = Rc::new(
         ColorWell::new(&f.ui)
-            .on_change(move |rgba| commit(crate::ui::borders::format_color(rgba))),
+            .on_change(move |rgba| commit(crate::common::config::borders::format_color(rgba))),
     );
     f.sync(&well, move |well, s| {
-        if let Some(rgba) = crate::ui::borders::parse_color(get(s)) {
+        if let Some(rgba) = crate::common::config::borders::parse_color(get(s)) {
             well.set_value(rgba);
         }
     });

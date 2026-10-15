@@ -72,3 +72,29 @@ impl Default for BorderSettings {
         }
     }
 }
+
+/// Red, green, blue, alpha in 0..1.
+pub type Rgba = [f64; 4];
+
+/// `0xAARRGGBB`, `#RRGGBB` or `#RRGGBBAA`.
+pub fn parse_color(text: &str) -> Option<Rgba> {
+    let text = text.trim();
+    let channel = |v: u32, shift: u32| ((v >> shift) & 0xff) as f64 / 255.0;
+    if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        let v = u32::from_str_radix(hex, 16).ok().filter(|_| hex.len() == 8)?;
+        return Some([channel(v, 16), channel(v, 8), channel(v, 0), channel(v, 24)]);
+    }
+    let hex = text.strip_prefix('#')?;
+    let v = u32::from_str_radix(hex, 16).ok()?;
+    match hex.len() {
+        6 => Some([channel(v, 16), channel(v, 8), channel(v, 0), 1.0]),
+        8 => Some([channel(v, 24), channel(v, 16), channel(v, 8), channel(v, 0)]),
+        _ => None,
+    }
+}
+
+/// `0xAARRGGBB`, the form JankyBorders and the config's defaults use.
+pub fn format_color([r, g, b, a]: Rgba) -> String {
+    let byte = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+    format!("0x{:02x}{:02x}{:02x}{:02x}", byte(a), byte(r), byte(g), byte(b))
+}

@@ -1,5 +1,5 @@
 //! Source documents are editable; runtime configs contain expanded hotkeys.
-mod borders;
+pub mod borders;
 mod document;
 mod grid;
 mod parse;
