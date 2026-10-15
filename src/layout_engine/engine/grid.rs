@@ -77,30 +77,43 @@ impl LayoutEngine {
                 }
             }
             LayoutCommand::MoveWindowToGrid(grid) => {
-                let Some(target) = grid
-                    .checked_sub(1)
-                    .and_then(|grid| self.workspaces.grid_current_cell(space, grid))
-                else {
-                    return EventResponse::default();
-                };
-                let Some(index) =
-                    self.workspaces.workspace_ids(space).iter().position(|&id| id == target)
-                else {
-                    return EventResponse::default();
-                };
-                self.handle_virtual_workspace_command(
-                    window_store,
-                    space,
-                    &LayoutCommand::MoveWindowToWorkspace {
-                        workspace: crate::common::config::WorkspaceSelector::Index(index),
-                        follow: false,
-                        window_id: None,
-                    },
-                )
+                self.move_window_to_grid(window_store, space, grid, None)
+            }
+            LayoutCommand::SendWindowToGrid { window_id, grid } => {
+                self.move_window_to_grid(window_store, space, grid, Some(window_id))
             }
             LayoutCommand::FocusRecentWindow => self.focus_recent_window(window_store),
             _ => EventResponse::default(),
         }
+    }
+
+    /// Send a window, the focused one when no index is given, to grid N's
+    /// (1-based) current cell; focus stays.
+    fn move_window_to_grid(
+        &mut self,
+        window_store: &mut WindowStore,
+        space: SpaceId,
+        grid: usize,
+        window_id: Option<u32>,
+    ) -> EventResponse {
+        let Some(target) =
+            grid.checked_sub(1).and_then(|grid| self.workspaces.grid_current_cell(space, grid))
+        else {
+            return EventResponse::default();
+        };
+        let Some(index) = self.workspaces.workspace_ids(space).iter().position(|&id| id == target)
+        else {
+            return EventResponse::default();
+        };
+        self.handle_virtual_workspace_command(
+            window_store,
+            space,
+            &LayoutCommand::MoveWindowToWorkspace {
+                workspace: crate::common::config::WorkspaceSelector::Index(index),
+                follow: false,
+                window_id,
+            },
+        )
     }
 
     /// Focus the window that had the focus before the focused one, showing its

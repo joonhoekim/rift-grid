@@ -68,7 +68,9 @@ The overview shows the grid on screen and follows it as it changes: focus
 moves, windows that open or close, and grids that are switched to or filled. A row of grid buttons at the top lists
 the grids that have windows plus the one on screen, which is highlighted.
 Clicking a button, or pressing Alt+N while the overview is open, switches to that
-grid and the overview stays open on it.
+grid and the overview stays open on it. The last button, "+", is the first grid
+not in use yet. Dropping a window's tile on a button sends the window to that
+grid's current cell, as Alt+Ctrl+N does; the overview stays where it is.
 
 Stages, as in subline: the overview opens on the active cell at `grid_zoom` with
 its neighbours around it; opening it again shows the whole grid, and a third time

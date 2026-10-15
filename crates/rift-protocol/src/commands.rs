@@ -91,6 +91,9 @@ pub enum LayoutCommand {
     SwitchToGrid(usize),
     /// Workspace grid: send the focused window to grid N's (1-based) current cell.
     MoveWindowToGrid(usize),
+    /// Workspace grid: send the window with this index to grid N's (1-based)
+    /// current cell, as dropping it on a grid button in the overview does.
+    SendWindowToGrid { window_id: u32, grid: usize },
     /// Focus the window that had the focus before the current one, in whatever
     /// cell it is; again goes back.
     FocusRecentWindow,

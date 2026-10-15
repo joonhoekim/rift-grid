@@ -478,7 +478,7 @@ struct DisplayOverview {
     views: Vec<WorkspaceView>,
     icons: HashMap<i32, Option<Retained<CGImage>>>,
     look: GridLook,
-    grid_row: Option<(Retained<CALayer>, Vec<GridButton>)>,
+    grid_row: Option<GridRow>,
     /// Where a grid overview's first stage looks, in cells; none until it opens.
     camera: std::cell::Cell<Option<(f64, f64)>>,
     animate: bool,
@@ -1240,6 +1240,11 @@ impl OverviewSession {
     }
 
     fn move_drag(&mut self, point: CGPoint) {
+        // Over the grid row a window goes to the grid of the button it is dropped on.
+        let row_target = self.on_grid_row(point).then(|| self.grid_button_at(point));
+        for d in &self.displays {
+            d.outline_grid_button(row_target.flatten().filter(|_| contains(d.bounds, point)));
+        }
         let Some(drag) = &mut self.drag else { return };
         drag.point = point;
         if !drag.started && (point.x - drag.start.x).hypot(point.y - drag.start.y) < 5.0 {
@@ -1269,6 +1274,9 @@ impl OverviewSession {
                 drag.size.height,
             ));
             drag.indicator.setHidden(true);
+            if row_target.is_some() {
+                return;
+            }
             let Some(ws) = d.projection.iter().find(|ws| contains(workspace_hit_frame(ws), local))
             else {
                 return;
@@ -1492,6 +1500,21 @@ impl OverviewSession {
                 let drag = self.end_drag();
                 self.update_hover(point);
                 let pressed = self.pressed.take();
+                if let Some(drag) = drag.as_ref().filter(|drag| drag.started)
+                    && self.on_grid_row(point)
+                {
+                    for d in &self.displays {
+                        d.outline_grid_button(None);
+                    }
+                    return self.grid_button_at(point).map(|grid| {
+                        OverviewAction::Command(
+                            crate::layout_engine::LayoutCommand::SendWindowToGrid {
+                                window_id: drag.window.idx.get(),
+                                grid: grid + 1,
+                            },
+                        )
+                    });
+                }
                 if let Some(drag) = drag.filter(|drag| drag.started) {
                     self.drop = drag.intent;
                     return None;

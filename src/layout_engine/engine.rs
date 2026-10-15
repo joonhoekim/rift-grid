@@ -2321,6 +2321,7 @@ impl LayoutEngine {
             | LayoutCommand::GridCenter
             | LayoutCommand::SwitchToGrid(_)
             | LayoutCommand::MoveWindowToGrid(_)
+            | LayoutCommand::SendWindowToGrid { .. }
             | LayoutCommand::FocusRecentWindow => EventResponse::default(),
             LayoutCommand::JoinWindow(direction) => {
                 self.workspaces[workspace_id].layout_state.last_saved = Some(layout);
@@ -2760,6 +2761,7 @@ impl LayoutEngine {
             | LayoutCommand::GridCenter
             | LayoutCommand::SwitchToGrid(_)
             | LayoutCommand::MoveWindowToGrid(_)
+            | LayoutCommand::SendWindowToGrid { .. }
             | LayoutCommand::FocusRecentWindow => {
                 self.handle_grid_command(window_store, space, command)
             }

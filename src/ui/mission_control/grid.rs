@@ -50,7 +50,7 @@ pub(super) fn grid_focus_selection(
 
 /// The overview shows one grid, the one on screen, every cell of it in place,
 /// empty or not. Returns the grids for the button row: those with windows and
-/// the one on screen, in order.
+/// the one on screen, in order, then "+" for the first grid neither is.
 pub(super) fn keep_grid_on_screen(workspaces: &mut Vec<RuntimeWorkspaceData>) -> Vec<GridButton> {
     let on_screen = workspaces.iter().find(|ws| ws.is_active).and_then(|ws| ws.grid);
     let mut grids: Vec<_> = workspaces
@@ -59,12 +59,17 @@ pub(super) fn keep_grid_on_screen(workspaces: &mut Vec<RuntimeWorkspaceData>) ->
         .filter_map(|ws| ws.grid)
         .collect();
     grids.dedup();
+    let unused = workspaces
+        .iter()
+        .filter_map(|ws| ws.grid)
+        .find(|grid| !grids.contains(grid));
     if on_screen.is_some() {
         workspaces.retain(|ws| ws.grid == on_screen);
     }
     grids
         .into_iter()
-        .map(|grid| GridButton { grid, on_screen: Some(grid) == on_screen })
+        .map(|grid| GridButton { grid, on_screen: Some(grid) == on_screen, new: false })
+        .chain(unused.map(|grid| GridButton { grid, on_screen: false, new: true }))
         .collect()
 }
 
@@ -74,6 +79,15 @@ pub(super) struct GridButton {
     /// 0-based.
     pub(super) grid: usize,
     pub(super) on_screen: bool,
+    /// "+": a grid not in use yet.
+    pub(super) new: bool,
+}
+
+/// The overview's grid row as drawn.
+pub(super) struct GridRow {
+    layer: Retained<CALayer>,
+    cells: Vec<Retained<CALayer>>,
+    buttons: Vec<GridButton>,
 }
 
 const BUTTON: CGSize = CGSize { width: 34.0, height: 26.0 };
@@ -379,11 +393,11 @@ impl DisplayOverview {
 
     /// Redraw the grid row when the grids in use or the one on screen changed.
     pub(super) fn set_grid_buttons(&mut self, buttons: Vec<GridButton>) {
-        if self.grid_row.as_ref().is_some_and(|(_, drawn)| *drawn == buttons) {
+        if self.grid_row.as_ref().is_some_and(|drawn| drawn.buttons == buttons) {
             return;
         }
-        if let Some((row, _)) = self.grid_row.take() {
-            row.removeFromSuperlayer();
+        if let Some(drawn) = self.grid_row.take() {
+            drawn.layer.removeFromSuperlayer();
         }
         if buttons.is_empty() || self.grid().is_none() {
             return;
@@ -393,6 +407,7 @@ impl DisplayOverview {
         row.setZPosition(10.0);
         row.setCornerRadius(10.0);
         row.setBackgroundColor(Some(&color(0.06, 0.06, 0.08, 0.72)));
+        let mut cells = Vec::with_capacity(buttons.len());
         with_disabled_actions(|| {
             for (button, frame) in buttons.iter().zip(frames) {
                 let cell = layer(frame, self.scale);
@@ -402,9 +417,10 @@ impl DisplayOverview {
                 } else {
                     cell.setBackgroundColor(Some(&color(1.0, 1.0, 1.0, 0.1)));
                 }
+                let text = if button.new { "+".to_owned() } else { (button.grid + 1).to_string() };
                 let number = label(
                     &cell,
-                    &(button.grid + 1).to_string(),
+                    &text,
                     rect(0.0, (frame.size.height - 16.0) / 2.0, frame.size.width, 16.0),
                     self.scale,
                 );
@@ -416,17 +432,33 @@ impl DisplayOverview {
                     number.setForegroundColor(Some(&color(1.0, 1.0, 1.0, 1.0)));
                 }
                 row.addSublayer(&cell);
+                cells.push(cell);
             }
         });
         self.root.addSublayer(&row);
-        self.grid_row = Some((row, buttons));
+        self.grid_row = Some(GridRow { layer: row, cells, buttons });
+    }
+
+    /// Outline the button a dragged window would go to, or none.
+    pub(super) fn outline_grid_button(&self, grid: Option<usize>) {
+        let Some(drawn) = &self.grid_row else { return };
+        with_disabled_actions(|| {
+            for (cell, button) in drawn.cells.iter().zip(&drawn.buttons) {
+                if Some(button.grid) == grid {
+                    cell.setBorderWidth(2.0);
+                    cell.setBorderColor(Some(&color(1.0, 1.0, 1.0, 0.9)));
+                } else {
+                    cell.setBorderWidth(0.0);
+                }
+            }
+        });
     }
 
     /// The grid (0-based) whose button is at `local`, a point in the overview.
     pub(super) fn grid_button_at(&self, local: CGPoint) -> Option<usize> {
-        let (_, buttons) = self.grid_row.as_ref()?;
-        let (row, frames) = grid_button_frames(self.bounds.size, buttons.len());
-        frames.iter().zip(buttons).find_map(|(frame, button)| {
+        let drawn = self.grid_row.as_ref()?;
+        let (row, frames) = grid_button_frames(self.bounds.size, drawn.buttons.len());
+        frames.iter().zip(&drawn.buttons).find_map(|(frame, button)| {
             let frame = rect(
                 row.origin.x + frame.origin.x,
                 row.origin.y + frame.origin.y,
@@ -439,8 +471,8 @@ impl DisplayOverview {
 
     /// Whether `local` is on the grid row, buttons or the space between them.
     pub(super) fn on_grid_row(&self, local: CGPoint) -> bool {
-        self.grid_row.as_ref().is_some_and(|(_, buttons)| {
-            contains(grid_button_frames(self.bounds.size, buttons.len()).0, local)
+        self.grid_row.as_ref().is_some_and(|drawn| {
+            contains(grid_button_frames(self.bounds.size, drawn.buttons.len()).0, local)
         })
     }
 
@@ -761,10 +793,12 @@ mod tests {
         assert_eq!(
             buttons,
             [
-                GridButton { grid: 0, on_screen: false },
-                GridButton { grid: 2, on_screen: true },
-                GridButton { grid: 3, on_screen: false },
-            ]
+                GridButton { grid: 0, on_screen: false, new: false },
+                GridButton { grid: 2, on_screen: true, new: false },
+                GridButton { grid: 3, on_screen: false, new: false },
+                GridButton { grid: 1, on_screen: false, new: true },
+            ],
+            "grid 2 is the first not in use"
         );
         assert_eq!(workspaces.len(), 9, "only the grid on screen");
         assert!(workspaces.iter().all(|ws| ws.grid == Some(2)));
