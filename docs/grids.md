@@ -77,3 +77,19 @@ only stage.
 When the active cell changes in the first stage, the camera moves as
 `[settings.ui.mission_control] grid_follow` says: `"reveal"` (default) moves only as far as it takes to show the active cell whole, a gap
 from the edges; `"center"` centers the active cell every time.
+
+## Motion
+
+`[settings.ui.grid_motion]` shows where a move went. Both parts are on by default.
+
+- `pan`: the screen slides to the cell moved to, diagonally when the move
+  skips across, over `duration_ms` (240). A window carried along by
+  `grid_move` stays in place while the cells slide past it. Moving to another
+  grid fades to it instead. The slide is drawn from screen captures on an overlay
+  while rift moves the windows under it, so it needs Screen Recording access;
+  without it, or while the Overview is open, moves show at once.
+- `hud`: a small map of the grid, its number beside it, for `hud_ms` (700)
+  after the last move; the lit cell glides from the cell left to the cell
+  arrived at.
+
+A move made while a slide is still playing shows at once; the map keeps up.

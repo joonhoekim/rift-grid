@@ -1,5 +1,5 @@
-//! The settings app's pages for the grid fork: the grid Overview and the window
-//! borders.
+//! The settings app's pages for the grid fork: the grid Overview with how moves
+//! between cells are shown, and the window borders.
 
 use super::*;
 use crate::common::config::*;
@@ -15,7 +15,16 @@ pub(super) fn overview(ui: Ui, model: &Rc<Model>) -> Page {
         |s| &s.settings.ui.mission_control,
         |s| &mut s.settings.ui.mission_control,
     );
-    f.finish(SettingsPage::new(&ui, "").section(section))
+    let motion = f.schema_rows(
+        Section::new(&ui, "Grid Motion").description(
+            "How moving to another cell or grid is shown: the screen slides there, and a \
+             small map of the grid shows where you went.",
+        ),
+        "",
+        |s| &s.settings.ui.grid_motion,
+        |s| &mut s.settings.ui.grid_motion,
+    );
+    f.finish(SettingsPage::new(&ui, "").section(section).section(motion))
 }
 
 /// A color well bound to a border color string.

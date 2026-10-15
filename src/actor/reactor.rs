@@ -8,6 +8,7 @@ mod animation;
 mod borders;
 mod events;
 mod gesture;
+mod grid_motion;
 pub(crate) use crate::layout_engine::WorkspaceDropRequest as OverviewDrop;
 mod main_window;
 mod managers;
@@ -207,6 +208,8 @@ pub enum Event {
     /// The focused window border's slide of this generation has landed.
     #[serde(skip)]
     BorderSettle(u64),
+    #[serde(skip)]
+    GridMotion(crate::ui::grid_motion::Note),
     /// WindowServer reordered windows; what covers each bordered window may differ.
     #[serde(skip)]
     WindowsReordered,
@@ -425,6 +428,7 @@ pub struct Reactor {
     mouse_inventory_hit: Option<WindowServerId>,
     drag_manager: managers::DragManager,
     border_manager: borders::BorderManager,
+    grid_motion_manager: grid_motion::GridMotionManager,
     workspace_switch_manager: managers::WorkspaceSwitchManager,
     recording_manager: managers::RecordingManager,
     communication_manager: managers::CommunicationManager,
@@ -529,6 +533,7 @@ impl Reactor {
                 haptics_enabled: config.settings.drag_drop.haptics_enabled,
             },
             border_manager: borders::BorderManager::default(),
+            grid_motion_manager: Default::default(),
             workspace_switch_manager: managers::WorkspaceSwitchManager {
                 workspace_switch_state: WorkspaceSwitchState::Inactive,
                 workspace_switch_generation: 0,
@@ -1197,6 +1202,8 @@ impl Reactor {
         if self.handle_border_event(&event) {
             return;
         }
+        let Err(event) = self.handle_grid_motion_event(event) else { return };
+        let grid_motion = self.grid_motion_before(&event);
         let may_make_ready = matches!(&event, Event::SpaceStateChanged(_));
         let visibility_changed = borders::changes_visibility(&event);
         let previously_focused_window = self.main_window();
@@ -1207,6 +1214,9 @@ impl Reactor {
                     && let Some(focused_window) = focused_window
                 {
                     outcome = outcome.with_focused_window_broadcast(focused_window);
+                }
+                if let Some(before) = grid_motion {
+                    self.grid_motion_after(before);
                 }
                 self.apply_event_outcome(outcome);
                 if may_make_ready

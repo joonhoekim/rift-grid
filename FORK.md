@@ -29,6 +29,7 @@ What subline set out to do, and this fork does on rift:
 | --- | --- | --- |
 | Grids of cells (see [docs/grids.md](docs/grids.md)): `switch_to_grid`, `move_window_to_grid`, `grid_focus`, `grid_move`, `grid_cell`, `grid_center`, `focus_recent_window`, app rules' `grid` | `layout_engine/engine/grid.rs`, `model/virtual_workspace/grid.rs`; topology in `common/grid_nav.rs` | `[virtual_workspaces] grid_columns` |
 | Grid overview: two stages, follows the real focus, live previews, labels in the gaps | `ui/mission_control/grid.rs` | `[settings.ui.mission_control] grid_*`, `live_preview_interval_ms` |
+| Moves shown: the screen slides to the cell moved to, fades to another grid, and a small grid map lights the cell arrived at | `ui/grid_motion.rs`, `actor/reactor/grid_motion.rs` | `[settings.ui.grid_motion]` |
 | Menu bar 3x3 maps, one per grid in use | `ui/menu_bar/grid_map.rs` | `[settings.ui.menu_bar] grid_maps` |
 | Window borders: sliding focused border, glow, hidden under the windows above | `ui/borders.rs`, `actor/reactor/borders.rs` | `[settings.ui.borders]`, `common/config/borders.rs` |
 | Settings app pages | `ui/settings/grid_pages.rs` | — |

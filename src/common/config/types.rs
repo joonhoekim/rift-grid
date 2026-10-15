@@ -588,6 +588,8 @@ pub struct UiSettings {
     pub mission_control: MissionControlSettings,
     #[serde(default)]
     pub borders: super::BorderSettings,
+    #[serde(default)]
+    pub grid_motion: super::GridMotionSettings,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, ConfigSchema)]

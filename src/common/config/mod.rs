@@ -2,11 +2,13 @@
 pub mod borders;
 mod document;
 mod grid;
+mod grid_motion;
 mod parse;
 mod schema;
 mod types;
 pub use borders::BorderSettings;
 pub use grid::{GridFollow, GridMaps};
+pub use grid_motion::GridMotionSettings;
 pub use document::ConfigDocument;
 pub use schema::*;
 pub use types::*;

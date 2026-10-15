@@ -245,6 +245,7 @@ impl MissionControlActor {
             );
         }
         self.input_tx.send(super::input::Request::SetMissionControlActive(false));
+        crate::ui::grid_motion::set_overview_open(false);
     }
 
     fn handle(&mut self, event: Event) {
@@ -289,6 +290,7 @@ impl MissionControlActor {
                     self.input_tx.send(super::input::Request::SetMissionControlActive(
                         self.session.is_some(),
                     ));
+                    crate::ui::grid_motion::set_overview_open(self.session.is_some());
                 }
             }
             Event::Dismiss => self.close(),
