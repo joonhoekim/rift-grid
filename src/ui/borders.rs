@@ -765,6 +765,11 @@ impl FocusBorder {
     }
 }
 
+/// Whether any border is on screen, for the input thread.
+static SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn shown() -> bool { SHOWN.load(std::sync::atomic::Ordering::Relaxed) }
+
 /// The borders on screen, owned by the reactor like the drag preview: one per
 /// unfocused window, and the focused border, which slides between windows.
 pub struct Borders {
@@ -779,6 +784,10 @@ impl Default for Borders {
 
 // Owned by the reactor and only touched on its thread, as DragPreview is.
 unsafe impl Send for Borders {}
+
+impl Drop for Borders {
+    fn drop(&mut self) { SHOWN.store(false, std::sync::atomic::Ordering::Relaxed); }
+}
 
 impl Borders {
     /// Show borders for exactly `targets`. `reorder` re-asserts each border above
@@ -819,11 +828,13 @@ impl Borders {
             }
         }
         let focused = targets.iter().find(|t| t.focused).cloned();
-        self.focus.update(&style, focused, reorder).unwrap_or_else(|error| {
+        let settle = self.focus.update(&style, focused, reorder).unwrap_or_else(|error| {
             warn!(?error, "Focused window border failed");
             self.focus = FocusBorder::new();
             None
-        })
+        });
+        SHOWN.store(self.len() > 0, std::sync::atomic::Ordering::Relaxed);
+        settle
     }
 
     /// Land the slide of generation `generation`, if it is still the latest.

@@ -811,6 +811,11 @@ impl Input {
                 if self.state.borrow().mouse_features_enabled {
                     self.events_tx.send(Event::MouseUp(button));
                 }
+                // A window dragged by the mouse moves without a reorder; the borders
+                // look again at what covers them once it is let go.
+                if button == crate::actor::drag::MouseButton::Left && crate::ui::borders::shown() {
+                    self.events_tx.send(Event::WindowsReordered);
+                }
                 if captured {
                     self.state.borrow_mut().captured_button = None;
                 }
