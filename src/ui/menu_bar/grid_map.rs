@@ -7,7 +7,18 @@ use objc2_app_kit::NSColor;
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_core_graphics::CGContext;
 
-use super::{CachedTextLine, MenuIconLayout, SEPARATOR_SPACING, WorkspaceRenderInput, add_rounded_rect};
+use objc2::Message;
+use objc2_app_kit::NSMenuItem;
+
+use super::{
+    CachedTextLine, MenuActionHandler, MenuIcon, MenuIconLayout, SEPARATOR_SPACING,
+    WorkspaceRenderInput, add_rounded_rect, make_menu_item, set_menu_item_checked,
+    set_menu_item_hotkey,
+};
+use crate::actor::reactor;
+use crate::actor::wm_controller::WmCommand;
+use crate::layout_engine::LayoutCommand;
+use crate::sys::hotkey::Hotkey;
 use crate::actor::menu_bar::{DisplayWorkspaces, Workspace};
 use crate::common::config::{GridMaps, MenuBarSettings};
 
@@ -53,20 +64,24 @@ pub(super) fn shown(
         || (settings.grid_maps == GridMaps::All && in_use(display, workspace.grid))
 }
 
-/// The number before a lone map, when other grids are in use and it would not be
-/// clear which grid is on screen.
-pub(super) fn label(display: &DisplayWorkspaces, settings: &MenuBarSettings) -> Cow<'static, str> {
+/// The number before a cell's map: every map's, as on subline's strip, or a lone
+/// map's when other grids are in use and it would not be clear which grid is on
+/// screen.
+pub(super) fn label(
+    display: &DisplayWorkspaces,
+    workspace: &Workspace,
+    settings: &MenuBarSettings,
+) -> Cow<'static, str> {
     let active = active_grid(display);
     let others = display
         .workspaces
         .iter()
         .any(|w| w.grid != active && w.window_count > 0);
-    match active {
-        Some(grid) if settings.grid_maps == GridMaps::Active && others => {
-            Cow::Owned((grid + 1).to_string())
-        }
-        _ => Cow::Borrowed(""),
-    }
+    let numbered = match settings.grid_maps {
+        GridMaps::All => workspace.grid,
+        GridMaps::Active => active.filter(|_| others),
+    };
+    numbered.map_or(Cow::Borrowed(""), |grid| Cow::Owned((grid + 1).to_string()))
 }
 
 /// A map per grid, a cell per workspace at its row and column, shaded by whether
@@ -118,13 +133,13 @@ pub(super) fn build_grid_layout(
                 width += 2.0 * SEPARATOR_SPACING + separator_line.as_ref().map_or(0.0, |l| l.width);
             }
         }
-        if let Some(line) = Some(group[0].label.as_ref()).filter(|l| !l.is_empty()).and_then(&text) {
-            let line_width = line.width;
-            grid_labels.push((width, line));
-            width += line_width + GRID_LABEL_SPACING;
-        }
         let strength =
             if group.iter().any(|input| input.workspace.is_active) { 1.0 } else { GRID_MAP_DIMMED };
+        if let Some(line) = Some(group[0].label.as_ref()).filter(|l| !l.is_empty()).and_then(&text) {
+            let line_width = line.width;
+            grid_labels.push((width, line, strength));
+            width += line_width + GRID_LABEL_SPACING;
+        }
         let (rows, columns) = shape(group);
         let top = (height + extent(rows, GRID_MAP_CELL_HEIGHT)) / 2.0;
         for input in group {
@@ -167,12 +182,91 @@ pub(super) fn draw(cg: &CGContext, layout: &MenuIconLayout, y_offset: f64, foreg
         CGContext::set_rgb_fill_color(Some(cg), 1.0, 1.0, 1.0, alpha);
         CGContext::fill_path(Some(cg));
     }
-    for (x, line) in &layout.grid_labels {
+    for (x, line, strength) in &layout.grid_labels {
         foreground.setFill();
         let baseline = y_offset + (layout.size.height - (line.ascent + line.descent)) / 2.0
             + line.descent;
+        CGContext::save_g_state(Some(cg));
+        CGContext::set_alpha(Some(cg), *strength);
         CGContext::set_text_position(Some(cg), *x, baseline);
         unsafe { line.line.draw(cg) };
+        CGContext::restore_g_state(Some(cg));
+    }
+}
+
+/// The Workspace menu's entry for a grid: its number, and how many windows it
+/// holds when any.
+fn grid_menu_title(grid: usize, windows: usize) -> String {
+    match windows {
+        0 => format!("Grid {}", grid + 1),
+        1 => format!("Grid {} · 1 window", grid + 1),
+        n => format!("Grid {} · {n} windows", grid + 1),
+    }
+}
+
+/// The key bound to showing grid N (1-based), for the menu to show.
+fn grid_hotkey(hotkeys: &[(Hotkey, WmCommand)], grid: usize) -> Option<&Hotkey> {
+    hotkeys.iter().find_map(|(hotkey, command)| {
+        matches!(
+            command,
+            WmCommand::ReactorCommand(reactor::Command::Layout(LayoutCommand::SwitchToGrid(n)))
+                if *n == grid
+        )
+        .then_some(hotkey)
+    })
+}
+
+impl MenuIcon {
+    /// With workspaces in grids, the Workspace menu lists the grids rather than
+    /// every cell, the one on screen checked, and stepping through workspaces one
+    /// by one is left out. False when the workspaces are not a grid.
+    pub(super) fn sync_grid_menu(
+        &mut self,
+        workspaces: &[Workspace],
+        hotkeys: &[(Hotkey, WmCommand)],
+    ) -> bool {
+        let grid = !workspaces.is_empty() && workspaces.iter().all(|w| w.grid.is_some());
+        self.next_workspace_item.setHidden(grid);
+        self.prev_workspace_item.setHidden(grid);
+        for item in self.grid_items.drain(..) {
+            self.workspace_submenu.remove(&item);
+        }
+        if !grid {
+            return false;
+        }
+        for workspace in self.workspace_items.drain(..) {
+            self.workspace_submenu.remove(&workspace.item);
+        }
+        let grids = workspaces.iter().filter_map(|w| w.grid).max().map_or(0, |g| g + 1);
+        for grid in 0..grids {
+            let windows =
+                workspaces.iter().filter(|w| w.grid == Some(grid)).map(|w| w.window_count).sum();
+            let item = make_menu_item(
+                self.mtm,
+                &grid_menu_title(grid, windows),
+                Some(MenuActionHandler::on_switch_grid),
+                Some(&self.menu_handler),
+            );
+            let native = item.ns_menu_item().retain();
+            native.setTag(grid as isize);
+            set_menu_item_checked(
+                &native,
+                workspaces.iter().any(|w| w.is_active && w.grid == Some(grid)),
+            );
+            set_menu_item_hotkey(&native, grid_hotkey(hotkeys, grid + 1));
+            self.workspace_submenu.add(item);
+            self.grid_items.push(native);
+        }
+        self.workspace_item.setEnabled(true);
+        true
+    }
+}
+
+impl MenuActionHandler {
+    fn on_switch_grid(&self, sender: Option<&NSMenuItem>) {
+        if let Some(tag) = sender.map(|sender| sender.tag()).filter(|&tag| tag >= 0) {
+            self.emit(super::MenuAction::SwitchToGrid(tag as usize + 1));
+        }
     }
 }
 
@@ -196,6 +290,32 @@ mod tests {
             grid_cell: None,
             grid: None,
         }
+    }
+
+    #[test]
+    fn the_workspace_menu_names_grids_with_their_windows_and_keys() {
+        assert_eq!(grid_menu_title(0, 0), "Grid 1");
+        assert_eq!(grid_menu_title(1, 1), "Grid 2 · 1 window");
+        assert_eq!(grid_menu_title(8, 3), "Grid 9 · 3 windows");
+        let config = crate::common::config::Config::parse(
+            r#"
+                [settings]
+                [keys]
+                "Alt + 2" = { switch_to_grid = 2 }
+            "#,
+        )
+        .unwrap();
+        let hotkeys: Vec<_> = config
+            .binding_mode_specs
+            .iter()
+            .find(|(mode, _)| mode == "default")
+            .unwrap()
+            .1
+            .iter()
+            .filter_map(|(spec, command)| Some((spec.parse::<Hotkey>().ok()?, command.clone())))
+            .collect();
+        assert!(grid_hotkey(&hotkeys, 2).is_some());
+        assert!(grid_hotkey(&hotkeys, 1).is_none());
     }
 
     #[test]
@@ -224,7 +344,9 @@ mod tests {
         };
         let inputs = render_inputs(&displays, &settings);
         assert_eq!(inputs.len(), 18, "grids 1 and 2, every cell; not grid 3");
-        assert!(inputs.iter().all(|input| input.label.is_empty() && !input.show_windows));
+        assert!(inputs.iter().all(|input| !input.show_windows));
+        assert!(inputs[..9].iter().all(|input| input.label == "1"), "every map has its number");
+        assert!(inputs[9..].iter().all(|input| input.label == "2"));
 
         let layout = build_grid_layout(&inputs, || None, |_| None);
         let cells = &layout.grid_cells;

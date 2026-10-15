@@ -70,6 +70,8 @@ pub enum MenuAction {
     NextWorkspace,
     PrevWorkspace,
     SwitchToWorkspace(usize),
+    /// Grid N, 1-based.
+    SwitchToGrid(usize),
     SaveLayout(PathBuf),
     SaveMasterFile,
     RestoreLayout {
@@ -98,6 +100,8 @@ pub struct MenuIcon {
     workspace_item: Retained<NSMenuItem>,
     workspace_submenu: Rc<Menu>,
     workspace_items: Vec<WorkspaceMenuItem>,
+    /// With workspaces in grids, the Workspace menu's grid entries instead.
+    grid_items: Vec<Retained<NSMenuItem>>,
     next_workspace_item: Retained<NSMenuItem>,
     prev_workspace_item: Retained<NSMenuItem>,
     tiling_item: Retained<NSMenuItem>,
@@ -165,6 +169,7 @@ impl MenuIcon {
             workspace_item: built.workspace_item,
             workspace_submenu: built.workspace_submenu,
             workspace_items: Vec::new(),
+            grid_items: Vec::new(),
             next_workspace_item: built.next_workspace_item,
             prev_workspace_item: built.prev_workspace_item,
             tiling_item: built.tiling_item,
@@ -210,6 +215,9 @@ impl MenuIcon {
         workspaces: &[Workspace],
         hotkeys: &[(Hotkey, WmCommand)],
     ) {
+        if self.sync_grid_menu(workspaces, hotkeys) {
+            return;
+        }
         let unchanged = self.workspace_items.len() == workspaces.len()
             && self.workspace_items.iter().zip(workspaces).all(|(item, workspace)| {
                 item.identity == workspace.id
@@ -354,7 +362,7 @@ struct MenuIconLayout {
     size: CGSize,
     workspaces: Vec<WorkspaceRenderData>,
     grid_cells: Vec<(CGRect, f64)>,
-    grid_labels: Vec<(f64, CachedTextLine)>,
+    grid_labels: Vec<(f64, CachedTextLine, f64)>,
     separators: Vec<f64>,
     separator_line: Option<CachedTextLine>,
 }
@@ -404,7 +412,7 @@ fn render_inputs<'a>(
                     space: display.space,
                     workspace,
                     label: if grid {
-                        grid_map::label(display, settings)
+                        grid_map::label(display, workspace, settings)
                     } else if show_windows {
                         Cow::Borrowed("")
                     } else {

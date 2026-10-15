@@ -52,10 +52,15 @@ name), and `grid` wins when both are given.
 
 `[settings.ui.menu_bar] grid_maps`:
 
-- `"all"` (default): a 3x3 map per grid, side by side, for the grids that have
-  windows plus the grid on screen. The grid on screen is drawn at full strength.
+- `"all"` (default): a 3x3 map per grid, side by side, each after its number,
+  for the grids that have windows plus the grid on screen, as on subline's
+  strip. The grid on screen, number and map, is drawn at full strength.
 - `"active"`: one map, the grid on screen, after its number when more than one
   grid has windows.
+
+Clicking the item opens rift's menu; its Workspace submenu lists grids 1 to 9
+with their window counts and keys, the grid on screen checked, and picking one
+shows it. Stepping through workspaces one by one is left out of that menu.
 
 ## Overview
 

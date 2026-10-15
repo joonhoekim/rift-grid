@@ -275,6 +275,9 @@ impl Menu {
             MenuAction::SwitchToWorkspace(workspace) => {
                 self.send_layout_command(LayoutCommand::SwitchToWorkspace(workspace));
             }
+            MenuAction::SwitchToGrid(grid) => {
+                self.send_layout_command(LayoutCommand::SwitchToGrid(grid));
+            }
             MenuAction::RestoreLayout { path, scope, source } => {
                 self.reactor_tx.send(reactor::Event::Command(reactor::Command::Reactor(
                     reactor::ReactorCommand::RestoreLayout { path, scope, source },
