@@ -250,15 +250,24 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
         }
     };
 
+    let mc_channel =
+        rift_wm::actor::mission_control::channel_if_enabled(&config.settings.ui.mission_control);
+    let mc_tx = mc_channel.as_ref().map(|(tx, _)| tx.clone());
     let mach_bridge_rx = broadcast_rx;
 
     let server_state_for_bridge = server_state.clone();
+    let mc_bridge_tx = mc_tx.clone();
     std::thread::spawn(move || {
         let mut rx = mach_bridge_rx;
         let server_state = server_state_for_bridge;
         loop {
             match rx.blocking_recv() {
                 Some((_span, event)) => {
+                    if let Some(tx) = &mc_bridge_tx
+                        && rift_wm::actor::mission_control::shows(&event)
+                    {
+                        tx.send(rift_wm::actor::mission_control::Event::Changed);
+                    }
                     server_state.publish(event);
                 }
                 None => {
@@ -272,9 +281,6 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
         restore_file: restore_file(),
         config: config.clone(),
     };
-    let mc_channel =
-        rift_wm::actor::mission_control::channel_if_enabled(&config.settings.ui.mission_control);
-    let mc_tx = mc_channel.as_ref().map(|(tx, _)| tx.clone());
     let (_mc_native_tx, mc_native_rx) = rift_wm::actor::channel();
     let (wm_controller, wm_controller_sender) = WmController::new(
         wm_config,

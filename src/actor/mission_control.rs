@@ -17,6 +17,17 @@ pub enum Event {
     RefreshCurrentWorkspace,
     Configure(MissionControlSettings),
     Input(Input),
+    /// The focus, the windows or the active workspace changed.
+    Changed,
+}
+
+/// Whether a broadcast is one the open overview has to show.
+pub fn shows(event: &crate::model::broadcast::BroadcastEvent) -> bool {
+    use crate::model::broadcast::BroadcastEvent as E;
+    matches!(
+        event,
+        E::FocusedWindowChanged { .. } | E::WindowsChanged { .. } | E::WorkspaceChanged { .. }
+    )
 }
 
 /// Semantic input; native CGEvents stay on the existing input thread.
@@ -87,7 +98,8 @@ fn merge_motion(event: &mut Event, next: Event) -> Result<(), Event> {
     }
 }
 
-const WATCH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+// A fallback: changes elsewhere than the active cell are not broadcast.
+const WATCH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 
 pub type Sender = actor::Sender<Event>;
 pub type Receiver = actor::Receiver<Event>;
@@ -152,8 +164,8 @@ impl MissionControlActor {
         let mut edge_timer = None;
         let mut live_timer = None;
         let mut pending_event = None;
-        // While the overview is open, look for focus moves and windows that came or
-        // went this often: the reactor does not tell the overview about them.
+        // While the overview is open, look for changes no broadcast reported (windows
+        // in other grids) this often.
         let mut watch_timer: Option<Timer> = None;
         loop {
             let edge_active = self.session.as_ref().is_some_and(OverviewSession::edge_active);
@@ -280,6 +292,11 @@ impl MissionControlActor {
                 }
             }
             Event::Dismiss => self.close(),
+            Event::Changed => {
+                if let Some(session) = &mut self.session {
+                    session.sync_focus(&self.reactor, self.cache.as_ref());
+                }
+            }
             Event::RefreshCurrentWorkspace => {
                 if let Some(session) = &mut self.session {
                     session.refresh(&self.reactor, self.cache.as_ref(), None);
