@@ -299,6 +299,7 @@ fn active_cell(workspaces: &[RuntimeWorkspaceData], shape: (usize, usize)) -> (u
 
 /// Every cell of the grid at once, each a scaled copy of the display, with the
 /// camera on the active cell.
+#[cfg(test)]
 pub(super) fn project_grid(
     display: CGRect,
     overview: CGSize,
