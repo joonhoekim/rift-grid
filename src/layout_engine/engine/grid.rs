@@ -59,7 +59,7 @@ impl LayoutEngine {
                 let Some(grid) = self.active_grid(space) else {
                     return EventResponse::default();
                 };
-                match self.workspaces.grid_centre_cell(space, grid) {
+                match self.workspaces.grid_center_cell(space, grid) {
                     Some(target) if Some(target) != self.workspaces.active_workspace(space) => {
                         self.activate_workspace(window_store, space, target, None)
                     }
@@ -457,12 +457,12 @@ mod tests {
         let _ = grid(&mut engine, &mut store, LayoutCommand::GridCell(Direction::Up));
         let a = open(&mut engine, &mut store, 1);
         let b = open(&mut engine, &mut store, 2);
-        // The centre: d | (e / f), each new window halving the focused tile.
+        // The center: d | (e / f), each new window halving the focused tile.
         let _ = grid(&mut engine, &mut store, LayoutCommand::GridCell(Direction::Down));
         let d = open(&mut engine, &mut store, 3);
         let e = open(&mut engine, &mut store, 4);
         let f = open(&mut engine, &mut store, 5);
-        let centre = cell(&mut engine, 4);
+        let center = cell(&mut engine, 4);
         let focus = |engine: &mut LayoutEngine, store: &mut WindowStore, wid| {
             let _ = engine.handle_event(store, LayoutEvent::WindowFocused(space, wid));
         };
@@ -481,7 +481,7 @@ mod tests {
             LayoutCommand::GridFocus(Direction::Left),
         );
         assert_eq!(response.focus_window, Some(d));
-        assert_eq!(engine.workspaces().active_workspace(space), Some(centre));
+        assert_eq!(engine.workspaces().active_workspace(space), Some(center));
 
         // Up from the left tile comes into the left one above; from the right, the right.
         let response = grid(&mut engine, &mut store, LayoutCommand::GridFocus(Direction::Up));
@@ -519,7 +519,7 @@ mod tests {
 
         assert_eq!(engine.workspaces_mut().list_workspaces(space).len(), 81, "9 grids of 9 cells");
         assert_eq!(engine.workspaces_mut().list_workspaces(space)[13].1, "2·5");
-        assert_eq!(active(&engine), Some(cell(&mut engine, 4)), "grid 1, centre");
+        assert_eq!(active(&engine), Some(cell(&mut engine, 4)), "grid 1, center");
 
         // Cells never lead into the next grid.
         let _ = run(&mut engine, &mut store, LayoutCommand::GridCell(Direction::Right));
@@ -527,7 +527,7 @@ mod tests {
         let edge = run(&mut engine, &mut store, LayoutCommand::GridCell(Direction::Right));
         assert!(!edge.changed, "grid 1's right edge, not grid 2");
 
-        // A grid opens at its centre, and comes back to the cell it was left on.
+        // A grid opens at its center, and comes back to the cell it was left on.
         let _ = run(&mut engine, &mut store, LayoutCommand::SwitchToGrid(2));
         assert_eq!(active(&engine), Some(cell(&mut engine, 13)));
         let _ = run(&mut engine, &mut store, LayoutCommand::GridCell(Direction::Up));
@@ -537,7 +537,7 @@ mod tests {
         let _ = run(&mut engine, &mut store, LayoutCommand::SwitchToGrid(2));
         assert_eq!(active(&engine), Some(cell(&mut engine, 10)));
         let _ = run(&mut engine, &mut store, LayoutCommand::GridCenter);
-        assert_eq!(active(&engine), Some(cell(&mut engine, 13)), "this grid's centre");
+        assert_eq!(active(&engine), Some(cell(&mut engine, 13)), "this grid's center");
         let nothing = run(&mut engine, &mut store, LayoutCommand::SwitchToGrid(10));
         assert!(!nothing.changed, "there are nine grids");
 

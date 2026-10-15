@@ -10,7 +10,7 @@ Most work fits in one 3x3 grid; more grids keep separate contexts apart.
   the mental model, and a per-grid size can be opened up later if it is ever
   needed.
 - **Cell**: one rift virtual workspace. The display shows one cell at a time.
-- **Current cell**: each grid remembers the cell it was last on, the centre cell
+- **Current cell**: each grid remembers the cell it was last on, the center cell
   until then.
 
 ## Model (first step: grids per display)
@@ -33,7 +33,7 @@ table of which display owns which grid; with one display the two are the same.
 | Alt+IJKL / arrows | `grid_focus` | Tile beside, or the next cell of this grid past its edge |
 | Alt+Shift+IJKL / arrows | `grid_move` | Swap with the tile beside, or carry the window into the next cell |
 | Alt+Cmd+IJKL | `grid_cell` | Next cell of this grid |
-| Alt+H | `grid_center` | Centre cell of the grid on screen |
+| Alt+H | `grid_center` | Center cell of the grid on screen |
 | Alt+Tab | `focus_recent_window` | The window focused before this one, whichever cell or grid it is in; again goes back |
 | Alt+O | `show_mission_control_all` | Overview; again for the whole grid, again to close |
 
@@ -76,4 +76,4 @@ only stage.
 
 When the active cell changes in the first stage, the camera moves as
 `[settings.ui.mission_control] grid_follow` says: `"reveal"` (default) moves only as far as it takes to show the active cell whole, a gap
-from the edges; `"center"` centres the active cell every time.
+from the edges; `"center"` centers the active cell every time.

@@ -25,7 +25,7 @@ pub enum GridFollow {
     #[default]
     #[setting(label = "Just enough to show it")]
     Reveal,
-    /// Centre the active cell every time.
-    #[setting(label = "Centre it")]
+    /// Center the active cell every time.
+    #[setting(label = "Center it")]
     Center,
 }

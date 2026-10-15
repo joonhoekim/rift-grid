@@ -363,7 +363,7 @@ enum LayoutCommands {
     GridMove { direction: String },
     /// Workspace grid: go to the neighboring cell
     GridCell { direction: String },
-    /// Workspace grid: go to the centre cell of the grid on screen
+    /// Workspace grid: go to the center cell of the grid on screen
     GridCenter,
     /// Workspace grid: show grid N (1-9) at its current cell
     SwitchGrid { grid: usize },

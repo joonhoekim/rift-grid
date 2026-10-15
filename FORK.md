@@ -15,10 +15,10 @@ What subline set out to do, and this fork does on rift:
 
 - Place workspaces in a spatial model, a grid of cells, so that each cell is
   easy to remember and to reach.
-- Name a cell by where it is, not by a number: the centre, the top left, the
+- Name a cell by where it is, not by a number: the center, the top left, the
   left, the bottom left, or as an offset from -1 to 1 on each axis. A place in a
   square is easier to picture than a number from 1 to 9.
-- Move by direction: going from the centre to the bottom right is more natural
+- Move by direction: going from the center to the bottom right is more natural
   than going from 1 to 9.
 - Show the whole n x n grid from above in the overview, rather than workspaces
   in one row or wrapped into rows.

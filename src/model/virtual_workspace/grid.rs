@@ -86,7 +86,7 @@ impl WorkspaceStore {
     }
 
     /// Grid `grid`'s (0-based) current cell on `space`: the one it was last on, its
-    /// centre until then.
+    /// center until then.
     pub fn grid_current_cell(&self, space: SpaceId, grid: usize) -> Option<VirtualWorkspaceId> {
         if !self.grid_enabled() || grid >= GRID_COUNT {
             return None;
@@ -94,11 +94,11 @@ impl WorkspaceStore {
         if let Some(&id) = self.grid_current.get(&(space, grid)) {
             return Some(id);
         }
-        self.grid_centre_cell(space, grid)
+        self.grid_center_cell(space, grid)
     }
 
-    /// Grid `grid`'s (0-based) centre cell on `space`.
-    pub fn grid_centre_cell(&self, space: SpaceId, grid: usize) -> Option<VirtualWorkspaceId> {
+    /// Grid `grid`'s (0-based) center cell on `space`.
+    pub fn grid_center_cell(&self, space: SpaceId, grid: usize) -> Option<VirtualWorkspaceId> {
         if !self.grid_enabled() || grid >= GRID_COUNT {
             return None;
         }
@@ -157,7 +157,7 @@ mod tests {
         let resolve = |store: &mut WorkspaceStore, selector: Option<&WorkspaceSelector>, grid| {
             store.resolve_rule_workspace_with_policy(space, selector, grid, None, false).unwrap()
         };
-        assert_eq!(resolve(&mut store, None, Some(2)), ids[13], "grid 2's centre at first");
+        assert_eq!(resolve(&mut store, None, Some(2)), ids[13], "grid 2's center at first");
         store.set_active_workspace(space, ids[10]);
         assert_eq!(resolve(&mut store, None, Some(2)), ids[10], "then where grid 2 was left");
         let cell = WorkspaceSelector::Index(0);

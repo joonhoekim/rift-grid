@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn a_map_per_grid_in_use_and_the_grid_on_screen() {
-        // Grid 1 on screen at its centre with a window in its top-left cell; grid 2
+        // Grid 1 on screen at its center with a window in its top-left cell; grid 2
         // has a window; grid 3 has none.
         let workspaces: Vec<_> = (0..27)
             .map(|index| {

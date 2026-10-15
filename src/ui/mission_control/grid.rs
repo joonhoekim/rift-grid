@@ -94,7 +94,7 @@ const BUTTON: CGSize = CGSize { width: 34.0, height: 26.0 };
 const BUTTON_GAP: f64 = 6.0;
 const BUTTON_PAD: f64 = 5.0;
 
-/// The grid row, centred at the top of the overview: the row's frame and each
+/// The grid row, centered at the top of the overview: the row's frame and each
 /// button's frame within it.
 pub(super) fn grid_button_frames(overview: CGSize, count: usize) -> (CGRect, Vec<CGRect>) {
     let n = count as f64;
@@ -175,7 +175,7 @@ impl GridLook {
 
 /// The frame of one grid cell. Cells keep the display's aspect ratio and lie `gap`
 /// apart. In the first stage a cell is `zoom` of the display and the camera, a
-/// point in cells, is at the centre; the whole grid is fitted and centered, never
+/// point in cells, is at the center; the whole grid is fitted and centered, never
 /// larger than `zoom`.
 pub(super) fn grid_cell_frame(
     overview: CGSize,
@@ -213,9 +213,9 @@ pub(super) fn grid_cell_frame(
 }
 
 /// Where the first stage's camera goes when the active cell is `active`: on it when
-/// it centres or has no place yet, otherwise it stays unless the active cell would
+/// it centers or has no place yet, otherwise it stays unless the active cell would
 /// not show whole, a margin from the edges, and then moves only that far. A cell
-/// too large to show whole with its margins is centred.
+/// too large to show whole with its margins is centered.
 pub(super) fn follow_camera(
     camera: Option<(f64, f64)>,
     (row, column): (usize, usize),
@@ -805,7 +805,7 @@ mod tests {
 
         let overview = CGSize::new(1600.0, 1000.0);
         let (row, frames) = grid_button_frames(overview, 3);
-        assert!((row.mid().x - 800.0).abs() < 1e-9, "centred");
+        assert!((row.mid().x - 800.0).abs() < 1e-9, "centered");
         assert_eq!(frames.len(), 3);
         assert!(frames[0].max().x < frames[1].origin.x);
         assert!(frames.iter().all(|f| f.max().x <= row.size.width && f.max().y <= row.size.height));
@@ -826,21 +826,21 @@ mod tests {
         // Opening: on the active cell.
         assert_eq!(camera(None, (1, 1)), (1.0, 1.0));
         // A cell is 800x500 with a 40 gap; the view has room for a neighbour's
-        // whole cell only if it fits within 1600/2 - 400 - 40 = 360 of the centre.
+        // whole cell only if it fits within 1600/2 - 400 - 40 = 360 of the center.
         // The next cell is 840 away: the camera moves 480 of 840.
         let (row, column) = camera(Some((1.0, 1.0)), (1, 2));
         assert_eq!(row, 1.0);
         assert!((column - (1.0 + 480.0 / 840.0)).abs() < 1e-9);
-        // Back to the cell it came from: that cell is now 480 off centre, past the
+        // Back to the cell it came from: that cell is now 480 off center, past the
         // 360 of room, so the camera moves 120 back, not all the way.
         let (_, back) = camera(Some((row, column)), (1, 1));
         assert!((back - (column - 120.0 / 840.0)).abs() < 1e-9);
         // An active cell already on show leaves the camera where it is.
         assert_eq!(camera(Some((1.2, 1.3)), (1, 1)), (1.2, 1.3));
-        // Centring puts the camera on the active cell every time.
-        let centre = GridLook { follow: GridFollow::Center, ..look };
-        assert_eq!(follow_camera(Some((1.0, 1.0)), (1, 2), display, display, centre), (1.0, 2.0));
-        // A cell larger than the view with its margins is centred.
+        // Centering puts the camera on the active cell every time.
+        let center = GridLook { follow: GridFollow::Center, ..look };
+        assert_eq!(follow_camera(Some((1.0, 1.0)), (1, 2), display, display, center), (1.0, 2.0));
+        // A cell larger than the view with its margins is centered.
         let big = GridLook { zoom: 0.99, ..look };
         assert_eq!(follow_camera(Some((1.0, 1.0)), (1, 2), display, display, big), (1.0, 2.0));
     }
@@ -902,7 +902,7 @@ mod tests {
     }
 
     #[test]
-    fn grid_overview_first_stage_centres_the_active_cell() {
+    fn grid_overview_first_stage_centers_the_active_cell() {
         let display = rect(0.0, 0.0, 1600.0, 1000.0);
         let overview = CGSize::new(1600.0, 1000.0);
         let mut workspaces: Vec<_> = (0..9)
@@ -928,7 +928,7 @@ mod tests {
         };
 
         let cell = frames(&workspaces, look);
-        assert_eq!(cell[4], rect(400.0, 250.0, 800.0, 500.0), "zoom of the display, centred");
+        assert_eq!(cell[4], rect(400.0, 250.0, 800.0, 500.0), "zoom of the display, centered");
         assert_eq!(cell[5].origin.x, cell[4].max().x + 40.0, "the neighbour a gap away");
         assert_eq!(cell[1].max().y + 40.0, cell[4].origin.y);
         assert!(cell[3].origin.x < 0.0 && cell[3].max().x > 0.0, "neighbours show at the edges");
