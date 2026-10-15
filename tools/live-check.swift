@@ -2,7 +2,8 @@
 // depends on that unit tests cannot reach (window ordering, overlay windows,
 // screen capture, the event tap). See tools/live-check for how to run it.
 //
-//   live-check windows TITLE...   open plain windows with these titles and wait
+//   live-check windows X,Y TITLE...  open plain windows with these titles at a
+//                                    top-left point, and wait
 //   live-check check [UUID]       run the checks on that display, or the active one
 
 import AppKit
@@ -11,13 +12,19 @@ import Foundation
 
 // MARK: - Test windows
 
-func openWindows(_ titles: [String]) {
+/// Open the windows at `at`, a top-left point in WindowServer coordinates, so
+/// they appear on the display being checked: macOS otherwise opens them on the
+/// display of the active app, whichever rift is testing.
+func openWindows(at: CGPoint, _ titles: [String]) {
     let app = NSApplication.shared
     app.setActivationPolicy(.regular)
     var windows: [NSWindow] = []
+    // AppKit counts up from the bottom of the main display.
+    let top = NSScreen.screens.first?.frame.maxY ?? 0
     for (i, title) in titles.enumerated() {
+        let origin = CGPoint(x: at.x + CGFloat(i * 60), y: top - at.y - CGFloat(i * 60) - 320)
         let w = NSWindow(
-            contentRect: NSRect(x: 200 + i * 60, y: 200 + i * 60, width: 480, height: 320),
+            contentRect: NSRect(origin: origin, size: CGSize(width: 480, height: 320)),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered, defer: false)
         w.title = title
@@ -163,7 +170,7 @@ func check(display wanted: String?) throws {
     // Two plain windows, tiled into that cell.
     let helper = Process()
     helper.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
-    helper.arguments = ["windows", "rift-check A", "rift-check B"]
+    helper.arguments = ["windows", "\(Int(visible.minX + 80)),\(Int(visible.minY + 80))", "rift-check A", "rift-check B"]
     try helper.run()
     defer { helper.terminate() }
     var tiles: [String: CGRect] = [:]
@@ -296,7 +303,9 @@ func serverPidsNamed(_ name: String) -> [Int32] {
 let args = Array(CommandLine.arguments.dropFirst())
 switch args.first {
 case "windows":
-    openWindows(Array(args.dropFirst()))
+    let xy = args.count > 1 ? args[1].split(separator: ",").compactMap { Double($0) } : []
+    guard xy.count == 2 else { print("usage: live-check windows X,Y TITLE..."); exit(2) }
+    openWindows(at: CGPoint(x: xy[0], y: xy[1]), Array(args.dropFirst(2)))
 case "check":
     do {
         try check(display: args.count > 1 ? args[1] : nil)
@@ -311,6 +320,6 @@ case "check":
     }
     exit(failed == 0 ? 0 : 1)
 default:
-    print("usage: live-check check [display-uuid] | live-check windows TITLE...")
+    print("usage: live-check check [display-uuid] | live-check windows X,Y TITLE...")
     exit(2)
 }
