@@ -99,6 +99,9 @@ impl Shareable {
     /// Fetch again at the next chance.
     pub fn expire(&mut self) { self.fetched = None; }
 
+    /// Wait out the age before asking again, as after a fetch.
+    pub fn defer(&mut self) { self.fetched = Some(Instant::now()); }
+
     pub fn refresh(&mut self, send: impl Fn(Note) + Send + 'static) {
         self.fetching = true;
         let callback = RcBlock::new(move |content: *mut SCShareableContent, _: *mut NSError| {

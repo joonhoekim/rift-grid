@@ -129,8 +129,11 @@ impl Reactor {
             || self.communication_manager.events_tx.is_none()
             || !self.grid_motion_manager.shareable.wants(CONTENT_AGE)
             || !self.layout_manager.layout_engine.workspaces().grid_enabled()
-            || !CGPreflightScreenCaptureAccess()
         {
+            return;
+        }
+        if !CGPreflightScreenCaptureAccess() {
+            self.grid_motion_manager.shareable.defer();
             return;
         }
         let send = self.grid_motion_send();
