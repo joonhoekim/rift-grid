@@ -308,8 +308,13 @@ pub struct Carried {
 /// The overlay a slide plays on, covering the display below the menu bar.
 pub struct Pan {
     generation: u64,
+    frame: CGRect,
     root: Retained<CALayer>,
     world: Retained<CALayer>,
+    /// Where the cell last moved to lies in `world`; the slide heads there.
+    offset: CGPoint,
+    /// The last move's carried windows, replaced by the next move's.
+    carried: Vec<Retained<CALayer>>,
     size: CGSize,
     scale: f64,
     // The surface must be detached before its WindowServer window drops.
@@ -360,8 +365,11 @@ impl Pan {
         CATransaction::flush();
         Ok(Self {
             generation,
+            frame,
             root,
             world,
+            offset: CGPoint::new(0.0, 0.0),
+            carried: Vec::new(),
             size,
             scale,
             _surface: surface,
@@ -371,10 +379,17 @@ impl Pan {
 
     pub fn generation(&self) -> u64 { self.generation }
 
+    /// Whether a move on `frame` can go on from this slide.
+    pub fn covers(&self, frame: CGRect) -> bool { self.frame == frame }
+
+    /// Take over the slide for move `generation`, which goes on from where this
+    /// one has got to.
+    pub fn continue_as(&mut self, generation: u64) { self.generation = generation; }
+
     /// Slide (or fade) to the cell made of `wallpaper` and `tiles`, back to
-    /// front, over `duration` seconds.
+    /// front, over `duration` seconds, from wherever an earlier slide has got to.
     pub fn run(
-        &self,
+        &mut self,
         step: Step,
         wallpaper: Option<&CGImage>,
         tiles: &[Tile],
@@ -382,6 +397,11 @@ impl Pan {
         duration: f64,
     ) {
         let (w, h) = (self.size.width, self.size.height);
+        if let Step::Cells { dx, dy } = step {
+            self.offset.x += dx as f64 * (w + GAP);
+            self.offset.y += dy as f64 * (h + GAP);
+        }
+        let offset = self.offset;
         let to = CALayer::layer();
         let mut moving = Vec::new();
         // One transaction: the layers must not reach the screen at their end
@@ -389,7 +409,7 @@ impl Pan {
         CATransaction::begin();
         CATransaction::setDisableActions(true);
         with_disabled_actions(|| {
-            to.setFrame(rect(0.0, 0.0, w, h));
+            to.setFrame(rect(offset.x, offset.y, w, h));
             to.setMasksToBounds(true);
             to.setBackgroundColor(Some(&color(0.08, 0.08, 0.1, 1.0)));
             if let Some(image) = wallpaper {
@@ -402,6 +422,9 @@ impl Pan {
             for tile in tiles {
                 to.addSublayer(&self.tile_layer(tile.frame, tile.image.as_deref(), tile.captured));
             }
+            for layer in self.carried.drain(..) {
+                layer.removeFromSuperlayer();
+            }
             for c in carried {
                 let layer = self.tile_layer(c.from, c.image.as_deref(), c.captured);
                 layer.setZPosition(10.0);
@@ -411,17 +434,12 @@ impl Pan {
             }
         });
         match step {
-            Step::Cells { dx, dy } => {
-                let offset = CGPoint::new(dx as f64 * (w + GAP), dy as f64 * (h + GAP));
-                to.setFrame(rect(offset.x, offset.y, w, h));
+            Step::Cells { .. } => {
+                let shown = unsafe { self.world.presentationLayer() }
+                    .map_or_else(|| self.world.position(), |shown| shown.position());
                 self.world.addSublayer(&to);
                 self.world.setPosition(CGPoint::new(-offset.x, -offset.y));
-                animate(
-                    &self.world,
-                    "position",
-                    &point_value(CGPoint::new(0.0, 0.0)),
-                    duration,
-                );
+                animate(&self.world, "position", &point_value(shown), duration);
             }
             Step::Grid { forward } => {
                 // Another context: the next grid comes forward over this one,
@@ -432,8 +450,9 @@ impl Pan {
                 animate(&to, "transform.scale", &NSNumber::new_f64(lean), duration);
             }
         }
-        for (layer, from) in &moving {
-            glide(layer, *from, duration);
+        for (layer, from) in moving {
+            glide(&layer, from, duration);
+            self.carried.push(layer);
         }
         CATransaction::commit();
         CATransaction::flush();

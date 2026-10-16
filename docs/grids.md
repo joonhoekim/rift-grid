@@ -92,4 +92,5 @@ from the edges; `"center"` centers the active cell every time.
   after the last move; the lit cell glides from the cell left to the cell
   arrived at.
 
-A move made while a slide is still playing shows at once; the map keeps up.
+A move made while a slide is still playing carries the slide on from where it
+has got to.

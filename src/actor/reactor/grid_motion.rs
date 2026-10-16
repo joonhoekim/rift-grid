@@ -280,15 +280,23 @@ impl Reactor {
         screen: &crate::sys::screen::ScreenInfo,
         carried: Vec<(WindowId, CGRect)>,
     ) {
-        // A move during a slide shows at once; the map still follows it.
-        if self.grid_motion_manager.pan.take().is_some() {
+        if !self.grid_motion_manager.shareable.has_content() || !CGPreflightScreenCaptureAccess()
+        {
+            self.grid_motion_manager.pan = None;
             self.grid_motion_manager.pending = None;
             return;
         }
-        if !self.grid_motion_manager.shareable.has_content() || !CGPreflightScreenCaptureAccess()
-        {
-            return;
+        // A move during a slide carries it on; a slide still waiting starts now.
+        let going =
+            self.grid_motion_manager.pan.as_ref().is_some_and(|pan| pan.covers(screen.frame));
+        if going {
+            if let Some(earlier) = self.grid_motion_manager.pending.as_ref().map(|p| p.generation) {
+                self.run_pan(earlier);
+            }
+        } else {
+            self.grid_motion_manager.pan = None;
         }
+        self.grid_motion_manager.pending = None;
         let started = std::time::Instant::now();
         let display = screen.id.as_u32();
         let scale = screen.backing_scale.max(1.0);
@@ -332,29 +340,33 @@ impl Reactor {
             // A window newer than the list: there next time.
             self.grid_motion_manager.shareable.expire();
         }
-        let manager = &self.grid_motion_manager;
+        let manager = &mut self.grid_motion_manager;
         let wallpaper = manager.shareable.wallpaper(display, local).is_none()
             && manager.shareable.capture_wallpaper(display, local, scale, send.clone());
-        if let Some(hud) = &manager.hud {
-            hud.set_visible(false);
-        }
-        let from =
-            manager.shareable.capture_display_now(display, local, scale, &leave_out, SCREEN_WAIT);
-        if let Some(hud) = &manager.hud {
-            hud.set_visible(true);
-        }
-        let Some(from) = from else {
-            debug!("Grid slide skipped: the screen was not captured in time");
-            return;
-        };
-        let pan = match Pan::show(generation, visible, scale, &from) {
-            Ok(pan) => pan,
-            Err(error) => {
-                debug!(?error, "Grid slide unavailable");
-                return;
+        if let Some(pan) = manager.pan.as_mut().filter(|_| going) {
+            pan.continue_as(generation);
+        } else {
+            if let Some(hud) = &manager.hud {
+                hud.set_visible(false);
             }
-        };
-        self.grid_motion_manager.pan = Some(pan);
+            let from = manager
+                .shareable
+                .capture_display_now(display, local, scale, &leave_out, SCREEN_WAIT);
+            if let Some(hud) = &manager.hud {
+                hud.set_visible(true);
+            }
+            let Some(from) = from else {
+                debug!("Grid slide skipped: the screen was not captured in time");
+                return;
+            };
+            match Pan::show(generation, visible, scale, &from) {
+                Ok(pan) => manager.pan = Some(pan),
+                Err(error) => {
+                    debug!(?error, "Grid slide unavailable");
+                    return;
+                }
+            }
+        }
         self.grid_motion_manager.pending = Some(Pending {
             generation,
             space,
@@ -385,9 +397,9 @@ impl Reactor {
             return;
         }
         let pending = manager.pending.take().unwrap();
-        let Some(pan) = manager.pan.as_ref().filter(|pan| pan.generation() == generation) else {
+        if manager.pan.as_ref().is_none_or(|pan| pan.generation() != generation) {
             return;
-        };
+        }
         let origin = pending.screen.origin;
         let local = |frame: CGRect| {
             CGRect::new(
@@ -438,7 +450,9 @@ impl Reactor {
         );
         let wallpaper = manager.shareable.wallpaper(pending.display, wallpaper_rect);
         let duration = self.config.settings.ui.grid_motion.duration_ms.clamp(50.0, 2000.0) / 1000.0;
-        pan.run(pending.step, wallpaper.map(|w| &**w), &tiles, &carried, duration);
+        if let Some(pan) = manager.pan.as_mut() {
+            pan.run(pending.step, wallpaper.map(|w| &**w), &tiles, &carried, duration);
+        }
         // A little longer than the slide: windows shown again redraw at their new
         // size a moment after they arrive.
         self.grid_motion_later(
