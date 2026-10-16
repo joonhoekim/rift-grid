@@ -131,8 +131,10 @@ impl LayoutEngine {
             return EventResponse::default();
         };
         if self.workspaces.active_workspace(target_space) == Some(workspace) {
+            // `changed`, or the reactor drops a grid command's response unused.
             return EventResponse {
                 focus_window: Some(wid),
+                changed: true,
                 ..EventResponse::default()
             };
         }
@@ -576,5 +578,22 @@ mod tests {
         let again = run(&mut engine, &mut store, LayoutCommand::FocusRecentWindow);
         assert_eq!(active(&engine), Some(cell(&mut engine, 13)));
         assert_eq!(again.focus_window, Some(other));
+
+        // In the same cell too.
+        let third = WindowId::new(93, 3);
+        let _ = engine.handle_event(
+            &mut store,
+            LayoutEvent::windows_observed(
+                space,
+                third.pid,
+                vec![window_layout_info(third, CGSize::new(0.0, 0.0))],
+                None,
+            ),
+        );
+        let _ = engine.handle_event(&mut store, LayoutEvent::WindowFocused(space, other));
+        let _ = engine.handle_event(&mut store, LayoutEvent::WindowFocused(space, third));
+        let same = run(&mut engine, &mut store, LayoutCommand::FocusRecentWindow);
+        assert_eq!(active(&engine), Some(cell(&mut engine, 13)));
+        assert_eq!((same.focus_window, same.changed), (Some(other), true));
     }
 }
