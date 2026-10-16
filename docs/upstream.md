@@ -17,8 +17,8 @@ New code lives in fork modules; upstream files only call into them.
 | `model/virtual_workspace.rs` | `grid_columns`, `grid_current`; `workspace_count`; `remap_grid_cells` in `remap_space`; a `grid` argument to `resolve_rule_workspace_with_policy` |
 | `common/config/types.rs` | `grid_columns`, app rules' `grid`, `validate_grid`; grid fields in `MissionControlSettings`, whose `Default` is written out by hand |
 | `ui/mission_control.rs`, `actor/mission_control.rs` | The grid overview's two stages, gliding cards, and refresh on reactor broadcasts |
-| `ui/menu_bar.rs`, `actor/menu_bar.rs` | Grid maps and the grid entries of the Workspace menu |
-| `ui/settings/*` | The grid and border pages and their search entries |
+| `ui/menu_bar.rs`, `actor/menu_bar.rs` | Grid maps and the grid entries of the Workspace menu; the grid fields in the settings preview's `Workspace` |
+| `ui/settings/*` | A Window Borders category (also in `sidebar.rs`'s color match), the fork's Overview page in place of `interface::overview`, and their search entries |
 
 ## Where merges conflict most
 
@@ -35,6 +35,10 @@ These could shrink the fork's footprint in upstream files. None is a defect.
   config change.
 - `resolve_rule_workspace_with_policy` takes an extra `grid` argument. Resolving
   the grid at its one call site would leave upstream's signature alone.
+- The settings app's category list, page match and search catalog: upstream
+  reorganizes these often, and each time the fork's Overview and Window Borders
+  entries conflict. `grid_pages::overview` copies upstream's Overview sections,
+  so check it against `interface::overview` after a merge.
 - `reactor.rs` has five separate hook calls. One `Event::Fork` variant with a
   hook before and after handling would make it two.
 
@@ -58,6 +62,12 @@ These could shrink the fork's footprint in upstream files. None is a defect.
   before the setup call instead of after it, in a commit of its own, to send
   upstream as is. If upstream fixes it another way, take upstream's version in
   the merge.
+- On macOS 27, `settings_native --verify` fails on upstream too: switching to
+  Traditional at a 700×420 window widens it to 704. The other checks pass with
+  that size left out.
+- On macOS 27 the unit tests abort now and then (about one run in five, mostly
+  the first after a build) with `Cannot form weak reference to instance of
+  class SLSWindowManagementFallbackBridge`, inside SkyLight. Run them again.
 
 ## Contributing back
 
