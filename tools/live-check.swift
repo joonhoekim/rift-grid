@@ -281,7 +281,7 @@ func check(display wanted: String?) throws {
     }
 }
 
-/// Processes running `name` with no arguments: rift itself, not `rift --settings`.
+/// Processes running `name`: rift itself, with or without `--config`, not `rift --settings`.
 func serverPidsNamed(_ name: String) -> [Int32] {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/bin/ps")
@@ -292,8 +292,9 @@ func serverPidsNamed(_ name: String) -> [Int32] {
     let text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
     p.waitUntilExit()
     return text.split(separator: "\n").compactMap { line in
-        let parts = line.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 1)
-        guard parts.count == 2, parts[1] == name || parts[1].hasSuffix("/" + name) else { return nil }
+        let parts = line.split(separator: " ")
+        guard parts.count >= 2, parts[1] == name || parts[1].hasSuffix("/" + name),
+              !parts.dropFirst(2).contains("--settings") else { return nil }
         return Int32(parts[0])
     }
 }
