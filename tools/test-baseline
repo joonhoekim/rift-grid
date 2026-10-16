@@ -1,4 +1,4 @@
-#!/bin/sh -e
+#!/bin/sh
 #
 # Run every test and keep each one's result, so that a macOS update can be
 # checked by what changed rather than by what fails: a few upstream tests read
@@ -9,6 +9,8 @@
 # Results go to ~/.local/state/rift-grid/tests-macos-VERSION-COMMIT.txt, one
 # "ok|FAILED name" a line, with the full output beside it. When a run from
 # another macOS version is there, the tests whose result changed are listed.
+
+set -eu
 
 here="$(cd "$(dirname "$0")" && pwd)"
 state="$HOME/.local/state/rift-grid"

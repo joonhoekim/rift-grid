@@ -1,4 +1,4 @@
-#!/bin/sh -e
+#!/bin/sh
 #
 # Check the running rift against the macOS it runs on, and compare with the
 # last run on another macOS version. Unit tests cover the logic; this covers
@@ -19,6 +19,8 @@
 # Results go to ~/.local/state/rift-grid/live-macos-VERSION-COMMIT.txt. When a
 # run from another macOS version is there, the checks whose result changed are
 # listed after the run.
+
+set -eu
 
 here="$(cd "$(dirname "$0")" && pwd)"
 state="$HOME/.local/state/rift-grid"
