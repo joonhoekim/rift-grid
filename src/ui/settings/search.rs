@@ -26,7 +26,7 @@ impl Entry {
         use super::layouts::Target;
         match section(&self.location) {
             "Spacing" => Some(Target::Spacing),
-            "Displays" => Some(Target::Displays),
+            "Display overrides" => Some(Target::Displays),
             _ => self.layout.map(Target::Layout),
         }
     }
@@ -112,7 +112,7 @@ fn describe(entry: &Draft) -> String {
         "App rules" => "Choose how Rift handles an application's windows.",
         "Workspace rules" => "Assign matching windows to a workspace.",
         "Keyboard shortcuts" => "View, add, and edit keyboard shortcuts.",
-        "Display settings" | "Displays" => "Customize spacing for a connected display.",
+        "Display overrides" => "Customize spacing and column widths for one display.",
         "Workspaces" => "Add workspaces and customize their names and layouts.",
         _ => return entry.location.clone(),
     };
@@ -157,9 +157,9 @@ const MANUAL: &[(Category, Option<LayoutMode>, &str, &str, &str)] = &[
     (
         Layouts,
         None,
-        "Displays",
-        "Display settings",
-        "monitor screen connected per display override gaps spacing widths",
+        "Display overrides",
+        "Display overrides",
+        "monitor screen connected per display override gaps spacing widths add display uuid",
     ),
     (
         Workspaces,
@@ -241,10 +241,10 @@ const MANUAL: &[(Category, Option<LayoutMode>, &str, &str, &str)] = &[
     (Borders, None, "Window Borders", "Focused color", "active border colour"),
     (Borders, None, "Window Borders", "Unfocused color", "inactive border colour"),
     (
-        Interface,
+        StackTabs,
         None,
-        "Interface",
-        "Stack Line",
+        "Stack Tabs",
+        "Stack Tabs",
         "stackline indicator color position thickness interaction",
     ),
     (
@@ -283,6 +283,13 @@ const MANUAL: &[(Category, Option<LayoutMode>, &str, &str, &str)] = &[
         "version latest release update",
     ),
     (About, None, "About", "Documentation", "docs help guide manual"),
+    (
+        About,
+        None,
+        "About",
+        "Matrix Room",
+        "matrix community chat discussion support",
+    ),
     (
         About,
         None,
@@ -351,11 +358,11 @@ fn catalog() -> &'static [Entry] {
             "Mouse & Trackpad › Scrolling layout gestures",
         );
         append::<DragDropSettings>(&mut out, "", Mouse, None, "Mouse & Trackpad › Drag & Drop");
-        append::<MenuBarSettings>(&mut out, "", Interface, None, "Interface › Menu Bar");
+        append::<MenuBarSettings>(&mut out, "", MenuBar, None, "Menu Bar");
         append::<MissionControlSettings>(&mut out, "", Overview, None, "Overview");
         append::<GridMotionSettings>(&mut out, "", Overview, None, "Overview › Grid Motion");
         append::<BorderSettings>(&mut out, "", Borders, None, "Window Borders");
-        append::<StackLineSettings>(&mut out, "", Interface, None, "Interface › Stack Line");
+        append::<StackLineSettings>(&mut out, "", StackTabs, None, "Stack Tabs");
         append::<LayoutSettings>(&mut out, "", Layouts, None, "Layouts");
         append::<BaseLayoutSettings>(&mut out, "", Layouts, None, "Layouts › Shared settings");
         for (title, layout) in super::pages::layouts() {
@@ -477,7 +484,7 @@ mod tests {
             (" FFM ", "Focus follows pointer", Mouse, None),
             ("stack offset", "Window offset", Layouts, Some(LayoutMode::Stack)),
             ("screen edges", "Screen edges", Layouts, None),
-            ("per display override", "Display settings", Layouts, None),
+            ("per display override", "Display overrides", Layouts, None),
         ] {
             let found = results(query);
             let first = found.first().expect("find a setting, not just its section");

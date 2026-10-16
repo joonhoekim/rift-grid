@@ -4,14 +4,36 @@
 use super::*;
 use crate::common::config::*;
 
+// Replaced by `overview` below; named here so it is not dead code.
+const _: fn(Ui, &Rc<Model>) -> Page = super::interface::overview;
+
+/// Upstream's Overview page (`interface::overview`), with the grid's settings.
 pub(super) fn overview(ui: Ui, model: &Rc<Model>) -> Page {
     let mut f = FormBuilder::new(ui, model);
-    let section = f.schema_rows(
-        Section::new(&ui, "Overview").description(
-            "Turning Overview on or off requires restarting Rift. The rest applies the next \
-             time it opens; the grid settings shape it when workspaces form a grid.",
-        ),
-        "",
+    f.tooltips = true;
+    let visibility = f.fields(
+        Section::new(&ui, "Workspaces"),
+        &["enabled", "show_empty_workspaces", "window_previews", "live_preview_interval_ms"],
+        |s| &s.settings.ui.mission_control,
+        |s| &mut s.settings.ui.mission_control,
+    );
+    let transitions = f.fields(
+        Section::new(&ui, "Transitions"),
+        &["fade_enabled"],
+        |s| &s.settings.ui.mission_control,
+        |s| &mut s.settings.ui.mission_control,
+    );
+    let duration = f.field(
+        "fade_duration_ms",
+        |s| &s.settings.ui.mission_control,
+        |s| &mut s.settings.ui.mission_control,
+    );
+    f.enabled(&duration, |s| {
+        s.settings.ui.mission_control.enabled && s.settings.ui.mission_control.fade_enabled
+    });
+    let grid = f.fields(
+        Section::new(&ui, "Grid").description("When workspaces form a grid."),
+        &["grid_fit", "grid_zoom", "grid_follow", "grid_gap", "grid_labels"],
         |s| &s.settings.ui.mission_control,
         |s| &mut s.settings.ui.mission_control,
     );
@@ -24,7 +46,18 @@ pub(super) fn overview(ui: Ui, model: &Rc<Model>) -> Page {
         |s| &s.settings.ui.grid_motion,
         |s| &mut s.settings.ui.grid_motion,
     );
-    f.finish(SettingsPage::new(&ui, "").section(section).section(motion))
+    f.finish(
+        SettingsPage::new(&ui, "")
+            .section(visibility)
+            .section(transitions.row(duration))
+            .section(grid)
+            .section(motion)
+            .section(Caption::new(
+                &ui,
+                "Turning Overview on or off takes effect after restarting Rift; the rest \
+                 applies the next time it opens.",
+            )),
+    )
 }
 
 /// A color well bound to a border color string.

@@ -1034,6 +1034,9 @@ impl Reactor {
             Event::BindingModeChanged { mode } => {
                 if self.binding_mode != mode {
                     let previous_mode = std::mem::replace(&mut self.binding_mode, mode.clone());
+                    if let Some(tx) = &self.menu_manager.menu_tx {
+                        tx.send(menu_bar::Event::BindingModeChanged(mode.clone()));
+                    }
                     let _ = self
                         .communication_manager
                         .event_broadcaster
@@ -4648,7 +4651,9 @@ impl Reactor {
                     self.try_focus_or_warp_without_raise(Some(space), &mut focus_window)
                 }
             } else if let Some(space) = pending_refocus_space.take() {
-                if let Some(wid) = self.visible_focus_candidate_in_active_workspace(space, None) {
+                let selected = self.layout_manager.layout_engine.selected_window(space);
+                if let Some(wid) = self.visible_focus_candidate_in_active_workspace(space, selected)
+                {
                     focus_window = Some(wid);
                     false
                 } else if !self.is_in_drag() {
