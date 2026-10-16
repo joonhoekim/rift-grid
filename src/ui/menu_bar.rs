@@ -101,7 +101,7 @@ pub struct MenuIcon {
     workspace_submenu: Rc<Menu>,
     workspace_items: Vec<WorkspaceMenuItem>,
     /// With workspaces in grids, the Workspace menu's grid entries instead.
-    grid_items: Vec<Retained<NSMenuItem>>,
+    grid_items: grid_map::GridItems,
     next_workspace_item: Retained<NSMenuItem>,
     prev_workspace_item: Retained<NSMenuItem>,
     tiling_item: Retained<NSMenuItem>,
@@ -169,7 +169,7 @@ impl MenuIcon {
             workspace_item: built.workspace_item,
             workspace_submenu: built.workspace_submenu,
             workspace_items: Vec::new(),
-            grid_items: Vec::new(),
+            grid_items: Default::default(),
             next_workspace_item: built.next_workspace_item,
             prev_workspace_item: built.prev_workspace_item,
             tiling_item: built.tiling_item,

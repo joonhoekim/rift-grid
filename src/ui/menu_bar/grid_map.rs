@@ -8,6 +8,7 @@ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_core_graphics::CGContext;
 
 use objc2::Message;
+use objc2::rc::Retained;
 use objc2_app_kit::NSMenuItem;
 
 use super::{
@@ -216,6 +217,17 @@ fn grid_hotkey(hotkeys: &[(Hotkey, WmCommand)], grid: usize) -> Option<&Hotkey> 
     })
 }
 
+/// The Workspace menu's grid entries and what they show.
+#[derive(Default)]
+pub(super) struct GridItems {
+    items: Vec<Retained<NSMenuItem>>,
+    shown: Vec<GridEntry>,
+}
+
+/// A grid entry's title, whether it is checked, and its key.
+#[derive(PartialEq)]
+struct GridEntry(String, bool, Option<Hotkey>);
+
 impl MenuIcon {
     /// With workspaces in grids, the Workspace menu lists the grids rather than
     /// every cell, the one on screen checked, and stepping through workspaces one
@@ -228,35 +240,49 @@ impl MenuIcon {
         let grid = !workspaces.is_empty() && workspaces.iter().all(|w| w.grid.is_some());
         self.next_workspace_item.setHidden(grid);
         self.prev_workspace_item.setHidden(grid);
-        for item in self.grid_items.drain(..) {
+        let entries: Vec<GridEntry> = if grid {
+            let grids = workspaces.iter().filter_map(|w| w.grid).max().map_or(0, |g| g + 1);
+            (0..grids)
+                .map(|grid| {
+                    let cells = || workspaces.iter().filter(move |w| w.grid == Some(grid));
+                    GridEntry(
+                        grid_menu_title(grid, cells().map(|w| w.window_count).sum()),
+                        cells().any(|w| w.is_active),
+                        grid_hotkey(hotkeys, grid + 1).cloned(),
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if entries == self.grid_items.shown && entries.len() == self.grid_items.items.len() {
+            return grid;
+        }
+        for item in self.grid_items.items.drain(..) {
             self.workspace_submenu.remove(&item);
         }
         if !grid {
+            self.grid_items.shown.clear();
             return false;
         }
         for workspace in self.workspace_items.drain(..) {
             self.workspace_submenu.remove(&workspace.item);
         }
-        let grids = workspaces.iter().filter_map(|w| w.grid).max().map_or(0, |g| g + 1);
-        for grid in 0..grids {
-            let windows =
-                workspaces.iter().filter(|w| w.grid == Some(grid)).map(|w| w.window_count).sum();
+        for (grid, GridEntry(title, checked, hotkey)) in entries.iter().enumerate() {
             let item = make_menu_item(
                 self.mtm,
-                &grid_menu_title(grid, windows),
+                title,
                 Some(MenuActionHandler::on_switch_grid),
                 Some(&self.menu_handler),
             );
             let native = item.ns_menu_item().retain();
             native.setTag(grid as isize);
-            set_menu_item_checked(
-                &native,
-                workspaces.iter().any(|w| w.is_active && w.grid == Some(grid)),
-            );
-            set_menu_item_hotkey(&native, grid_hotkey(hotkeys, grid + 1));
+            set_menu_item_checked(&native, *checked);
+            set_menu_item_hotkey(&native, hotkey.as_ref());
             self.workspace_submenu.add(item);
-            self.grid_items.push(native);
+            self.grid_items.items.push(native);
         }
+        self.grid_items.shown = entries;
         self.workspace_item.setEnabled(true);
         true
     }
