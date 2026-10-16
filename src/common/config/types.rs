@@ -225,6 +225,7 @@ impl VirtualWorkspaceSettings {
 
     pub fn validate(&self) -> Vec<String> {
         let mut issues = Vec::new();
+        self.validate_grid(&mut issues);
 
         if self.default_workspace_count == 0 {
             issues.push("default_workspace_count must be at least 1".to_string());

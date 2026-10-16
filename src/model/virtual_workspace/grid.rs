@@ -2,11 +2,9 @@
 //! direction leads comes from `common::grid_nav`.
 
 use super::{Direction, SpaceId, VirtualWorkspaceId, WorkspaceStore};
+pub use crate::common::config::GRID_COUNT;
 use crate::common::config::VirtualWorkspaceSettings;
 use crate::common::grid_nav;
-
-/// Grids per display, one per number key.
-pub const GRID_COUNT: usize = 9;
 
 /// How many workspaces each display gets: every cell of every grid when
 /// workspaces form grids, as the config says otherwise.

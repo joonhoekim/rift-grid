@@ -66,3 +66,21 @@ fn grid_settings_are_in_the_settings_app() {
     write(&mut settings, FieldValue::Number(0.06)).unwrap();
     assert_eq!(settings.grid_gap, 0.06);
 }
+
+#[test]
+fn grid_columns_and_rule_grids_are_checked() {
+    let issues = |toml: &str| Config::parse(toml).unwrap().validate();
+    let base = "[settings]\n[keys]\n[virtual_workspaces]\ngrid_columns = 3\n";
+    assert!(issues(base).is_empty(), "{:?}", issues(base));
+    let wide = issues(&base.replace("= 3", "= 4"));
+    assert!(wide.iter().any(|i| i.contains("grid_columns")), "{wide:?}");
+    let rule = |grid| {
+        issues(&format!(
+            "{base}[[virtual_workspaces.app_rules]]\napp_id = \"com.example.a\"\ngrid = {grid}\n"
+        ))
+    };
+    assert!(rule(9).is_empty(), "{:?}", rule(9));
+    for grid in [0, 10] {
+        assert!(rule(grid).iter().any(|i| i.contains("grid must be")), "grid {grid}");
+    }
+}

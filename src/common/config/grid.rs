@@ -2,7 +2,31 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::ConfigEnum;
+use super::{ConfigEnum, MAX_WORKSPACES, VirtualWorkspaceSettings};
+
+/// Grids per display, one per number key.
+pub const GRID_COUNT: usize = 9;
+
+impl VirtualWorkspaceSettings {
+    pub(super) fn validate_grid(&self, issues: &mut Vec<String>) {
+        let columns = self.grid_columns;
+        if columns == 0 {
+            return;
+        }
+        if GRID_COUNT * columns * columns > MAX_WORKSPACES {
+            issues.push(format!(
+                "grid_columns ({columns}) makes {} workspaces a display, more than \
+                 {MAX_WORKSPACES}; it can be at most 3",
+                GRID_COUNT * columns * columns
+            ));
+        }
+        for (index, rule) in self.app_rules.iter().enumerate() {
+            if rule.grid.is_some_and(|grid| !(1..=GRID_COUNT).contains(&grid)) {
+                issues.push(format!("App rule {index}'s grid must be from 1 to {GRID_COUNT}"));
+            }
+        }
+    }
+}
 
 /// Which grids the menu bar draws a map for.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy, Default, ConfigEnum)]
