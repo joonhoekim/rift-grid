@@ -15,7 +15,7 @@ use crate::layout_engine::LayoutCommand;
 use crate::model::VirtualWorkspaceId;
 use crate::sys::screen::SpaceId;
 use crate::ui::grid_motion::{
-    Carried, Hud, HudView, Image, Note, Pan, Shareable, Step, Tile,
+    Carried, Hud, HudView, Image, Motion, Note, Pan, Shareable, Step, Tile,
 };
 
 /// How long after a move its slide waits for the captures of the cell it goes to.
@@ -44,6 +44,9 @@ struct Pending {
     generation: u64,
     space: SpaceId,
     step: Step,
+    /// The cell moved to, and how many columns (and rows) its grid has.
+    cell: (usize, usize),
+    columns: usize,
     workspace: VirtualWorkspaceId,
     /// The usable part of the display, which the overlay covers.
     screen: CGRect,
@@ -239,7 +242,7 @@ impl Reactor {
                 .into_iter()
                 .filter(|(wid, _)| self.state.windows.workspace_for_window(space, *wid) == Some(to))
                 .collect();
-            self.begin_pan(generation, space, step, to, &screen, carried);
+            self.begin_pan(generation, space, step, to, to_cell, &screen, carried);
         }
 
         if let Some(view) = view.flatten() {
@@ -277,6 +280,7 @@ impl Reactor {
         space: SpaceId,
         step: Step,
         to: VirtualWorkspaceId,
+        cell: (usize, usize),
         screen: &crate::sys::screen::ScreenInfo,
         carried: Vec<(WindowId, CGRect)>,
     ) {
@@ -371,6 +375,8 @@ impl Reactor {
             generation,
             space,
             step,
+            cell,
+            columns: self.config.virtual_workspaces.grid_columns,
             workspace: to,
             screen: visible,
             display,
@@ -449,10 +455,18 @@ impl Reactor {
             pending.screen.size,
         );
         let wallpaper = manager.shareable.wallpaper(pending.display, wallpaper_rect);
-        let duration = self.config.settings.ui.grid_motion.duration_ms.clamp(50.0, 2000.0) / 1000.0;
-        if let Some(pan) = manager.pan.as_mut() {
-            pan.run(pending.step, wallpaper.map(|w| &**w), &tiles, &carried, duration);
-        }
+        let settings = &self.config.settings.ui.grid_motion;
+        let motion = Motion {
+            duration: settings.duration_ms.clamp(50.0, 10_000.0) / 1000.0,
+            curve: settings.easing.curve(&settings.curve),
+            zoom: settings.zoom.clamp(0.0, 0.5),
+            zoom_out: settings.zoom_out_time,
+            zoom_in: settings.zoom_in_time,
+        };
+        let Some(pan) = manager.pan.as_mut() else { return };
+        let shape = (pending.columns, pending.cell);
+        let duration =
+            pan.run(pending.step, shape, wallpaper.map(|w| &**w), &tiles, &carried, motion);
         // A little longer than the slide: windows shown again redraw at their new
         // size a moment after they arrive.
         self.grid_motion_later(

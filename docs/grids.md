@@ -83,11 +83,22 @@ from the edges; `"center"` centers the active cell every time.
 `[settings.ui.grid_motion]` shows where a move went. Both parts are on by default.
 
 - `pan`: the screen slides to the cell moved to, diagonally when the move
-  skips across, over `duration_ms` (240). A window carried along by
-  `grid_move` stays in place while the cells slide past it. Moving to another
+  skips across, over `duration_ms` (240, up to 10000). A window carried along
+  by `grid_move` stays in place while the cells slide past it. Moving to another
   grid fades to it instead. The slide is drawn from screen captures on an overlay
   while rift moves the windows under it, so it needs Screen Recording access;
   without it, or while the Overview is open, moves show at once.
+  - `easing`: how the slide gathers speed and slows down. `"glide"` (default)
+    starts quickly and settles gently, `"smooth"` is slow at both ends,
+    `"snappy"` leaves at once and lands softly, `"overshoot"` runs a little
+    past the cell and comes back, `"spring"` settles with a small bounce, and
+    `"custom"` takes `curve`, a cubic Bézier curve written as in CSS's
+    `cubic-bezier()`: `curve = "0.2, 0.8, 0.2, 1"`.
+  - `zoom`: how far the screen draws back between cells, e.g. `0.15`; 0
+    (default) keeps it flat. Zoomed, the screen draws back over
+    `zoom_out_time` of the slide's time (0.25), slides across while drawn
+    back, and comes in again over `zoom_in_time` (0.3). The slide across
+    starts near the end of drawing back and ends halfway through coming in.
 - `hud`: a small map of the grid, its number beside it, for `hud_ms` (700)
   after the last move; the lit cell glides from the cell left to the cell
   arrived at.

@@ -16,10 +16,11 @@ use objc2::runtime::AnyObject;
 use objc2_app_kit::{NSColor, NSFont, NSPopUpMenuWindowLevel};
 use objc2_core_foundation::{CFRetained, CFString, CFType, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{CGColor, CGImage};
-use objc2_foundation::{NSArray, NSError, NSNumber, NSString, NSValue};
+use objc2_foundation::{NSArray, NSError, NSNumber, NSObjectNSKeyValueCoding, NSString, NSValue};
 use objc2_quartz_core::{
-    CABasicAnimation, CAFrameRateRange, CALayer, CAMediaTiming, CAMediaTimingFunction,
-    CATextLayer, CATransaction,
+    CABasicAnimation, CACurrentMediaTime, CAFrameRateRange, CAKeyframeAnimation, CALayer,
+    CAMediaTiming, CAMediaTimingFunction, CASpringAnimation, CATextLayer, CATransaction,
+    kCAFillModeBackwards,
 };
 use objc2_screen_capture_kit::{
     SCContentFilter, SCDisplay, SCScreenshotManager, SCShareableContent, SCStreamConfiguration,
@@ -305,16 +306,34 @@ pub struct Carried {
     pub captured: CGSize,
 }
 
+/// How a slide moves.
+#[derive(Clone, Copy, Debug)]
+pub struct Motion {
+    /// Seconds; a spring takes this long to look settled.
+    pub duration: f64,
+    /// A cubic Bézier curve's control points; None for a spring.
+    pub curve: Option<[f64; 4]>,
+    /// How far the screen draws back halfway between cells, as a fraction.
+    pub zoom: f64,
+    /// The shares of `duration` spent drawing back and coming in again.
+    pub zoom_out: f64,
+    pub zoom_in: f64,
+}
+
 /// The overlay a slide plays on, covering the display below the menu bar.
 pub struct Pan {
     generation: u64,
     frame: CGRect,
     root: Retained<CALayer>,
+    /// Scales around the middle of the screen, for the zoom.
+    camera: Retained<CALayer>,
     world: Retained<CALayer>,
     /// Where the cell last moved to lies in `world`; the slide heads there.
     offset: CGPoint,
     /// The last move's carried windows, replaced by the next move's.
     carried: Vec<Retained<CALayer>>,
+    /// Where cells already have a layer in `world`, by their offset in it.
+    drawn: Vec<CGPoint>,
     size: CGSize,
     scale: f64,
     // The surface must be detached before its WindowServer window drops.
@@ -339,6 +358,7 @@ impl Pan {
     ) -> Result<Self, CgsWindowError> {
         let size = frame.size;
         let root = CALayer::layer();
+        let camera = CALayer::layer();
         let world = CALayer::layer();
         let from_layer = CALayer::layer();
         with_disabled_actions(|| {
@@ -354,7 +374,9 @@ impl Pan {
             from_layer.setContentsScale(scale);
             set_contents(&from_layer, from);
             world.addSublayer(&from_layer);
-            root.addSublayer(&world);
+            camera.setFrame(rect(0.0, 0.0, size.width, size.height));
+            camera.addSublayer(&world);
+            root.addSublayer(&camera);
         });
         let window = CgsWindow::new_compositor(frame, 0.0)?;
         window.set_resolution(scale)?;
@@ -367,9 +389,11 @@ impl Pan {
             generation,
             frame,
             root,
+            camera,
             world,
             offset: CGPoint::new(0.0, 0.0),
             carried: Vec::new(),
+            drawn: vec![CGPoint::new(0.0, 0.0)],
             size,
             scale,
             _surface: surface,
@@ -387,15 +411,22 @@ impl Pan {
     pub fn continue_as(&mut self, generation: u64) { self.generation = generation; }
 
     /// Slide (or fade) to the cell made of `wallpaper` and `tiles`, back to
-    /// front, over `duration` seconds, from wherever an earlier slide has got to.
+    /// front, from wherever an earlier slide has got to. `shape` is the grid's
+    /// columns and the cell moved to, whose neighbours show the wallpaper when
+    /// the screen draws back. Returns how long it takes, in seconds.
     pub fn run(
         &mut self,
         step: Step,
+        shape: (usize, (usize, usize)),
         wallpaper: Option<&CGImage>,
         tiles: &[Tile],
         carried: &[Carried],
-        duration: f64,
-    ) {
+        motion: Motion,
+    ) -> f64 {
+        let duration = motion.duration;
+        // A spring moves the screen; what moves with it eases as the default does.
+        let timing = curve_timing(motion.curve.unwrap_or(DEFAULT_CURVE));
+        let mut length = duration;
         let (w, h) = (self.size.width, self.size.height);
         if let Step::Cells { dx, dy } = step {
             self.offset.x += dx as f64 * (w + GAP);
@@ -422,6 +453,12 @@ impl Pan {
             for tile in tiles {
                 to.addSublayer(&self.tile_layer(tile.frame, tile.image.as_deref(), tile.captured));
             }
+            if let Step::Cells { .. } = step {
+                self.drawn.push(offset);
+                if let Some(image) = wallpaper.filter(|_| motion.zoom > 0.0) {
+                    self.fill_grid(shape, image);
+                }
+            }
             for layer in self.carried.drain(..) {
                 layer.removeFromSuperlayer();
             }
@@ -439,23 +476,103 @@ impl Pan {
                     .map_or_else(|| self.world.position(), |shown| shown.position());
                 self.world.addSublayer(&to);
                 self.world.setPosition(CGPoint::new(-offset.x, -offset.y));
-                animate(&self.world, "position", &point_value(shown), duration);
+                let from = point_value(shown);
+                // Zoomed, the screen draws back, slides, and comes in again; a
+                // slide carrying on an earlier one is drawn back already.
+                let scale = self.shown_scale();
+                // The slide starts near the end of drawing back and ends halfway
+                // through coming in.
+                let (back, ahead) = zoom_shares(motion);
+                let end = (1.0 - 0.5 * ahead) * duration;
+                let (delay, span) = match motion.zoom > 0.0 {
+                    true if scale < 0.999 => (0.0, end),
+                    true => (0.8 * back * duration, end - 0.8 * back * duration),
+                    false => (0.0, duration),
+                };
+                let pan = match motion.curve {
+                    Some(_) => basic("position", &from, span, &timing),
+                    None => spring_animation("position", &from, span),
+                };
+                length = delay + pan.duration();
+                if delay > 0.0 {
+                    pan.setBeginTime(CACurrentMediaTime() + delay);
+                    pan.setFillMode(unsafe { kCAFillModeBackwards });
+                }
+                self.world.addAnimation_forKey(&pan, Some(&NSString::from_str("position")));
+                if motion.zoom > 0.0 {
+                    self.dip(scale, motion.zoom.min(0.5), zoom_shares(motion), duration);
+                    length = length.max(duration);
+                }
             }
             Step::Grid { forward } => {
                 // Another context: the next grid comes forward over this one,
                 // or an earlier one settles back.
                 self.world.addSublayer(&to);
                 let lean = if forward { 0.94 } else { 1.06 };
-                animate(&to, "opacity", &NSNumber::new_f64(0.0), duration);
-                animate(&to, "transform.scale", &NSNumber::new_f64(lean), duration);
+                animate_with(&to, "opacity", &NSNumber::new_f64(0.0), duration, &timing);
+                animate_with(&to, "transform.scale", &NSNumber::new_f64(lean), duration, &timing);
             }
         }
         for (layer, from) in moving {
-            glide(&layer, from, duration);
+            glide_with(&layer, from, duration, &timing);
             self.carried.push(layer);
         }
         CATransaction::commit();
         CATransaction::flush();
+        length
+    }
+
+    /// Put the wallpaper in the grid's cells that have nothing yet, `shape`
+    /// being its columns and the cell at `self.offset`.
+    fn fill_grid(&mut self, (columns, (row, column)): (usize, (usize, usize)), image: &CGImage) {
+        let (w, h) = (self.size.width, self.size.height);
+        for r in 0..columns {
+            for c in 0..columns {
+                let at = CGPoint::new(
+                    self.offset.x + (c as f64 - column as f64) * (w + GAP),
+                    self.offset.y + (r as f64 - row as f64) * (h + GAP),
+                );
+                if (r, c) == (row, column) || self.drawn.contains(&at) {
+                    continue;
+                }
+                let layer = CALayer::layer();
+                layer.setFrame(rect(at.x, at.y, w, h));
+                layer.setContentsScale(self.scale);
+                layer.setZPosition(-1.0);
+                set_contents(&layer, image);
+                self.world.addSublayer(&layer);
+                self.drawn.push(at);
+            }
+        }
+    }
+
+    /// Draw the screen back by `zoom` and in again over `duration`, from the
+    /// scale an earlier slide has left it at: back over the share `back` of the
+    /// time, in over the last share `ahead`.
+    fn dip(&self, shown: f64, zoom: f64, (back, ahead): (f64, f64), duration: f64) {
+        let key = NSString::from_str("transform.scale");
+        let animation = CAKeyframeAnimation::animationWithKeyPath(Some(&key));
+        let far = 1.0 - zoom;
+        let values = NSArray::from_retained_slice(&[shown, far, far, 1.0].map(NSNumber::new_f64));
+        unsafe { animation.setValues(Some(&Retained::cast_unchecked::<NSArray>(values))) };
+        let times = [0.0, back, 1.0 - ahead, 1.0].map(NSNumber::new_f64);
+        animation.setKeyTimes(Some(&NSArray::from_retained_slice(&times)));
+        let out = curve_timing([0.2, 0.0, 0.2, 1.0]);
+        let hold = curve_timing([0.0, 0.0, 1.0, 1.0]);
+        let come_in = curve_timing([0.45, 0.0, 0.55, 1.0]);
+        animation.setTimingFunctions(Some(&NSArray::from_retained_slice(&[out, hold, come_in])));
+        animation.setDuration(duration);
+        animation.setPreferredFrameRateRange(CAFrameRateRange::new(60.0, 120.0, 120.0));
+        self.camera.addAnimation_forKey(&animation, Some(&key));
+    }
+
+    /// The camera's scale on screen, partway through a zoom or at rest.
+    fn shown_scale(&self) -> f64 {
+        let key = NSString::from_str("transform.scale");
+        unsafe { self.camera.presentationLayer() }
+            .and_then(|shown| shown.valueForKeyPath(&key))
+            .and_then(|value| value.downcast::<NSNumber>().ok())
+            .map_or(1.0, |value| value.as_f64())
     }
 
     fn tile_layer(&self, frame: CGRect, image: Option<&CGImage>, captured: CGSize) -> Retained<CALayer> {
@@ -490,33 +607,83 @@ fn point_value(point: CGPoint) -> Retained<NSValue> { unsafe { NSValue::valueWit
 
 fn rect_value(rect: CGRect) -> Retained<NSValue> { unsafe { NSValue::valueWithRect(rect) } }
 
-fn timing() -> Retained<CAMediaTimingFunction> {
-    // Quick to start, settling gently: the screen is pushed, not dragged.
-    CAMediaTimingFunction::functionWithControlPoints(0.3, 0.0, 0.2, 1.0)
+/// The shares of a slide's time spent drawing back and coming in, each at least
+/// a tenth and together at most the whole.
+fn zoom_shares(motion: Motion) -> (f64, f64) {
+    let back = motion.zoom_out.clamp(0.1, 0.9);
+    let ahead = motion.zoom_in.clamp(0.1, 0.9);
+    let over = (back + ahead).max(1.0);
+    (back / over, ahead / over)
 }
+
+/// Quick to start, settling gently: the screen is pushed, not dragged.
+const DEFAULT_CURVE: [f64; 4] = [0.3, 0.0, 0.2, 1.0];
+
+fn curve_timing([x1, y1, x2, y2]: [f64; 4]) -> Retained<CAMediaTimingFunction> {
+    CAMediaTimingFunction::functionWithControlPoints(x1 as f32, y1 as f32, x2 as f32, y2 as f32)
+}
+
+fn timing() -> Retained<CAMediaTimingFunction> { curve_timing(DEFAULT_CURVE) }
 
 /// Animate `key` of `layer`, already at its new value, from `from`.
 fn animate(layer: &CALayer, key: &str, from: &AnyObject, duration: f64) {
+    animate_with(layer, key, from, duration, &timing());
+}
+
+fn animate_with(
+    layer: &CALayer,
+    key: &str,
+    from: &AnyObject,
+    duration: f64,
+    timing: &CAMediaTimingFunction,
+) {
+    layer.addAnimation_forKey(&basic(key, from, duration, timing), Some(&NSString::from_str(key)));
+}
+
+/// `key` from `from` over `duration`, along `timing`.
+fn basic(
+    key: &str,
+    from: &AnyObject,
+    duration: f64,
+    timing: &CAMediaTimingFunction,
+) -> Retained<CABasicAnimation> {
     let animation = CABasicAnimation::animationWithKeyPath(Some(&NSString::from_str(key)));
     unsafe { animation.setFromValue(Some(from)) };
     animation.setDuration(duration);
-    animation.setTimingFunction(Some(&timing()));
+    animation.setTimingFunction(Some(timing));
     animation.setPreferredFrameRateRange(CAFrameRateRange::new(60.0, 120.0, 120.0));
-    layer.addAnimation_forKey(&animation, Some(&NSString::from_str(key)));
+    animation
+}
+
+/// `key` from `from` on a spring that looks settled after `duration`; it runs
+/// on until it is still.
+fn spring_animation(key: &str, from: &AnyObject, duration: f64) -> Retained<CABasicAnimation> {
+    let animation =
+        CASpringAnimation::initWithPerceptualDuration_bounce(CASpringAnimation::alloc(), duration, 0.2);
+    animation.setKeyPath(Some(&NSString::from_str(key)));
+    unsafe { animation.setFromValue(Some(from)) };
+    animation.setDuration(animation.settlingDuration());
+    animation.setPreferredFrameRateRange(CAFrameRateRange::new(60.0, 120.0, 120.0));
+    Retained::into_super(animation)
 }
 
 /// Move `layer`, already at its new frame, from `from`.
 fn glide(layer: &CALayer, from: CGRect, duration: f64) {
+    glide_with(layer, from, duration, &timing());
+}
+
+fn glide_with(layer: &CALayer, from: CGRect, duration: f64, timing: &CAMediaTimingFunction) {
     let center = CGPoint::new(
         from.origin.x + from.size.width / 2.0,
         from.origin.y + from.size.height / 2.0,
     );
-    animate(layer, "position", &point_value(center), duration);
-    animate(
+    animate_with(layer, "position", &point_value(center), duration, timing);
+    animate_with(
         layer,
         "bounds",
         &rect_value(rect(0.0, 0.0, from.size.width, from.size.height)),
         duration,
+        timing,
     );
 }
 
