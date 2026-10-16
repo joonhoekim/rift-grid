@@ -94,8 +94,8 @@ pub(super) fn borders(ui: Ui, model: &Rc<Model>) -> Page {
     let bare = f.row("Unfocused borders", switch, message);
     let colors = Section::new(&ui, "Colors")
         .description(
-            "apps/rice/colors may set these from the wallpaper; it leaves colors you \
-             picked here alone.",
+            "Colors are kept in the config file, where other tools, such as one that \
+             follows the wallpaper, may set them too.",
         )
         .row(focused)
         .row(bare)
