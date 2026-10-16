@@ -6,13 +6,15 @@ use objc2_core_foundation::CGRect;
 use super::{Event, Reactor};
 use crate::actor::app::WindowId;
 use crate::common::collections::HashMap;
+use crate::common::config::BorderSettings;
+use crate::ui::borders::BorderStyle;
 use crate::sys::screen::SpaceId;
 
 /// Window borders and what they were last drawn from.
 #[derive(Default)]
 pub(super) struct BorderManager {
     pub(super) borders: Option<crate::ui::borders::Borders>,
-    /// The visible windows, frames, focus and style the borders show.
+    /// The visible windows, frames and focus the borders show.
     pub(super) signature: Option<u64>,
     pub(super) focus: Option<WindowId>,
     /// The layout's focus as last seen, to notice when rift moves focus.
@@ -25,6 +27,8 @@ pub(super) struct BorderManager {
     /// When the borders were last reordered. Reorders that soon after are that
     /// ordering's own echo.
     pub(super) last_reorder: Option<std::time::Instant>,
+    /// The parsed style, with the settings it was parsed from.
+    style: Option<(BorderSettings, BorderStyle)>,
 }
 
 
@@ -39,6 +43,19 @@ pub(super) fn changes_visibility(event: &Event) -> bool {
             | Event::ApplicationGloballyActivated(_)
             | Event::ApplicationTerminated(_)
     )
+}
+
+impl BorderManager {
+    fn style(&mut self, settings: &BorderSettings) -> BorderStyle {
+        match &self.style {
+            Some((read, style)) if read == settings => *style,
+            _ => {
+                let style = BorderStyle::new(settings);
+                self.style = Some((settings.clone(), style));
+                style
+            }
+        }
+    }
 }
 
 impl Reactor {
@@ -99,13 +116,14 @@ impl Reactor {
     pub(super) fn update_borders(&mut self, visibility_changed: bool) {
         use std::hash::{Hash, Hasher};
 
-        use crate::ui::borders::{BorderStyle, BorderTarget, Borders};
+        use crate::ui::borders::{BorderTarget, Borders};
         let settings = &self.config.settings.ui.borders;
         if !settings.enabled {
             self.border_manager = BorderManager::default();
             return;
         }
-        let style = BorderStyle::new(settings);
+        let previous = self.border_manager.style.as_ref().map(|(_, style)| *style);
+        let style = self.border_manager.style(settings);
         // The system's main window is the focus: clicks, app switches and moves
         // within an app all reach it. But when rift moves focus to another app's
         // window, the main window first passes through that app's previous one;
@@ -174,10 +192,12 @@ impl Reactor {
                 value.to_bits().hash(&mut hasher);
             }
         }
-        format!("{style:?}").hash(&mut hasher);
         let signature = hasher.finish();
         let reordered = std::mem::take(&mut self.border_manager.reordered);
-        if !visibility_changed && !reordered && self.border_manager.signature == Some(signature)
+        if !visibility_changed
+            && !reordered
+            && previous == Some(style)
+            && self.border_manager.signature == Some(signature)
         {
             return;
         }
