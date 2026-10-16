@@ -353,6 +353,7 @@ fn catalog() -> &'static [Entry] {
         append::<DragDropSettings>(&mut out, "", Mouse, None, "Mouse & Trackpad › Drag & Drop");
         append::<MenuBarSettings>(&mut out, "", Interface, None, "Interface › Menu Bar");
         append::<MissionControlSettings>(&mut out, "", Overview, None, "Overview");
+        append::<GridMotionSettings>(&mut out, "", Overview, None, "Overview › Grid Motion");
         append::<BorderSettings>(&mut out, "", Borders, None, "Window Borders");
         append::<StackLineSettings>(&mut out, "", Interface, None, "Interface › Stack Line");
         append::<LayoutSettings>(&mut out, "", Layouts, None, "Layouts");
