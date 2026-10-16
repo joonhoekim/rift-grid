@@ -582,6 +582,7 @@ impl WorkspaceStore {
         if let Some((last, active)) = self.active_workspace_per_space.remove(&old_space) {
             self.active_workspace_per_space.insert(new_space, (last, active));
         }
+        self.remap_grid_cells(old_space, new_space);
 
         window_store.remap_space(old_space, new_space);
     }

@@ -79,8 +79,7 @@ impl WorkspaceStore {
     }
 
     pub(super) fn remember_grid_cell(&mut self, space: SpaceId, workspace: VirtualWorkspaceId) {
-        let index = self.workspace_ids(space).iter().position(|&id| id == workspace);
-        if let Some(grid) = index.and_then(|index| self.grid_of(index)) {
+        if let Some(grid) = self.grid_of_workspace(space, workspace) {
             self.grid_current.insert((space, grid), workspace);
         }
     }
@@ -91,10 +90,27 @@ impl WorkspaceStore {
         if !self.grid_enabled() || grid >= GRID_COUNT {
             return None;
         }
-        if let Some(&id) = self.grid_current.get(&(space, grid)) {
-            return Some(id);
-        }
-        self.grid_center_cell(space, grid)
+        self.grid_current
+            .get(&(space, grid))
+            .copied()
+            .filter(|&id| self.grid_of_workspace(space, id) == Some(grid))
+            .or_else(|| self.grid_center_cell(space, grid))
+    }
+
+    fn grid_of_workspace(&self, space: SpaceId, workspace: VirtualWorkspaceId) -> Option<usize> {
+        let index = self.workspace_ids(space).iter().position(|&id| id == workspace)?;
+        self.grid_of(index)
+    }
+
+    /// Move each grid's current cell from `old_space` to `new_space`.
+    pub(super) fn remap_grid_cells(&mut self, old_space: SpaceId, new_space: SpaceId) {
+        self.grid_current.retain(|&(space, _), _| space != new_space);
+        let moved: Vec<_> = self
+            .grid_current
+            .extract_if(|&(space, _), _| space == old_space)
+            .map(|((_, grid), id)| ((new_space, grid), id))
+            .collect();
+        self.grid_current.extend(moved);
     }
 
     /// Grid `grid`'s (0-based) center cell on `space`.
@@ -163,5 +179,33 @@ mod tests {
         let cell = WorkspaceSelector::Index(0);
         assert_eq!(resolve(&mut store, Some(&cell), Some(2)), ids[10], "grid wins over workspace");
         assert_eq!(resolve(&mut store, Some(&cell), None), ids[0]);
+    }
+
+    #[test]
+    fn a_grids_current_cell_follows_its_workspaces_to_a_new_space() {
+        use crate::common::config::LayoutSettings;
+        use crate::model::WindowStore;
+        let settings = VirtualWorkspaceSettings { grid_columns: 3, ..Default::default() };
+        let mut store = WorkspaceStore::new_with_config(&settings, &LayoutSettings::default());
+        let (old, new) = (SpaceId::new(5), SpaceId::new(6));
+        store.ensure_space_initialized(old);
+        store.ensure_space_initialized(new);
+        let ids = store.workspace_ids(old).to_vec();
+        store.set_active_workspace(old, ids[10]);
+        store.remap_space(&mut WindowStore::default(), old, new);
+        assert_eq!(store.grid_current_cell(new, 1), Some(ids[10]), "not new's own center");
+        assert_eq!(store.grid_current_cell(new, 0), Some(ids[4]));
+    }
+
+    #[test]
+    fn a_remembered_cell_outside_its_grid_is_not_used() {
+        use crate::common::config::LayoutSettings;
+        let settings = VirtualWorkspaceSettings { grid_columns: 3, ..Default::default() };
+        let mut store = WorkspaceStore::new_with_config(&settings, &LayoutSettings::default());
+        let space = SpaceId::new(5);
+        store.ensure_space_initialized(space);
+        let ids = store.workspace_ids(space).to_vec();
+        store.grid_current.insert((space, 1), ids[2]);
+        assert_eq!(store.grid_current_cell(space, 1), Some(ids[13]));
     }
 }
