@@ -50,8 +50,8 @@ Merge rather than rebase, so `grid` never needs a force push:
 The second compiles the settings app's sources on their own and opens a hidden
 settings window; `--lib` does not build it.
 
-One test, `empty_active_space_membership_during_wake_race_does_not_blank_known_active_windows`,
-fails on upstream too.
+[docs/upstream.md](docs/upstream.md) lists where the fork hooks into upstream
+files, where merges conflict most, and upstream behavior that meets the grid.
 
 ## After a macOS update
 
@@ -99,4 +99,6 @@ Found by experiment on macOS 26/27; recheck when macOS changes:
 Once these have run daily for a while, they could go upstream as pull requests,
 each from a fresh branch off `upstream/main`: window borders (no JankyBorders
 needed), the workspace grid with its overview and menu bar map, and live
-overview previews.
+overview previews. A test fix, which the fork carries as its own commit so the
+pull request can take it as is, can go any time; see
+[docs/upstream.md](docs/upstream.md).
