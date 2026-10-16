@@ -12,6 +12,11 @@ restore() {
     echo "restored org.nixos.rift"
 }
 
+if [ ! -x "$root/target/release/rift" ]; then
+    echo "no target/release/rift; run cargo build --release first" >&2
+    exit 1
+fi
+
 launchctl bootout "$domain/org.nixos.rift" 2>/dev/null
 trap restore EXIT INT TERM
 "$root/target/release/rift" --config "$root/poc/config.toml" "$@"
