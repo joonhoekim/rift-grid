@@ -16,7 +16,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 state="$HOME/.local/state/rift-grid"
 mkdir -p "$state"
 version="$(sw_vers -productVersion)"
-commit="$(git -C "$here" rev-parse --short HEAD)"
+commit="$(git -C "$here" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 out="$state/tests-macos-$version-$commit"
 cd "$here/.."
 cargo test --workspace --no-fail-fast 2>&1 | tee "$out.log" \
