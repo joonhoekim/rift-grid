@@ -92,11 +92,7 @@ impl Reactor {
     }
 
     fn grid_motion_later(&self, after: Duration, note: Note) {
-        let send = self.grid_motion_send();
-        std::thread::spawn(move || {
-            std::thread::sleep(after);
-            send(note);
-        });
+        self.send_later(after, Event::GridMotion(note));
     }
 
     /// Note the active cell before a command that may move to another one.

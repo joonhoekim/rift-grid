@@ -59,6 +59,17 @@ impl BorderManager {
 }
 
 impl Reactor {
+    pub(super) fn send_later(&self, after: std::time::Duration, event: Event) {
+        use dispatchr::qos::QoS;
+        use dispatchr::time::Time;
+
+        use crate::sys::dispatch::DispatchExt;
+        let Some(tx) = self.communication_manager.events_tx.clone() else { return };
+        let Some(queue) = dispatchr::queue::global(QoS::UserInteractive) else { return };
+        let when = Time::new_after(Time::NOW, i64::try_from(after.as_nanos()).unwrap_or(i64::MAX));
+        queue.after_f_s(when, (tx, event), |(tx, event)| tx.send(event));
+    }
+
     /// Handle the borders' own events; true when `event` was one.
     pub(super) fn handle_border_event(&mut self, event: &Event) -> bool {
         match event {
@@ -215,13 +226,8 @@ impl Reactor {
             .borders
             .get_or_insert_with(Borders::default)
             .update(style, &candidates, reorder);
-        if let Some((generation, after)) = settle
-            && let Some(tx) = self.communication_manager.events_tx.clone()
-        {
-            std::thread::spawn(move || {
-                std::thread::sleep(after);
-                tx.send(Event::BorderSettle(generation));
-            });
+        if let Some((generation, after)) = settle {
+            self.send_later(after, Event::BorderSettle(generation));
         }
     }
 }
