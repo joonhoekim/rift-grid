@@ -312,6 +312,8 @@ case "check":
         try check(display: args.count > 1 ? args[1] : nil)
     } catch let error as Fail {
         record("run", false, error.message)
+    } catch {
+        record("run", false, "\(error)")
     }
     let failed = results.filter { !$0.ok }.count
     print("\(results.count - failed) ok, \(failed) failed")
