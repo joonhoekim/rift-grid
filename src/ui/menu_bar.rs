@@ -1534,8 +1534,6 @@ mod layout_library_tests {
             grid: None,
         }]));
     }
-
-
 }
 
 fn build_text_attrs(font: &NSFont) -> Retained<NSDictionary<NSAttributedStringKey, AnyObject>> {

@@ -2932,8 +2932,4 @@ mod tests {
         assert!(!owner_matches(&request, 123, "other.app"));
         assert!(owner_matches(&request, 123, "org.example"));
     }
-
-
-
-
 }

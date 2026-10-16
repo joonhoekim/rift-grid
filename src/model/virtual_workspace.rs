@@ -2080,6 +2080,4 @@ mod tests {
         assert_eq!(hidden.origin.y, primary.max().y - 1.0);
         assert_eq!(hidden.origin.x, primary.origin.x - frame.size.width + 1.0);
     }
-
-
 }

@@ -1237,7 +1237,6 @@ impl Reactor {
         self.update_borders(visibility_changed);
     }
 
-
     fn dispatch_workflow(&mut self, mut event: Event) -> anyhow::Result<EventOutcome> {
         if let Event::AppActorExited(pid, handle) = &event {
             if !self.app_manager.apps.get(pid).is_some_and(|app| app.handle.same_actor(handle)) {

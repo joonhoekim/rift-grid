@@ -31,7 +31,6 @@ pub(super) struct BorderManager {
     style: Option<(BorderSettings, BorderStyle)>,
 }
 
-
 /// Events whose visibility changes the borders cannot see in the reactor's own
 /// state, so they redraw even when nothing they track has changed.
 pub(super) fn changes_visibility(event: &Event) -> bool {
