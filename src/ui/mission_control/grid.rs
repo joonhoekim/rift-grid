@@ -357,7 +357,12 @@ pub(super) fn project_grid_at(
         .collect()
 }
 
-/// Move `layer`, already at its new frame, smoothly from where it was.
+/// Where `layer` is on screen, partway through a glide or at rest.
+pub(super) fn shown_frame(layer: &CALayer) -> CGRect {
+    unsafe { layer.presentationLayer() }.map_or_else(|| layer.frame(), |shown| shown.frame())
+}
+
+/// Move `layer`, already at its new frame, smoothly from `from`, usually its `shown_frame`.
 pub(super) fn glide(layer: &CALayer, from: CGRect) {
     let to = layer.frame();
     if from == to {
@@ -381,10 +386,10 @@ pub(super) fn glide(layer: &CALayer, from: CGRect) {
             from.size.height,
         ))));
     }
-    for animation in [&position, &bounds] {
+    for (key, animation) in [("position", &position), ("bounds", &bounds)] {
         animation.setPreferredFrameRateRange(CAFrameRateRange::new(60.0, 120.0, 120.0));
         animation.setDuration(0.2);
-        layer.addAnimation_forKey(animation, None);
+        layer.addAnimation_forKey(animation, Some(&objc2_foundation::NSString::from_str(key)));
     }
 }
 

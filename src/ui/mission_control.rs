@@ -678,7 +678,8 @@ impl DisplayOverview {
                     .position(|view| view.index == data.index)
                     .map(|pos| old_views.swap_remove(pos));
                 if let Some(view) = existing.as_ref().filter(|view| !view.cards.is_empty()) {
-                    let (was, backdrop_was) = (view.layer.frame(), view.backdrop.frame());
+                    let was = shown_frame(&view.layer);
+                    let backdrop_was = shown_frame(&view.backdrop);
                     view.layer.setFrame(pixel_aligned(ws.frame, self.scale));
                     view.heading.setFrame(workspace_heading(ws, self.scale));
                     view.heading.setHidden(ws.cell);
@@ -691,7 +692,9 @@ impl DisplayOverview {
                     self.views.push(existing.unwrap());
                     continue;
                 }
-                let was = existing.as_ref().map(|view| (view.layer.frame(), view.backdrop.frame()));
+                let was = existing
+                    .as_ref()
+                    .map(|view| (shown_frame(&view.layer), shown_frame(&view.backdrop)));
                 let (container, heading, empty, backdrop) = if let Some(view) = existing {
                     (view.layer, view.heading, view.empty, view.backdrop)
                 } else {
