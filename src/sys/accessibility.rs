@@ -103,7 +103,7 @@ pub fn request_screen_capture_permission() {
 
     if !CGRequestScreenCaptureAccess() {
         println!(
-            "Rift has no Screen Recording permission, so overview previews are off. Enable it in System Settings > Privacy & Security > Screen & System Audio Recording, then restart Rift."
+            "Rift has no Screen Recording permission, so overview previews and the slide between cells are off. Enable it in System Settings > Privacy & Security > Screen & System Audio Recording, then restart Rift."
         );
     }
 }
