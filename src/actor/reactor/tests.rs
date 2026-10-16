@@ -7282,11 +7282,12 @@ fn empty_active_space_membership_during_wake_race_does_not_blank_known_active_wi
     let wid = WindowId::new(1, 1);
     let wsid = WindowServerId::new(10001);
 
+    // Before setup: the screen fixture reads space 1's windows from the real WindowServer.
+    crate::sys::window_server::set_space_window_list_for_connection_override(Some(vec![]));
     apps.make_app_and_settle_on_screen(&mut reactor, screen, space, 1, make_windows(1));
 
     reactor.mark_test_window_visible_in_space(wsid, space);
 
-    crate::sys::window_server::set_space_window_list_for_connection_override(Some(vec![]));
     reactor.space_state.membership_complete = false;
     let active_windows = reactor.authoritative_active_space_windows();
     reactor.reconcile_authoritative_active_window_snapshot(active_windows, true, &[]);
