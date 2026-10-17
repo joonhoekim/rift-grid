@@ -53,6 +53,25 @@ pub enum Note {
     HudGone(u64),
 }
 
+/// The slide's settings, for the Overview, which draws back the same way.
+static MOTION: std::sync::Mutex<Option<crate::common::config::GridMotionSettings>> =
+    std::sync::Mutex::new(None);
+
+/// Note the slide's settings, when they are new.
+pub fn set_motion(settings: &crate::common::config::GridMotionSettings) {
+    if let Ok(mut motion) = MOTION.lock()
+        && motion.as_ref() != Some(settings)
+    {
+        *motion = Some(settings.clone());
+    }
+}
+
+/// The slide's motion as last noted.
+pub fn motion() -> Motion {
+    let settings = MOTION.lock().ok().and_then(|motion| motion.clone()).unwrap_or_default();
+    Motion::new(&settings)
+}
+
 static OVERVIEW_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Note whether the Overview is open: it shows moves itself, and a slide would
@@ -318,6 +337,18 @@ pub struct Motion {
     /// The shares of `duration` spent drawing back and coming in again.
     pub zoom_out: f64,
     pub zoom_in: f64,
+}
+
+impl Motion {
+    pub fn new(settings: &crate::common::config::GridMotionSettings) -> Self {
+        Self {
+            duration: settings.duration_ms.clamp(50.0, 10_000.0) / 1000.0,
+            curve: settings.easing.curve(&settings.curve),
+            zoom: settings.zoom.clamp(0.0, 0.5),
+            zoom_out: settings.zoom_out_time,
+            zoom_in: settings.zoom_in_time,
+        }
+    }
 }
 
 /// The overlay a slide plays on, covering the display below the menu bar.

@@ -100,6 +100,7 @@ impl Reactor {
 
     /// Note the active cell before a command that may move to another one.
     pub(super) fn grid_motion_before(&mut self, event: &Event) -> Option<Before> {
+        crate::ui::grid_motion::set_motion(&self.config.settings.ui.grid_motion);
         self.grid_motion_prefetch();
         let Event::Command(Command::Layout(command)) = event else { return None };
         let settings = &self.config.settings.ui.grid_motion;
@@ -455,14 +456,7 @@ impl Reactor {
             pending.screen.size,
         );
         let wallpaper = manager.shareable.wallpaper(pending.display, wallpaper_rect);
-        let settings = &self.config.settings.ui.grid_motion;
-        let motion = Motion {
-            duration: settings.duration_ms.clamp(50.0, 10_000.0) / 1000.0,
-            curve: settings.easing.curve(&settings.curve),
-            zoom: settings.zoom.clamp(0.0, 0.5),
-            zoom_out: settings.zoom_out_time,
-            zoom_in: settings.zoom_in_time,
-        };
+        let motion = Motion::new(&self.config.settings.ui.grid_motion);
         let Some(pan) = manager.pan.as_mut() else { return };
         let shape = (pending.columns, pending.cell);
         let duration =
