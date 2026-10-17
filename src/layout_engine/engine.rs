@@ -24,6 +24,7 @@ use crate::model::{
 use crate::sys::screen::SpaceId;
 
 mod grid;
+mod parking;
 mod persistence;
 
 use persistence::PersistenceState;
@@ -187,6 +188,7 @@ pub struct LayoutEngine {
     scroll_boundary: Option<((VirtualWorkspaceId, LayoutId, Direction), f64)>,
     /// Windows by when they last had the focus, for focus_recent_window.
     recent: grid::RecentWindows,
+    parking: parking::Parking,
 }
 
 pub(crate) struct WorkspaceLayoutQuerySnapshot {
@@ -660,6 +662,9 @@ impl LayoutEngine {
 
 impl LayoutEngine {
     pub fn set_layout_settings(&mut self, settings: &LayoutSettings) {
+        if self.layout_settings != *settings {
+            self.forget_parked_layouts_all();
+        }
         self.layout_settings = settings.clone();
 
         for (_, ws) in self.workspaces.workspaces.iter_mut() {
@@ -1244,7 +1249,11 @@ impl LayoutEngine {
         wid: WindowId,
         preserve_floating: bool,
     ) -> bool {
-        let removal = self.remove_window_layout_membership(window_store, wid);
+        let shown_on = self.space_with_window(wid);
+        // It may be away for a while (minimized, hidden or in native
+        // fullscreen); it keeps its place for when it comes back.
+        self.park_window(window_store, wid);
+        let removal = self.remove_window_layout_membership(window_store, wid).or(shown_on);
 
         if preserve_floating {
             self.floating.remove_active_for_window(wid);
@@ -1302,7 +1311,13 @@ impl LayoutEngine {
     ) -> bool {
         let active_space_before = self.space_with_window(wid);
 
-        let assigned_workspace = match window_store.workspace_for_window(space, wid) {
+        // Coming back from minimized or hidden, it has no workspace by now.
+        let assigned = window_store.workspace_for_window(space, wid).or_else(|| {
+            self.parked_workspace(wid, space).filter(|&workspace| {
+                self.workspaces.assign_window_to_workspace(window_store, space, wid, workspace)
+            })
+        });
+        let assigned_workspace = match assigned {
             Some(workspace_id) => workspace_id,
             None => match self.workspaces.auto_assign_window(window_store, wid, space) {
                 Ok(workspace_id) => workspace_id,
@@ -1324,7 +1339,9 @@ impl LayoutEngine {
         if should_be_floating {
             self.floating.add_active(space, wid.pid, wid);
         } else if let Some(layout) = self.workspaces.active_layout(space, assigned_workspace) {
-            if !self.workspaces[assigned_workspace].layout_system.contains_window(layout, wid) {
+            if !self.workspaces[assigned_workspace].layout_system.contains_window(layout, wid)
+                && !self.restore_parked_window(assigned_workspace, layout, wid)
+            {
                 if matches!(
                     self.workspaces[assigned_workspace].layout_system,
                     LayoutSystemKind::Scrolling(_)
@@ -1341,6 +1358,9 @@ impl LayoutEngine {
                 "No active layout for workspace {:?} on space {:?}; window {:?} not added to tree",
                 assigned_workspace, space, wid
             );
+        }
+        if should_be_floating || self.workspace_contains_window(assigned_workspace, wid) {
+            self.forget_parked_window_on(wid, space);
         }
 
         self.space_with_window(wid) != active_space_before
@@ -1524,6 +1544,7 @@ impl LayoutEngine {
             persistence: PersistenceState::default(),
             startup_restore_pending: false,
             scroll_boundary: None,
+            parking: Default::default(),
         }
     }
 
@@ -1828,6 +1849,7 @@ impl LayoutEngine {
                 self.floating.remove_all_for_pid(pid);
                 self.window_layout_constraints.retain(|wid, _| wid.pid != pid);
                 self.forget_persisted_app(pid);
+                self.forget_parked_app(pid);
 
                 self.floating_positions.remove_app(pid);
                 return EventResponse {
@@ -3014,10 +3036,15 @@ impl LayoutEngine {
         } else {
             self.app_rules.evaluate(context)
         };
+        // A window coming back from minimized, hidden or fullscreen returns to
+        // the workspace it left, as a persistence match does below.
+        let parked = self.parked_workspace(window_id, space).is_some_and(|workspace| {
+            self.workspaces.assign_window_to_workspace(window_store, space, window_id, workspace)
+        });
         // A persistence match is an explicit restoration of the user's previous
         // workspace. App rules still control admission and other effects, but
         // their default placement must not relocate the window during restore.
-        if restored && let Some(decision) = &mut decision {
+        if (restored || parked) && let Some(decision) = &mut decision {
             decision.workspace = None;
         }
         if reapply_workspace_rule {

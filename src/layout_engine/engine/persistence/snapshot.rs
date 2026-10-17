@@ -107,6 +107,7 @@ impl PersistedLayout {
             display_last_space: self.display_last_space,
             persistence: self.persistence,
             startup_restore_pending: false,
+            parking: Default::default(),
         }
     }
 }
