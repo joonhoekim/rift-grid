@@ -41,6 +41,20 @@ pub enum GridMaps {
     Active,
 }
 
+/// How a grid Overview looks.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy, Default, ConfigEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum GridStyle {
+    /// Cards of the cells' windows, in two stages.
+    #[default]
+    #[setting(label = "Cards")]
+    Cards,
+    /// The screen itself draws back until the whole grid shows, as the slide
+    /// between cells does, and comes in again to the cell chosen.
+    #[setting(label = "Zoom out")]
+    Zoom,
+}
+
 /// How a grid Overview's first stage moves when the active cell changes.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy, Default, ConfigEnum)]
 #[serde(rename_all = "snake_case")]

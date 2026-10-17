@@ -81,6 +81,16 @@ from the edges; `"center"` centers the active cell every time.
 Each window's tile carries its app and title at its bottom left corner
 (`grid_labels`, on by default).
 
+`grid_style = "zoom"` shows the overview differently, on the display in use:
+the screen draws back to the same stages, each cell its wallpaper with captures
+of its windows, and comes in again to the cell chosen when it closes. Arrows and
+Tab move the focus as in the cards, and the overview follows it, along with
+windows that open or close and grids switched to. Pointing at a cell selects it;
+Return, a click or the overview key in the last stage goes to it. It moves with
+the slide's `[settings.ui.grid_motion]` duration and easing, and needs Screen
+Recording access; without it, or outside a grid, the cards show instead.
+`"cards"` (default) is the overview above.
+
 ## Motion
 
 `[settings.ui.grid_motion]` shows where a move went. Both parts are on by default.

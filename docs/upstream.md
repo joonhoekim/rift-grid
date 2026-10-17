@@ -16,7 +16,7 @@ New code lives in fork modules; upstream files only call into them.
 | `layout_engine/engine.rs` | Grid commands in `handle_command` and `handle_virtual_workspace_command`; the recent window list |
 | `model/virtual_workspace.rs` | `grid_columns`, `grid_current`; `workspace_count`; `remap_grid_cells` in `remap_space`; a `grid` argument to `resolve_rule_workspace_with_policy` |
 | `common/config/types.rs` | `grid_columns`, app rules' `grid`, `validate_grid`; grid fields in `MissionControlSettings`, whose `Default` is written out by hand |
-| `ui/mission_control.rs`, `actor/mission_control.rs` | The grid overview's two stages, gliding cards, and refresh on reactor broadcasts |
+| `ui/mission_control.rs`, `actor/mission_control.rs` | The grid overview's two stages, gliding cards, and refresh on reactor broadcasts; in the actor, a `GridZoom` event and one call that hands events to the zoomed overview (`actor/mission_control/grid_zoom.rs`) |
 | `ui/menu_bar.rs`, `actor/menu_bar.rs` | Grid maps and the grid entries of the Workspace menu; the grid fields in the settings preview's `Workspace` |
 | `ui/settings/*` | A Window Borders category (also in `sidebar.rs`'s color match), the fork's Overview page in place of `interface::overview`, and their search entries |
 

@@ -1098,6 +1098,11 @@ pub struct MissionControlSettings {
         aliases = "grid overview follow focus reveal centre center"
     )]
     pub grid_follow: super::GridFollow,
+    #[serde(default)]
+    /// How a grid Overview looks: cards of the cells' windows, or the screen
+    /// drawing back until the whole grid shows.
+    #[setting(label = "Grid style", choices, enabled_by = "enabled", aliases = "grid overview zoom")]
+    pub grid_style: super::GridStyle,
 }
 
 fn default_mission_control_fade_duration_ms() -> f64 { 180.0 }
@@ -1122,6 +1127,7 @@ impl Default for MissionControlSettings {
             grid_fit: false,
             grid_zoom: default_mission_control_grid_zoom(),
             grid_follow: super::GridFollow::default(),
+            grid_style: super::GridStyle::default(),
         }
     }
 }

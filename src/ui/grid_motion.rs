@@ -29,6 +29,9 @@ use objc2_screen_capture_kit::{
 
 use crate::common::collections::HashMap;
 
+mod overview;
+pub use overview::{GridOverview, OverviewCell, OverviewStages, OverviewWindow};
+
 pub type Image = CFRetained<CGImage>;
 
 /// Carries ScreenCaptureKit's results from its queue to the reactor.
@@ -133,6 +136,23 @@ impl Shareable {
                 false, false, &callback,
             );
         }
+    }
+
+    /// Fetch the list of capturable windows, waiting at most `wait`.
+    pub fn fetch_now(&mut self, wait: Duration) -> bool {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let callback = RcBlock::new(move |content: *mut SCShareableContent, _: *mut NSError| {
+            let _ = tx.try_send(SendBox(unsafe { Retained::retain(content) }));
+        });
+        unsafe {
+            SCShareableContent::getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler(
+                false, false, &callback,
+            );
+        }
+        let content = rx.recv_timeout(wait).ok().and_then(|content| content.0);
+        let fetched = content.is_some();
+        self.set_content(content);
+        fetched
     }
 
     pub fn set_content(&mut self, content: Option<Retained<SCShareableContent>>) {

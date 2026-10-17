@@ -7,7 +7,7 @@ mod parse;
 mod schema;
 mod types;
 pub use borders::BorderSettings;
-pub use grid::{GRID_COUNT, GridFollow, GridMaps};
+pub use grid::{GRID_COUNT, GridFollow, GridMaps, GridStyle};
 pub use grid_motion::GridMotionSettings;
 pub use document::ConfigDocument;
 pub use schema::*;

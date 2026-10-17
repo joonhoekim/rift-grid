@@ -8,6 +8,8 @@ use crate::sys::dispatch::DispatchExt;
 use crate::sys::timer::Timer;
 use crate::ui::mission_control::{OverviewAction, OverviewSession, PreviewCache};
 
+mod grid_zoom;
+
 #[derive(Debug)]
 pub enum Event {
     StartPreviews(u64),
@@ -19,6 +21,7 @@ pub enum Event {
     Input(Input),
     /// The focus, the windows or the active workspace changed.
     Changed,
+    GridZoom(crate::ui::grid_motion::Note),
 }
 
 /// Whether a broadcast is one the open overview has to show.
@@ -136,6 +139,7 @@ pub struct MissionControlActor {
     generation: u64,
     mtm: MainThreadMarker,
     input_tx: super::input::Sender,
+    grid_zoom: grid_zoom::GridZoom,
 }
 
 impl MissionControlActor {
@@ -157,6 +161,7 @@ impl MissionControlActor {
             generation: 0,
             mtm,
             input_tx,
+            grid_zoom: Default::default(),
         }
     }
 
@@ -249,6 +254,7 @@ impl MissionControlActor {
     }
 
     fn handle(&mut self, event: Event) {
+        let Some(event) = self.grid_zoom(event) else { return };
         match event {
             Event::PumpPreviews => {
                 if let Some(previews) = self.session.as_mut().and_then(|s| s.previews.as_mut()) {
@@ -294,6 +300,7 @@ impl MissionControlActor {
                 }
             }
             Event::Dismiss => self.close(),
+            Event::GridZoom(_) => {}
             Event::Changed => {
                 if let Some(session) = &mut self.session {
                     session.sync_focus(&self.reactor, self.cache.as_ref());
