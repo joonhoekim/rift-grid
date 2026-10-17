@@ -18,7 +18,7 @@ New code lives in fork modules; upstream files only call into them.
 | `common/config/types.rs` | `grid_columns`, app rules' `grid`, `validate_grid`; grid fields in `MissionControlSettings`, whose `Default` is written out by hand |
 | `ui/mission_control.rs`, `actor/mission_control.rs` | The grid overview's two stages, gliding cards, and refresh on reactor broadcasts; in the actor, a `GridZoom` event and one call that hands events to the zoomed overview (`actor/mission_control/grid_zoom.rs`) |
 | `ui/menu_bar.rs`, `actor/menu_bar.rs` | Grid maps and the grid entries of the Workspace menu; the grid fields in the settings preview's `Workspace` |
-| `ui/settings/*` | A Window Borders category (also in `sidebar.rs`'s color match), the fork's Overview page in place of `interface::overview`, and their search entries |
+| `ui/settings/*` | A Window Borders category (also in `sidebar.rs`'s color match), the fork's Overview page in place of `interface::overview`, and their search entries; in `mod.rs`, one call that ends a field's editing on a click elsewhere or when the window goes to the back (`settings/editing.rs`), checked in `native_tests.rs` |
 
 ## Where merges conflict most
 
@@ -68,6 +68,12 @@ These could shrink the fork's footprint in upstream files. None is a defect.
 - On macOS 27 the unit tests abort now and then (about one run in five, mostly
   the first after a build) with `Cannot form weak reference to instance of
   class SLSWindowManagementFallbackBridge`, inside SkyLight. Run them again.
+
+- Settings text fields save when editing ends, which AppKit does on Return or
+  Tab only: a value typed and left there is saved when the page changes or
+  the window closes. The fork's `settings/editing.rs` also ends it on a click
+  elsewhere in the window and when the window goes to the back, and could go
+  upstream as is.
 
 ## Contributing back
 

@@ -122,6 +122,56 @@ pub fn run(ui: Ui) {
         }
         assert_eq!(edited.settings.animate, original);
 
+        // A field commits on a click elsewhere in the window, and when the window goes to the back.
+        {
+            use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
+            let before = settings.model().source.borrow().as_ref().clone();
+            let mut enabled = before.clone();
+            enabled.settings.ui.mission_control.enabled = true;
+            settings.router.model.replace_source(enabled);
+            let page = grid_pages::overview(ui, &settings.router.model);
+            page.synchronize(&settings.router.model);
+            settings.router.host.set_cached_page(page.view.clone());
+            let window = settings.window.ns_window();
+            let field = editable(page.view.ns_view()).unwrap();
+            let edit = |text: &str| {
+                assert!(window.makeFirstResponder(Some(&field)));
+                field.currentEditor().unwrap().setString(&objc2_foundation::NSString::from_str(text));
+            };
+            edit("3");
+            let app = NSApplication::sharedApplication(ui.mtm());
+            for kind in [NSEventType::LeftMouseDown, NSEventType::LeftMouseUp] {
+                let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+                    kind,
+                    CGPoint::new(2.0, 2.0),
+                    NSEventModifierFlags::empty(),
+                    0.0,
+                    window.windowNumber(),
+                    None,
+                    0,
+                    1,
+                    1.0,
+                )
+                .unwrap();
+                // Local monitors see an event as it is sent.
+                app.sendEvent(&event);
+            }
+            assert!(field.currentEditor().is_none(), "a click elsewhere ends editing");
+            let request = pending.try_recv().expect("and commits the value");
+            (request.finish)(Ok(()));
+            edit("4");
+            unsafe {
+                objc2_foundation::NSNotificationCenter::defaultCenter().postNotificationName_object(
+                    objc2_app_kit::NSWindowDidResignKeyNotification,
+                    Some(window),
+                );
+            }
+            assert!(field.currentEditor().is_none(), "the window going to the back ends editing");
+            let request = pending.try_recv().expect("and commits the value");
+            (request.finish)(Ok(()));
+            settings.router.model.replace_source(before);
+        }
+
         let root = settings.window.ns_window().contentView().unwrap();
         assert_eq!(
             settings

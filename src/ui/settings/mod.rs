@@ -16,6 +16,7 @@ use crate::sys::screen::ScreenInfo;
 
 mod applications;
 mod commands;
+mod editing;
 mod editors;
 mod interface;
 mod interface_preview;
@@ -453,6 +454,7 @@ impl Settings {
         });
         timing::finish(attachment_timing, "toolbar attachment");
         window.ns_window().center();
+        editing::end_editing_elsewhere(window.ns_window());
         let content_timing = timing::start();
         let navigation =
             NavigationSplitView::new(&ui, sidebar_pane(ui, &router, sidebar.clone()), host);
