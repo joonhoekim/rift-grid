@@ -3039,12 +3039,15 @@ impl LayoutEngine {
         // A window coming back from minimized, hidden or fullscreen returns to
         // the workspace it left, as a persistence match does below.
         let parked = self.parked_workspace(window_id, space).is_some_and(|workspace| {
-            self.workspaces.assign_window_to_workspace(window_store, space, window_id, workspace)
+            self.workspaces
+                .assign_window_to_workspace(window_store, space, window_id, workspace)
         });
         // A persistence match is an explicit restoration of the user's previous
         // workspace. App rules still control admission and other effects, but
         // their default placement must not relocate the window during restore.
-        if (restored || parked) && let Some(decision) = &mut decision {
+        if (restored || parked)
+            && let Some(decision) = &mut decision
+        {
             decision.workspace = None;
         }
         if reapply_workspace_rule {

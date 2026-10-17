@@ -10,8 +10,8 @@ use super::LayoutEngine;
 use crate::actor::app::{WindowId, pid_t};
 use crate::common::collections::{HashMap, HashSet};
 use crate::layout_engine::{LayoutId, LayoutSystem, LayoutSystemKind};
-use crate::model::virtual_workspace::{VirtualWorkspace, VirtualWorkspaceId};
 use crate::model::WindowStore;
+use crate::model::virtual_workspace::{VirtualWorkspace, VirtualWorkspaceId};
 use crate::sys::screen::SpaceId;
 
 #[derive(Debug, Default)]
@@ -139,10 +139,17 @@ impl LayoutEngine {
         layout: LayoutId,
         wid: WindowId,
     ) -> bool {
-        if self.parking.windows.get(&wid).is_none_or(|parked| parked.workspace != workspace_id) {
+        if self
+            .parking
+            .windows
+            .get(&wid)
+            .is_none_or(|parked| parked.workspace != workspace_id)
+        {
             return false;
         }
-        let Some(parked) = self.parking.windows.remove(&wid) else { return false };
+        let Some(parked) = self.parking.windows.remove(&wid) else {
+            return false;
+        };
         let restored = self.restore_parked_layouts(workspace_id, wid)
             || self.restore_after_neighbor(workspace_id, layout, wid, &parked.order);
         self.forget_parked_layouts(parked.workspace);
@@ -150,7 +157,9 @@ impl LayoutEngine {
     }
 
     fn restore_parked_layouts(&mut self, workspace_id: VirtualWorkspaceId, wid: WindowId) -> bool {
-        let Some(before) = self.parking.layouts.get(&workspace_id) else { return false };
+        let Some(before) = self.parking.layouts.get(&workspace_id) else {
+            return false;
+        };
         let workspace = &mut self.workspaces[workspace_id];
         let mut present = windows(workspace, &workspace.layout_system);
         let parked = &self.parking.windows;
@@ -176,7 +185,9 @@ impl LayoutEngine {
         order: &[WindowId],
     ) -> bool {
         let system = &mut self.workspaces[workspace_id].layout_system;
-        let Some(at) = order.iter().position(|&window| window == wid) else { return false };
+        let Some(at) = order.iter().position(|&window| window == wid) else {
+            return false;
+        };
         let Some(&neighbor) = order[..at]
             .iter()
             .rev()
@@ -218,7 +229,11 @@ fn trimmed(
     gone.sort_by_key(|wid| parked.get(wid).map_or(u64::MAX, |parked| parked.departure));
     let mut system = system.preview_clone()?;
     for wid in gone {
-        remove(&mut system, wid, parked.get(&wid).is_some_and(|parked| parked.rebalanced));
+        remove(
+            &mut system,
+            wid,
+            parked.get(&wid).is_some_and(|parked| parked.rebalanced),
+        );
     }
     Some(system)
 }
@@ -283,7 +298,10 @@ mod tests {
 
     impl Setup {
         fn new(mode: LayoutMode, windows: &[WindowId]) -> Self {
-            let settings = LayoutSettings { mode, ..LayoutSettings::default() };
+            let settings = LayoutSettings {
+                mode,
+                ..LayoutSettings::default()
+            };
             let mut setup = Self {
                 engine: LayoutEngine::new(&VirtualWorkspaceSettings::default(), &settings, None),
                 store: WindowStore::default(),
