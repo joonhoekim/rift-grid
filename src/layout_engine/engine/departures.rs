@@ -1,8 +1,17 @@
-//! Windows away for a while: minimized, hidden with their app, or in native
-//! fullscreen. Each keeps the workspace it left, and the workspace keeps its
-//! layouts as they were before the first of them left, so they come back to
-//! the same places at the same sizes rather than next to whatever is selected
-//! by then.
+//! Restores the layout position of windows that leave temporarily.
+//!
+//! A window that is minimized, hidden with its app, or moved to a native
+//! fullscreen space is removed from its layout. Without this, it would come
+//! back through the new-window path: inserted next to the current selection,
+//! with default sizes, and in the active workspace when minimizing has already
+//! cleared its assignment.
+//!
+//! When a window leaves, the engine keeps a copy of its workspace's layout
+//! system as it was before the first of the currently departed windows left.
+//! When a window returns and the workspace has otherwise only lost windows,
+//! that copy, minus the windows that are still away, replaces the current
+//! layouts. If the workspace changed in another way, the window is inserted
+//! after the window that preceded it instead.
 
 use rift_protocol::ContainerTreeNode;
 
@@ -15,169 +24,189 @@ use crate::model::virtual_workspace::{VirtualWorkspace, VirtualWorkspaceId};
 use crate::sys::screen::SpaceId;
 
 #[derive(Debug, Default)]
-pub(super) struct Parking {
-    windows: HashMap<WindowId, ParkedWindow>,
-    /// A workspace's layouts from before its windows away left.
-    layouts: HashMap<VirtualWorkspaceId, LayoutSystemKind>,
-    departures: u64,
+pub(super) struct Departures {
+    windows: HashMap<WindowId, Departure>,
+    /// Per workspace, its layout system from before its first departed window
+    /// left.
+    snapshots: HashMap<VirtualWorkspaceId, LayoutSystemKind>,
+    sequence: u64,
 }
 
 #[derive(Debug)]
-struct ParkedWindow {
+struct Departure {
     space: SpaceId,
     workspace: VirtualWorkspaceId,
-    /// The windows of the layout it left, in order, for when that layout has
-    /// changed by the time it comes back.
+    /// The windows of the active layout when it left, used to find a neighbor
+    /// when the snapshot no longer matches.
     order: Vec<WindowId>,
-    /// When it left, and whether its split was rebalanced then, as for a
-    /// window the store no longer places: to take it out of the layouts from
-    /// before the same way.
-    departure: u64,
+    /// Removal order and method, so that the snapshot can drop the window the
+    /// same way the live layout did.
+    sequence: u64,
     rebalanced: bool,
 }
 
 impl LayoutEngine {
-    /// Note where `wid` is and take it out of its workspace's layouts, for a
-    /// while.
-    pub(super) fn park_window(&mut self, window_store: &WindowStore, wid: WindowId) {
-        // The workspace whose layouts hold it, or else the one it is assigned
-        // to: a floating window has only that.
-        let tiled = self.workspaces.workspaces.iter().find_map(|(id, workspace)| {
-            let holds = |layout| workspace.layout_system.contains_window(layout, wid);
-            workspace.layout_state.all_layouts().any(holds).then_some((workspace.space, id))
-        });
-        // Removed again on its way, it keeps the place noted first.
-        if tiled.is_none() && self.parking.windows.contains_key(&wid) {
+    /// Record where `wid` is and remove it from its workspace's layouts.
+    /// Called for every removal, since a window can leave through several
+    /// paths (native fullscreen alone removes it more than once).
+    pub(super) fn note_departure(&mut self, window_store: &WindowStore, wid: WindowId) {
+        let tiled_in = self.tiling_workspace(wid);
+        // A later removal of a window that is already away (e.g. once it is
+        // on the fullscreen space) must not replace the original record.
+        if tiled_in.is_none() && self.departures.windows.contains_key(&wid) {
             return;
         }
-        let Some((space, workspace_id)) = tiled.or_else(|| {
+        let Some((space, workspace_id)) = tiled_in.or_else(|| {
+            // Floating windows are only known through their assignment.
             let assigned = window_store.workspace_info_for_window(wid)?;
             Some((assigned.space, assigned.workspace_id))
         }) else {
             return;
         };
+
+        // The engine rebalances the parent split when the store no longer
+        // assigns the window, as after minimizing.
+        let rebalanced = window_store.workspaces_for_window(wid).is_empty();
         let workspace = &mut self.workspaces[workspace_id];
         let order = workspace
-            .layout_state
-            .active()
+            .active_layout()
             .filter(|&layout| workspace.layout_system.contains_window(layout, wid))
             .map(|layout| workspace.layout_system.all_windows_in_layout(layout))
             .unwrap_or_default();
-        let rebalanced = window_store.workspaces_for_window(wid).is_empty();
-        if tiled.is_some() {
-            // Keep the layouts from before the first window away left, while
-            // the workspace has changed only by windows leaving.
-            let present = windows(workspace, &workspace.layout_system);
-            let kept = self.parking.layouts.get(&workspace_id).is_some_and(|before| {
-                trimmed(workspace, before, &present, None, &self.parking.windows)
-                    .is_some_and(|before| same_layouts(workspace, &before))
-            });
-            if !kept && let Some(before) = workspace.layout_system.preview_clone() {
-                self.parking.layouts.insert(workspace_id, before);
+        if tiled_in.is_some() {
+            let current = windows_in(workspace, &workspace.layout_system);
+            let snapshot_still_valid =
+                self.departures.snapshots.get(&workspace_id).is_some_and(|snapshot| {
+                    reduced_to(workspace, snapshot, &current, &self.departures.windows)
+                        .is_some_and(|reduced| same_layouts(workspace, &reduced))
+                });
+            if !snapshot_still_valid && let Some(snapshot) = workspace.layout_system.preview_clone()
+            {
+                self.departures.snapshots.insert(workspace_id, snapshot);
             }
             remove(&mut workspace.layout_system, wid, rebalanced);
         }
-        self.parking.departures += 1;
-        self.parking.windows.insert(wid, ParkedWindow {
+
+        self.departures.sequence += 1;
+        self.departures.windows.insert(wid, Departure {
             space,
             workspace: workspace_id,
             order,
-            departure: self.parking.departures,
+            sequence: self.departures.sequence,
             rebalanced,
         });
     }
 
-    /// The workspace `wid` left on `space`, when it is coming back to it.
-    pub(super) fn parked_workspace(
+    /// The space and workspace whose layouts contain `wid`.
+    fn tiling_workspace(&self, wid: WindowId) -> Option<(SpaceId, VirtualWorkspaceId)> {
+        self.workspaces.workspaces.iter().find_map(|(id, workspace)| {
+            let contains = |layout| workspace.layout_system.contains_window(layout, wid);
+            workspace
+                .layout_state
+                .all_layouts()
+                .any(contains)
+                .then_some((workspace.space, id))
+        })
+    }
+
+    /// The workspace `wid` left, if it left from `space`.
+    pub(super) fn departed_workspace(
         &self,
         wid: WindowId,
         space: SpaceId,
     ) -> Option<VirtualWorkspaceId> {
-        let parked = self.parking.windows.get(&wid)?;
-        (parked.space == space).then_some(parked.workspace)
+        let departure = self.departures.windows.get(&wid)?;
+        (departure.space == space).then_some(departure.workspace)
     }
 
-    /// Forget `wid` once it is back on `space`, the space it left: in
-    /// fullscreen it is placed on a space of its own meanwhile.
-    pub(super) fn forget_parked_window_on(&mut self, wid: WindowId, space: SpaceId) {
-        if self.parking.windows.get(&wid).is_some_and(|parked| parked.space == space) {
-            self.forget_parked_window(wid);
+    /// Forget `wid` once it is placed on the space it left. While in native
+    /// fullscreen it is placed on the fullscreen space, which does not count.
+    pub(super) fn forget_departure_on(&mut self, wid: WindowId, space: SpaceId) {
+        if self.departed_workspace(wid, space).is_some() {
+            self.forget_departure(wid);
         }
     }
 
-    pub(super) fn forget_parked_window(&mut self, wid: WindowId) {
-        if let Some(parked) = self.parking.windows.remove(&wid) {
-            self.forget_parked_layouts(parked.workspace);
+    fn forget_departure(&mut self, wid: WindowId) {
+        if let Some(departure) = self.departures.windows.remove(&wid) {
+            self.drop_unused_snapshot(departure.workspace);
         }
     }
 
-    pub(super) fn forget_parked_app(&mut self, pid: pid_t) {
-        let gone: Vec<_> =
-            self.parking.windows.keys().filter(|wid| wid.pid == pid).copied().collect();
-        for wid in gone {
-            self.forget_parked_window(wid);
+    pub(super) fn forget_departures_of_app(&mut self, pid: pid_t) {
+        let windows: Vec<_> =
+            self.departures.windows.keys().filter(|wid| wid.pid == pid).copied().collect();
+        for wid in windows {
+            self.forget_departure(wid);
         }
     }
 
-    /// Layouts from before carry the settings of then: windows away come back
-    /// after their neighbors instead.
-    pub(super) fn forget_parked_layouts_all(&mut self) { self.parking.layouts.clear(); }
+    /// Snapshots hold the layout settings they were taken with, so they are
+    /// dropped when the settings change. Departed windows then return next to
+    /// their neighbors.
+    pub(super) fn drop_departure_snapshots(&mut self) { self.departures.snapshots.clear(); }
 
-    fn forget_parked_layouts(&mut self, workspace: VirtualWorkspaceId) {
-        if !self.parking.windows.values().any(|parked| parked.workspace == workspace) {
-            self.parking.layouts.remove(&workspace);
+    fn drop_unused_snapshot(&mut self, workspace: VirtualWorkspaceId) {
+        if !self
+            .departures
+            .windows
+            .values()
+            .any(|departure| departure.workspace == workspace)
+        {
+            self.departures.snapshots.remove(&workspace);
         }
     }
 
-    /// Put `wid` back in `workspace`'s `layout`: in the layouts from before it
-    /// left, when the workspace has changed only by windows leaving, or else
-    /// after the window it followed. False when it has no place there to go
-    /// back to.
-    pub(super) fn restore_parked_window(
+    /// Put a returning `wid` back into `layout` of `workspace_id`, the
+    /// workspace it left. Returns false if it did not leave from there, or no
+    /// position could be restored; the caller then inserts it as usual.
+    pub(super) fn restore_departed_window(
         &mut self,
         workspace_id: VirtualWorkspaceId,
         layout: LayoutId,
         wid: WindowId,
     ) -> bool {
-        if self
-            .parking
-            .windows
-            .get(&wid)
-            .is_none_or(|parked| parked.workspace != workspace_id)
-        {
+        if self.departures.windows.get(&wid).map(|d| d.workspace) != Some(workspace_id) {
             return false;
         }
-        let Some(parked) = self.parking.windows.remove(&wid) else {
+        let Some(departure) = self.departures.windows.remove(&wid) else {
             return false;
         };
-        let restored = self.restore_parked_layouts(workspace_id, wid)
-            || self.restore_after_neighbor(workspace_id, layout, wid, &parked.order);
-        self.forget_parked_layouts(parked.workspace);
+        let restored = self.restore_snapshot(workspace_id, wid)
+            || self.insert_after_neighbor(workspace_id, layout, wid, &departure.order);
+        self.drop_unused_snapshot(workspace_id);
         restored
     }
 
-    fn restore_parked_layouts(&mut self, workspace_id: VirtualWorkspaceId, wid: WindowId) -> bool {
-        let Some(before) = self.parking.layouts.get(&workspace_id) else {
+    /// Replace the workspace's layouts with its snapshot, reduced to the
+    /// current windows plus `wid`, if the snapshot without `wid` matches the
+    /// current layouts.
+    fn restore_snapshot(&mut self, workspace_id: VirtualWorkspaceId, wid: WindowId) -> bool {
+        let Some(snapshot) = self.departures.snapshots.get(&workspace_id) else {
             return false;
         };
         let workspace = &mut self.workspaces[workspace_id];
-        let mut present = windows(workspace, &workspace.layout_system);
-        let parked = &self.parking.windows;
-        let Some(without) = trimmed(workspace, before, &present, None, parked) else {
-            return false;
-        };
-        if !same_layouts(workspace, &without) {
+        if !windows_in(workspace, snapshot).contains(&wid) {
             return false;
         }
-        present.insert(wid);
-        let Some(with) = trimmed(workspace, before, &present, Some(wid), parked) else {
+        let mut current = windows_in(workspace, &workspace.layout_system);
+        let departed = &self.departures.windows;
+        let matches = reduced_to(workspace, snapshot, &current, departed)
+            .is_some_and(|reduced| same_layouts(workspace, &reduced));
+        if !matches {
+            return false;
+        }
+        current.insert(wid);
+        let Some(restored) = reduced_to(workspace, snapshot, &current, departed) else {
             return false;
         };
-        workspace.layout_system = with;
+        workspace.layout_system = restored;
         true
     }
 
-    fn restore_after_neighbor(
+    /// Insert `wid` after the nearest window that preceded it in `order` and
+    /// is still in `layout`, or else after the nearest that followed it.
+    fn insert_after_neighbor(
         &mut self,
         workspace_id: VirtualWorkspaceId,
         layout: LayoutId,
@@ -185,13 +214,13 @@ impl LayoutEngine {
         order: &[WindowId],
     ) -> bool {
         let system = &mut self.workspaces[workspace_id].layout_system;
-        let Some(at) = order.iter().position(|&window| window == wid) else {
+        let Some(index) = order.iter().position(|&window| window == wid) else {
             return false;
         };
-        let Some(&neighbor) = order[..at]
+        let Some(&neighbor) = order[..index]
             .iter()
             .rev()
-            .chain(&order[at + 1..])
+            .chain(&order[index + 1..])
             .find(|&&window| system.contains_window(layout, window))
         else {
             return false;
@@ -203,7 +232,7 @@ impl LayoutEngine {
 }
 
 /// The windows in `system`'s layouts for `workspace`.
-fn windows(workspace: &VirtualWorkspace, system: &LayoutSystemKind) -> HashSet<WindowId> {
+fn windows_in(workspace: &VirtualWorkspace, system: &LayoutSystemKind) -> HashSet<WindowId> {
     workspace
         .layout_state
         .all_layouts()
@@ -212,30 +241,23 @@ fn windows(workspace: &VirtualWorkspace, system: &LayoutSystemKind) -> HashSet<W
         .collect()
 }
 
-/// `system`, layouts for `workspace`, with only the windows in `keep`, the
-/// others taken out as they left; none when it has no `needed`.
-fn trimmed(
+/// A copy of `snapshot` with only the windows in `keep`. The others are
+/// removed in the order and the way they left, so the result matches the
+/// live layouts if nothing else changed.
+fn reduced_to(
     workspace: &VirtualWorkspace,
-    system: &LayoutSystemKind,
+    snapshot: &LayoutSystemKind,
     keep: &HashSet<WindowId>,
-    needed: Option<WindowId>,
-    parked: &HashMap<WindowId, ParkedWindow>,
+    departed: &HashMap<WindowId, Departure>,
 ) -> Option<LayoutSystemKind> {
-    let all = windows(workspace, system);
-    if needed.is_some_and(|wid| !all.contains(&wid)) {
-        return None;
+    let mut removed: Vec<_> = windows_in(workspace, snapshot).difference(keep).copied().collect();
+    removed.sort_by_key(|wid| departed.get(wid).map_or(u64::MAX, |d| d.sequence));
+    let mut reduced = snapshot.preview_clone()?;
+    for wid in removed {
+        let rebalanced = departed.get(&wid).is_some_and(|d| d.rebalanced);
+        remove(&mut reduced, wid, rebalanced);
     }
-    let mut gone: Vec<_> = all.difference(keep).copied().collect();
-    gone.sort_by_key(|wid| parked.get(wid).map_or(u64::MAX, |parked| parked.departure));
-    let mut system = system.preview_clone()?;
-    for wid in gone {
-        remove(
-            &mut system,
-            wid,
-            parked.get(&wid).is_some_and(|parked| parked.rebalanced),
-        );
-    }
-    Some(system)
+    Some(reduced)
 }
 
 fn remove(system: &mut LayoutSystemKind, wid: WindowId, rebalance: bool) {
@@ -246,26 +268,26 @@ fn remove(system: &mut LayoutSystemKind, wid: WindowId, rebalance: bool) {
     }
 }
 
-/// Whether `other` places the windows of every layout of `workspace` as its
-/// own layouts do.
+/// Whether `other` arranges every layout of `workspace` as the workspace's own
+/// layout system does.
 fn same_layouts(workspace: &VirtualWorkspace, other: &LayoutSystemKind) -> bool {
     workspace.layout_state.all_layouts().all(|layout| {
         other.contains_layout(layout)
-            && same_shape(
+            && same_arrangement(
                 &other.container_tree(layout),
                 &workspace.layout_system.container_tree(layout),
             )
     })
 }
 
-/// Whether two layouts place the same windows the same way, whatever their
-/// selection and node identities.
-fn same_shape(a: &ContainerTreeNode, b: &ContainerTreeNode) -> bool {
-    let weights = match (a.weight, b.weight) {
+/// Compares two container trees by windows, structure and weights, ignoring
+/// node ids and selection, which differ between copies.
+fn same_arrangement(a: &ContainerTreeNode, b: &ContainerTreeNode) -> bool {
+    let same_weight = match (a.weight, b.weight) {
         (Some(a), Some(b)) => (a - b).abs() < 1e-6,
         (a, b) => a.is_none() && b.is_none(),
     };
-    weights
+    same_weight
         && a.node_type == b.node_type
         && a.layout_kind == b.layout_kind
         && a.window_id == b.window_id
@@ -273,7 +295,7 @@ fn same_shape(a: &ContainerTreeNode, b: &ContainerTreeNode) -> bool {
         && a.is_fullscreen_within_gaps == b.is_fullscreen_within_gaps
         && a.role == b.role
         && a.children.len() == b.children.len()
-        && a.children.iter().zip(&b.children).all(|(a, b)| same_shape(a, b))
+        && a.children.iter().zip(&b.children).all(|(a, b)| same_arrangement(a, b))
 }
 
 #[cfg(test)]
@@ -370,7 +392,7 @@ mod tests {
         ] {
             let w = windows(3);
             let mut setup = Setup::new(mode, &w);
-            // Somewhere else selected, so a new window would go there.
+            // Select another window, where a new window would be inserted.
             setup.focus(w[2]);
             let before = setup.frames();
             setup.event(LayoutEvent::WindowRemoved(w[0]));
@@ -394,7 +416,7 @@ mod tests {
         );
         let before = setup.frames();
         setup.focus(w[1]);
-        // Minimized, the window store lets go of its workspace first, and its
+        // Minimizing clears the store's assignment before the removal, so the
         // split is rebalanced.
         let _ = setup.store.remove_window_assignment(w[2]);
         setup.event(LayoutEvent::WindowRemoved(w[2]));
@@ -425,7 +447,7 @@ mod tests {
         let before = setup.order();
         let after = before[before.iter().position(|&window| window == w[1]).unwrap() - 1];
         setup.event(LayoutEvent::WindowRemoved(w[1]));
-        // A new window while it is away, the selection away from its place.
+        // Open and select another window while it is away.
         setup.observe(&[w[0], w[2], w[3]]);
         setup.focus(w[3]);
         setup.event(LayoutEvent::WindowAdded(setup.space, w[1]));
@@ -440,7 +462,7 @@ mod tests {
         let mut setup = Setup::new(LayoutMode::Bsp, &w);
         let space = setup.space;
         let left = setup.store.workspace_for_window(space, w[0]).unwrap();
-        // Minimized, the window store lets go of its workspace first.
+        // Minimizing clears the store's assignment before the removal.
         let _ = setup.store.remove_window_assignment(w[0]);
         setup.event(LayoutEvent::WindowRemoved(w[0]));
         let ids = setup.engine.workspaces.workspace_ids(space);

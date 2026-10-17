@@ -23,8 +23,8 @@ use crate::model::{
 };
 use crate::sys::screen::SpaceId;
 
+mod departures;
 mod grid;
-mod parking;
 mod persistence;
 
 use persistence::PersistenceState;
@@ -188,7 +188,8 @@ pub struct LayoutEngine {
     scroll_boundary: Option<((VirtualWorkspaceId, LayoutId, Direction), f64)>,
     /// Windows by when they last had the focus, for focus_recent_window.
     recent: grid::RecentWindows,
-    parking: parking::Parking,
+    /// Windows that left their layout temporarily, to put back on return.
+    departures: departures::Departures,
 }
 
 pub(crate) struct WorkspaceLayoutQuerySnapshot {
@@ -663,7 +664,7 @@ impl LayoutEngine {
 impl LayoutEngine {
     pub fn set_layout_settings(&mut self, settings: &LayoutSettings) {
         if self.layout_settings != *settings {
-            self.forget_parked_layouts_all();
+            self.drop_departure_snapshots();
         }
         self.layout_settings = settings.clone();
 
@@ -1249,11 +1250,11 @@ impl LayoutEngine {
         wid: WindowId,
         preserve_floating: bool,
     ) -> bool {
-        let shown_on = self.space_with_window(wid);
-        // It may be away for a while (minimized, hidden or in native
-        // fullscreen); it keeps its place for when it comes back.
-        self.park_window(window_store, wid);
-        let removal = self.remove_window_layout_membership(window_store, wid).or(shown_on);
+        let previous_space = self.space_with_window(wid);
+        // The window may only be leaving for a while (minimized, hidden or in
+        // native fullscreen); record its position for when it returns.
+        self.note_departure(window_store, wid);
+        let removal = self.remove_window_layout_membership(window_store, wid).or(previous_space);
 
         if preserve_floating {
             self.floating.remove_active_for_window(wid);
@@ -1311,9 +1312,10 @@ impl LayoutEngine {
     ) -> bool {
         let active_space_before = self.space_with_window(wid);
 
-        // Coming back from minimized or hidden, it has no workspace by now.
+        // Minimizing clears the assignment; a returning window goes back to the
+        // workspace it left.
         let assigned = window_store.workspace_for_window(space, wid).or_else(|| {
-            self.parked_workspace(wid, space).filter(|&workspace| {
+            self.departed_workspace(wid, space).filter(|&workspace| {
                 self.workspaces.assign_window_to_workspace(window_store, space, wid, workspace)
             })
         });
@@ -1340,7 +1342,7 @@ impl LayoutEngine {
             self.floating.add_active(space, wid.pid, wid);
         } else if let Some(layout) = self.workspaces.active_layout(space, assigned_workspace) {
             if !self.workspaces[assigned_workspace].layout_system.contains_window(layout, wid)
-                && !self.restore_parked_window(assigned_workspace, layout, wid)
+                && !self.restore_departed_window(assigned_workspace, layout, wid)
             {
                 if matches!(
                     self.workspaces[assigned_workspace].layout_system,
@@ -1360,7 +1362,7 @@ impl LayoutEngine {
             );
         }
         if should_be_floating || self.workspace_contains_window(assigned_workspace, wid) {
-            self.forget_parked_window_on(wid, space);
+            self.forget_departure_on(wid, space);
         }
 
         self.space_with_window(wid) != active_space_before
@@ -1544,7 +1546,7 @@ impl LayoutEngine {
             persistence: PersistenceState::default(),
             startup_restore_pending: false,
             scroll_boundary: None,
-            parking: Default::default(),
+            departures: Default::default(),
         }
     }
 
@@ -1849,7 +1851,7 @@ impl LayoutEngine {
                 self.floating.remove_all_for_pid(pid);
                 self.window_layout_constraints.retain(|wid, _| wid.pid != pid);
                 self.forget_persisted_app(pid);
-                self.forget_parked_app(pid);
+                self.forget_departures_of_app(pid);
 
                 self.floating_positions.remove_app(pid);
                 return EventResponse {
@@ -3036,16 +3038,16 @@ impl LayoutEngine {
         } else {
             self.app_rules.evaluate(context)
         };
-        // A window coming back from minimized, hidden or fullscreen returns to
-        // the workspace it left, as a persistence match does below.
-        let parked = self.parked_workspace(window_id, space).is_some_and(|workspace| {
+        // A window returning from minimized, hidden or fullscreen goes back to
+        // the workspace it left, like a persistence match below.
+        let returning = self.departed_workspace(window_id, space).is_some_and(|workspace| {
             self.workspaces
                 .assign_window_to_workspace(window_store, space, window_id, workspace)
         });
         // A persistence match is an explicit restoration of the user's previous
         // workspace. App rules still control admission and other effects, but
         // their default placement must not relocate the window during restore.
-        if (restored || parked)
+        if (restored || returning)
             && let Some(decision) = &mut decision
         {
             decision.workspace = None;
