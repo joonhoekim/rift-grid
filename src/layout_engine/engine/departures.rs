@@ -457,6 +457,19 @@ mod tests {
     }
 
     #[test]
+    fn a_returning_window_asks_for_a_layout_so_the_others_make_room() {
+        let w = windows(3);
+        let mut setup = Setup::new(LayoutMode::Bsp, &w);
+        let space = setup.space;
+        let _ = setup.store.remove_window_assignment(w[0]);
+        setup.event(LayoutEvent::WindowRemoved(w[0]));
+        let outcome = setup
+            .engine
+            .handle_event(&mut setup.store, LayoutEvent::WindowAdded(space, w[0]));
+        assert!(outcome.response.changed);
+    }
+
+    #[test]
     fn a_window_returning_to_a_workspace_not_shown_asks_for_a_layout() {
         let w = windows(2);
         let mut setup = Setup::new(LayoutMode::Bsp, &w);
