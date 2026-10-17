@@ -457,6 +457,24 @@ mod tests {
     }
 
     #[test]
+    fn a_window_returning_to_a_workspace_not_shown_asks_for_a_layout() {
+        let w = windows(2);
+        let mut setup = Setup::new(LayoutMode::Bsp, &w);
+        let space = setup.space;
+        let left = setup.store.workspace_for_window(space, w[0]).unwrap();
+        let _ = setup.store.remove_window_assignment(w[0]);
+        setup.event(LayoutEvent::WindowRemoved(w[0]));
+        let ids = setup.engine.workspaces.workspace_ids(space);
+        let other = *ids.iter().find(|&&id| id != left).unwrap();
+        setup.engine.workspaces.set_active_workspace(space, other);
+        let outcome = setup
+            .engine
+            .handle_event(&mut setup.store, LayoutEvent::WindowAdded(space, w[0]));
+        // The layout pass that follows moves the window off screen.
+        assert!(outcome.response.changed);
+    }
+
+    #[test]
     fn a_window_without_its_workspace_comes_back_to_the_one_it_left() {
         let w = windows(2);
         let mut setup = Setup::new(LayoutMode::Bsp, &w);

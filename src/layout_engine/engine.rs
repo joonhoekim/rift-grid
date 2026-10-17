@@ -1864,6 +1864,18 @@ impl LayoutEngine {
                 if self.add_window_to_layout(window_store, space, wid) {
                     self.broadcast_windows_changed(window_store, space);
                 }
+                // A window placed in a workspace that is not shown, such as one
+                // returning to the workspace it left, has to be moved off screen.
+                let active = self.workspaces.active_workspace(space);
+                if window_store
+                    .workspace_for_window(space, wid)
+                    .is_some_and(|ws| Some(ws) != active)
+                {
+                    return EventResponse {
+                        changed: true,
+                        ..EventResponse::default()
+                    };
+                }
             }
             LayoutEvent::WindowRemoved(wid) => {
                 return EventResponse {
