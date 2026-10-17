@@ -1102,7 +1102,7 @@ pub struct MissionControlSettings {
 
 fn default_mission_control_fade_duration_ms() -> f64 { 180.0 }
 
-fn default_mission_control_grid_gap() -> f64 { 0.04 }
+fn default_mission_control_grid_gap() -> f64 { 0.01 }
 
 fn default_mission_control_grid_zoom() -> f64 { 0.5 }
 
