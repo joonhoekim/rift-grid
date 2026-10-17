@@ -4,6 +4,8 @@ A fork of [rift](https://github.com/acsandmann/rift) that lays the virtual
 workspaces out as a grid and draws window borders in place of JankyBorders. Branch
 `grid`; `main` mirrors upstream.
 
+https://github.com/user-attachments/assets/93fb8b0f-f88f-4140-a179-30bf3c8bd829
+
 ## Why
 
 rift-grid started from subline, a Wayland compositor for Linux by the same
