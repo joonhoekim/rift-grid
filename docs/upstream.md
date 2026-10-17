@@ -13,7 +13,7 @@ New code lives in fork modules; upstream files only call into them.
 | --- | --- |
 | `actor/reactor.rs` | Three `Event` variants (`BorderSettle`, `WindowsReordered`, `GridMotion`); in `handle_event_inner`, the border and grid motion handlers, `grid_motion_before`/`after` and `update_borders` |
 | `actor/reactor/events/command.rs` | The list of grid commands, and switch tracking for commands that change cells only when they cross an edge |
-| `layout_engine/engine.rs` | Grid commands in `handle_command` and `handle_virtual_workspace_command`; the recent window list |
+| `layout_engine/engine.rs` | Grid commands in `handle_command` and `handle_virtual_workspace_command`; the recent window list; the calls into `engine/parking.rs` (see below) |
 | `model/virtual_workspace.rs` | `grid_columns`, `grid_current`; `workspace_count`; `remap_grid_cells` in `remap_space`; a `grid` argument to `resolve_rule_workspace_with_policy` |
 | `common/config/types.rs` | `grid_columns`, app rules' `grid`, `validate_grid`; grid fields in `MissionControlSettings`, whose `Default` is written out by hand |
 | `ui/mission_control.rs`, `actor/mission_control.rs` | The grid overview's two stages, gliding cards, and refresh on reactor broadcasts; in the actor, a `GridZoom` event and one call that hands events to the zoomed overview (`actor/mission_control/grid_zoom.rs`) |
@@ -74,6 +74,15 @@ These could shrink the fork's footprint in upstream files. None is a defect.
   the window closes. The fork's `settings/editing.rs` also ends it on a click
   elsewhere in the window and when the window goes to the back, and could go
   upstream as is.
+
+- A window minimized, hidden with its app or put in native fullscreen came
+  back next to whatever was selected, at default sizes, and a hidden app's
+  windows could come back in the workspace on screen instead of their own
+  (upstream #520, with #479, #511 and #541). The fork's
+  `layout_engine/engine/parking.rs` keeps the workspace's layouts from before
+  the window left and puts them back when nothing else changed meanwhile, or
+  else puts the window after its old neighbor; it works for every layout mode.
+  It is written as upstream code, to go upstream as a pull request for #520.
 
 ## Contributing back
 
