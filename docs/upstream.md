@@ -82,7 +82,7 @@ These could shrink the fork's footprint in upstream files. None is a defect.
   `layout_engine/engine/parking.rs` keeps the workspace's layouts from before
   the window left and puts them back when nothing else changed meanwhile, or
   else puts the window after its old neighbor; it works for every layout mode.
-  It is written as upstream code, to go upstream as a pull request for #520.
+  Sent upstream as #595 (from the `joonhoekim/rift` fork, remote `pr`).
 
 ## Contributing back
 
