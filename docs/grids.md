@@ -78,6 +78,9 @@ When the active cell changes in the first stage, the camera moves as
 `[settings.ui.mission_control] grid_follow` says: `"reveal"` (default) moves only as far as it takes to show the active cell whole, a gap
 from the edges; `"center"` centers the active cell every time.
 
+Each window's tile carries its app and title at its bottom left corner
+(`grid_labels`, on by default).
+
 ## Motion
 
 `[settings.ui.grid_motion]` shows where a move went. Both parts are on by default.

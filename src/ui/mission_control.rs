@@ -360,7 +360,7 @@ pub(crate) enum OverviewAction {
 struct WindowCard {
     id: WindowId,
     bare: bool,
-    /// A bare card's app and title row above the preview.
+    /// A bare card's app and title, over the preview's bottom left corner.
     label: bool,
     layer: Retained<CALayer>,
     image: Retained<CALayer>,
@@ -415,8 +415,13 @@ impl WindowCard {
                 objc2_quartz_core::kCAAlignmentCenter
             });
         }
-        title.setOpacity(0.65);
         caption.setHidden(bare && !labelled);
+        if bare {
+            caption.setBackgroundColor(Some(&color(0.06, 0.06, 0.08, 0.78)));
+            caption.setCornerRadius(LABEL_ROW / 2.0);
+        } else {
+            title.setOpacity(0.65);
+        }
         let result = Self {
             id: data.id,
             bare,
@@ -437,21 +442,24 @@ impl WindowCard {
         self.image.setFrame(image);
         if self.bare {
             if self.label {
-                let icon = 16.0;
+                let (icon, pad) = (16.0, 6.0);
+                let text_x = pad + if self.icon.is_some() { icon + 5.0 } else { 0.0 };
+                let room = image.size.width - 2.0 * LABEL_INSET;
+                let width = (text_x + self.title.preferredFrameSize().width + 2.0 * pad).min(room);
                 self.caption.setFrame(rect(
-                    image.origin.x,
-                    image.origin.y - LABEL_ROW,
-                    image.size.width,
+                    image.origin.x + LABEL_INSET,
+                    image.max().y - LABEL_INSET - LABEL_ROW,
+                    width.max(1.0),
                     LABEL_ROW,
                 ));
-                let text_x = if self.icon.is_some() { icon + 5.0 } else { 0.0 };
+                self.caption.setHidden(image.size.height < LABEL_ROW + 2.0 * LABEL_INSET);
                 if let Some(layer) = &self.icon {
-                    layer.setFrame(rect(0.0, (LABEL_ROW - icon) / 2.0, icon, icon));
+                    layer.setFrame(rect(pad, (LABEL_ROW - icon) / 2.0, icon, icon));
                 }
                 self.title.setFrame(rect(
                     text_x,
                     (LABEL_ROW - 16.0) / 2.0,
-                    (image.size.width - text_x).max(1.0),
+                    (width - text_x - pad).max(1.0),
                     16.0,
                 ));
             }
@@ -812,7 +820,7 @@ impl DisplayOverview {
                             data,
                             w.frame,
                             ws.cell,
-                            ws.cell && self.look.labels_fit(self.info.frame.size),
+                            ws.cell && self.look.labels(),
                             self.scale,
                             image.map(|i| &*(i.as_ref() as *const CGImage as *const AnyObject)),
                             icon.as_ref()

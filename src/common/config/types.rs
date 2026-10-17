@@ -1061,8 +1061,7 @@ pub struct MissionControlSettings {
     )]
     pub grid_gap: f64,
     #[serde(default = "yes")]
-    /// Show each window's app and title above its tile in a grid Overview, in the
-    /// gap between cells. Not drawn when the gap is too narrow for it.
+    /// Show each window's app and title over its tile in a grid Overview.
     #[setting(
         label = "Grid tile labels",
         enabled_by = "enabled",

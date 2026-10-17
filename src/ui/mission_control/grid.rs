@@ -5,8 +5,9 @@
 use super::*;
 use crate::common::config::GridFollow;
 
-// The app and title row above a grid tile, drawn in the gap between cells.
+// The app and title over a grid tile's bottom left corner, and its distance from it.
 pub(super) const LABEL_ROW: f64 = 22.0;
+pub(super) const LABEL_INSET: f64 = 6.0;
 // Grid cards are bare previews with a hairline gap between tiles.
 pub(super) const BARE_INSET: f64 = 1.5;
 
@@ -167,10 +168,7 @@ impl GridLook {
 
     pub(super) fn gap_px(self, display: CGSize) -> f64 { self.gap * display.width.min(display.height) }
 
-    /// Labels sit in the gap above each tile, so they need a gap at least their height.
-    pub(super) fn labels_fit(self, display: CGSize) -> bool {
-        self.labels && self.gap_px(display) >= LABEL_ROW
-    }
+    pub(super) fn labels(self) -> bool { self.labels }
 }
 
 /// The frame of one grid cell. Cells keep the display's aspect ratio and lie `gap`
@@ -768,10 +766,6 @@ mod tests {
         let between = CGPoint::new(frame(0).max().x + gap / 2.0, frame(0).mid().y);
         assert_eq!(hit(&workspaces, &projection, between), None);
 
-        // Labels go in the gap, so a gap narrower than a label row has none.
-        assert!(look.labels_fit(display.size));
-        assert!(!GridLook { gap: 0.01, ..look }.labels_fit(display.size));
-        assert!(!GridLook { labels: false, ..look }.labels_fit(display.size));
         let empty: MissionControlSettings = toml::from_str("").unwrap();
         assert_eq!(GridLook::new(&MissionControlSettings::default()), GridLook::new(&empty));
     }
