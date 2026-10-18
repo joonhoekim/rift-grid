@@ -166,6 +166,9 @@ fn confirmed_window_move_forwards_membership_without_space_switch() {
     let destination = SpaceId::new(12);
     let wsid = WindowServerId::new(77);
 
+    // Before setup: the snapshot reads the origin space's windows from the real
+    // WindowServer, where space 11 may be a real desktop.
+    crate::sys::window_server::set_space_window_list_for_connection_override(Some(vec![]));
     actor.state.screens = vec![make_screen(Some(origin))];
     actor.forward_screen_parameters(actor.state.screens.clone(), CoordinateConverter::default());
     let _ = recv_wm(&mut wm_rx);
