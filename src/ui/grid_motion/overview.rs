@@ -498,10 +498,16 @@ impl<T: PartialEq> GridOverview<T> {
             animation.duration()
         };
         // `transform.scale` averages in the depth scale, which stays 1, so
-        // both ends are given.
+        // both ends are given. Mid-animation it scales the depth too, and the
+        // transform is no longer affine: `affineTransform` reads 1 then, and a
+        // move during a move would start from the screen at full size.
+        let scale_key = NSString::from_str("transform.scale.x");
         let scale_to = |layer: &CALayer, to: f64| {
             let shown = unsafe { layer.presentationLayer() }
-                .map_or_else(|| layer.affineTransform().a, |shown| shown.affineTransform().a);
+                .map_or_else(|| objc2::Message::retain(layer), |shown| shown)
+                .valueForKeyPath(&scale_key)
+                .and_then(|value| value.downcast::<NSNumber>().ok())
+                .map_or(to, |value| value.as_f64());
             let animation = make("transform.scale", &NSNumber::new_f64(shown));
             unsafe { animation.setToValue(Some(&NSNumber::new_f64(to))) };
             layer.setAffineTransform(CGAffineTransform { a: to, b: 0.0, c: 0.0, d: to, tx: 0.0, ty: 0.0 });
