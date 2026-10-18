@@ -2328,11 +2328,12 @@ fn hidden_window_can_move_to_another_native_space_without_staying_pinned_to_old_
     snapshot.membership_complete = true;
     snapshot.active_window_spaces.insert(wsid, space2);
     reactor.handle_event(Event::SpaceStateChanged(snapshot));
-    crate::sys::window_server::set_window_spaces_override(wsid, None);
 
     assert_eq!(reactor.state.windows.window_server_space(wsid), Some(space2));
     assert_eq!(reactor.assigned_space_for_window_id(wid), Some(space2));
+    // Still overridden: this asks the WindowServer, where the fake id may be a real window.
     assert_eq!(reactor.authoritative_space_for_window_id(wid), Some(space2));
+    crate::sys::window_server::set_window_spaces_override(wsid, None);
 }
 
 #[test]
