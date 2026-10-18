@@ -77,6 +77,9 @@ fn border_color(
         ColorWell::new(&f.ui)
             .on_change(move |rgba| commit(crate::common::config::borders::format_color(rgba))),
     );
+    // `ColorWell` turns continuous off, and then a choice in the color panel
+    // never sends the action. Like the sliders, commit as the color changes.
+    well.ns_color_well().setContinuous(true);
     f.sync(&well, move |well, s| {
         if let Some(rgba) = crate::common::config::borders::parse_color(get(s)) {
             well.set_value(rgba);
