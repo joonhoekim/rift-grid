@@ -1,7 +1,7 @@
 //! Grids belong to displays, as workspaces do in Hyprland: a grid is on one
 //! display at a time, the one showing it or holding its windows, and its number
 //! leads there. `switch_to_grid` shows the grid on its display and moves the
-//! focus there; `move_window_to_grid` sends the window to that display. A grid
+//! focus there (not while the Overview is open); `move_window_to_grid` sends the window to that display. A grid
 //! on no display yet comes up on the focused one. A display that comes up showing
 //! an empty grid another display shows already is given the first free grid.
 //! `move_grid_to_display` hands a grid to another display, from the overview.
@@ -176,7 +176,12 @@ impl Reactor {
         if switch {
             self.space_state.command_space = Some(there);
             self.handle_event_inner(event);
-            self.focus_display(display);
+            // From the Overview, the grid shows there and the Overview stays.
+            if crate::ui::grid_motion::overview_open() {
+                self.space_state.command_space = Some(here);
+            } else {
+                self.focus_display(display);
+            }
             return Ok(());
         }
         // The window lands in the cell on screen there, and the focus goes with

@@ -256,7 +256,8 @@ impl WmController {
                 | Command(ReactorCommand(_))
                 | Command(ConfiguredLayout(_))
         );
-        if matches!(&event, SpaceStateUpdated(..))
+        if let SpaceStateUpdated(state, _) = &event
+            && crate::ui::grid_motion::screens_changed(&state.screens)
             && let Some(tx) = &self.mission_control_tx
         {
             tx.send(mission_control::Event::Dismiss);

@@ -120,10 +120,15 @@ The zoomed overview has a row of grid buttons at the top, a group per display
 with a line between groups: the overview's display first, then each other
 display. A group lists the grids on its display: the one shown (filled on this
 display, outlined on another) and those holding windows; the first group ends
-in "+", the first grid on no display. Clicking a button of this display shows
-that grid here and the overview follows it; clicking another display's grid
-closes the overview and goes there, as Alt+N does. Dragging a button onto
-another group hands the grid to that display (above).
+in "+", the first grid on no display. Clicking a button shows that grid on its
+display; the overview stays open, following it when it is this display's.
+Dragging a button onto another group hands the grid to that display (above),
+and the overview stays open on the result. Alt+N while the overview is open
+shows the grid on its display without moving the focus there.
+
+The overview closes when a display comes or goes, moves, or shows another
+Space; other display updates, such as windows moving between displays, leave it
+open.
 
 ## Motion
 

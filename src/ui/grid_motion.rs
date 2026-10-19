@@ -87,6 +87,28 @@ pub fn set_overview_open(open: bool) {
 
 pub fn overview_open() -> bool { OVERVIEW_OPEN.load(std::sync::atomic::Ordering::Relaxed) }
 
+type ScreenKey = (String, Option<crate::sys::screen::SpaceId>, [i64; 4]);
+static LAST_SCREENS: std::sync::Mutex<Vec<ScreenKey>> = std::sync::Mutex::new(Vec::new());
+
+/// Whether the displays, where they are, or the Space each shows differ from the
+/// last time this was asked. Other updates, such as windows moving between
+/// displays, leave the Overview open.
+pub fn screens_changed(screens: &[crate::sys::screen::ScreenInfo]) -> bool {
+    let key: Vec<ScreenKey> = screens
+        .iter()
+        .map(|s| {
+            let f = s.frame;
+            let at =
+                [f.origin.x, f.origin.y, f.size.width, f.size.height].map(|v| v.round() as i64);
+            (s.display_uuid.clone(), s.space, at)
+        })
+        .collect();
+    let Ok(mut last) = LAST_SCREENS.lock() else { return true };
+    let changed = *last != key;
+    *last = key;
+    changed
+}
+
 /// The space between cells as the screen slides past them.
 const GAP: f64 = 28.0;
 
@@ -950,5 +972,28 @@ impl Hud {
         animate(&self.root, "opacity", &NSNumber::new_f64(1.0), 0.18);
         CATransaction::commit();
         CATransaction::flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sys::screen::{ScreenId, ScreenInfo, SpaceId};
+
+    #[test]
+    fn only_displays_or_their_spaces_changing_count() {
+        let screen = |space| ScreenInfo {
+            id: ScreenId::new(1),
+            frame: rect(0.0, 0.0, 1000.0, 800.0),
+            backing_scale: 2.0,
+            display_uuid: "a".into(),
+            name: None,
+            space: Some(SpaceId::new(space)),
+        };
+        screens_changed(&[screen(1)]);
+        assert!(!screens_changed(&[screen(1)]), "the same displays");
+        assert!(screens_changed(&[screen(2)]), "another Space");
+        let other = ScreenInfo { display_uuid: "b".into(), ..screen(3) };
+        assert!(screens_changed(&[screen(2), other]), "another display");
     }
 }

@@ -185,7 +185,7 @@ impl MissionControlActor {
                     )));
                     self.grid_zoom_sync();
                 } else {
-                    self.grid_zoom_bar_click(button.0, &pressed);
+                    self.grid_zoom_bar_click(&pressed);
                 }
             }
             Input::Move(_) | Input::Scroll { .. } if open.drag.is_some() => {}
@@ -194,23 +194,15 @@ impl MissionControlActor {
         true
     }
 
-    /// A grid button clicked: this display's grid shows here, and the Overview
-    /// follows it; another display's grid shows there, and the Overview closes.
-    fn grid_zoom_bar_click(&mut self, group: usize, button: &BarButton) {
-        if button.shown == Shown::Here {
+    /// A grid button clicked: the grid shows on its display, and the Overview
+    /// stays, following it when it is this display's.
+    fn grid_zoom_bar_click(&mut self, button: &BarButton) {
+        if button.shown != Shown::No {
             return;
         }
         let command = LayoutCommand::SwitchToGrid(button.grid + 1);
-        if group == 0 {
-            self.reactor.send(reactor::Event::Command(reactor::Command::Layout(command)));
-            self.grid_zoom_sync();
-            return;
-        }
-        if let Some(open) = self.grid_zoom.open.as_mut() {
-            open.overview.select_active();
-        }
-        self.grid_zoom_enter();
         self.reactor.send(reactor::Event::Command(reactor::Command::Layout(command)));
+        self.grid_zoom_sync();
     }
 
     /// The grid buttons: for each display, the Overview's own first, the grids
