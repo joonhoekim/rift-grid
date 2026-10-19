@@ -103,6 +103,7 @@ Found by experiment on macOS 26/27; recheck when macOS changes:
 Once these have run daily for a while, they could go upstream as pull requests,
 each from a fresh branch off `upstream/main`: window borders (no JankyBorders
 needed), the workspace grid with its overview and menu bar map, and live
-overview previews. A test fix, which the fork carries as its own commit so the
+overview previews. For gestures, docs/upstream.md lists changes to propose
+that would shrink the fork's hooks. A test fix, which the fork carries as its own commit so the
 pull request can take it as is, can go any time; see
 [docs/upstream.md](docs/upstream.md).

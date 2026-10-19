@@ -94,6 +94,34 @@ These could shrink the fork's footprint in upstream files. None is a defect.
   else puts the window after its old neighbor; it works for every layout mode.
   Sent upstream as #595 (from the `joonhoekim/rift` fork, remote `pr`).
 
+## Gesture changes to propose
+
+The grid's trackpad swipes hook into upstream's gesture code in several
+places (see the table above). These upstream changes would remove most of
+those hooks, and are useful upstream on their own. None has been proposed yet.
+
+- **Swipes bound to commands, by finger count and direction.** Upstream's
+  gestures are two fixed actions: horizontal workspace switching and the
+  Scrolling layout strip. A table like `[gestures] three.left = "..."` (as in
+  subline) binding any command to three or four fingers in each direction
+  would make the cell swipe plain configuration (`grid_cell`), leaving the
+  fork only its grid and Overview commands. It needs two changes the fork
+  already carries: vertical Dock swipes (Mission Control, App Exposé) going
+  through the event tap's arbitration (`Filter::vertical`), and a late finger
+  picking any configured action (`action_for(mode, count)` in place of the
+  two-action `alternate`). Worth sending as a feature pull request.
+- **Gestures while the Overview is open.** Upstream turns gesture recognition
+  off while the Overview is open, so with `consume_dock_swipe = true` a
+  three-finger swipe over the Overview still switches macOS Spaces, and four
+  fingers up open Mission Control. Recognizing the swipes there, at least to
+  keep them from macOS, is a bug fix of its own. Fix it in the fork first and
+  send the same commit, as with the test fixes.
+- **A command to step the Overview's stages.** The reactor has no way to the
+  Overview actor, so the fork added `WmEvent::OverviewStep`. A command for
+  stepping out and in would serve keys, the CLI and gestures alike. The stages
+  themselves (the zoomed overview, Esc stepping) are the fork's, so this waits
+  for the first item.
+
 ## Contributing back
 
 See [FORK.md](../FORK.md#upstream-candidates): each candidate goes as a pull
