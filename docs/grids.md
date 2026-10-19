@@ -36,7 +36,8 @@ N means one place whichever display the focus is on.
   grid that a display before it shows too is moved to the first grid on no
   display: the main display starts on grid 1, the next on grid 2.
 
-- **Handing a grid over**: `move_grid_to_display` (`rift-cli execute layout
+- **Handing a grid over**: in the zoomed overview, dragging a grid button onto
+  another display's group (or `move_grid_to_display`, `rift-cli execute layout
   move-grid-to-display <N> --uuid <display>`) gives the grid to that display.
   Each cell goes as it is, its windows and layout, and the receiving display
   shows the grid at its current cell. If the giving display was showing it, it
@@ -114,6 +115,15 @@ Return, a click or the overview key in the last stage goes to it. It moves with
 the slide's `[settings.ui.grid_motion]` duration and easing, and needs Screen
 Recording access; without it, or outside a grid, the cards show instead.
 `"cards"` (default) is the overview above.
+
+The zoomed overview has a row of grid buttons at the top, a group per display
+with a line between groups: the overview's display first, then each other
+display. A group lists the grids on its display: the one shown (filled on this
+display, outlined on another) and those holding windows; the first group ends
+in "+", the first grid on no display. Clicking a button of this display shows
+that grid here and the overview follows it; clicking another display's grid
+closes the overview and goes there, as Alt+N does. Dragging a button onto
+another group hands the grid to that display (above).
 
 ## Motion
 

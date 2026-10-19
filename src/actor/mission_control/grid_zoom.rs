@@ -13,9 +13,14 @@ use crate::layout_engine::{Direction, LayoutCommand};
 use crate::model::VirtualWorkspaceId;
 use crate::sys::dispatch::DispatchExt;
 use crate::sys::screen::SpaceId;
+use crate::common::config::GRID_COUNT;
 use crate::ui::grid_motion::{
-    GridOverview, Note, OverviewCell, OverviewStages, OverviewWindow, Shareable,
+    BarButton, BarGroup, GridBar, GridOverview, Note, OverviewCell, OverviewStages,
+    OverviewWindow, Shareable, Shown,
 };
+
+/// How far the pointer goes before pressing a grid button becomes dragging it.
+const DRAG_START: f64 = 4.0;
 
 /// How long the first opening may wait for the list of capturable windows, and
 /// each opening for the capture of the screen.
@@ -40,6 +45,16 @@ struct Open {
     unknown: Vec<(u32, CGSize)>,
     /// Coming in to a cell; the overlay goes when that ends.
     entering: bool,
+    /// The grid buttons, a group per display.
+    bar: Option<GridBar>,
+    drag: Option<BarDrag>,
+}
+
+/// A grid button pressed: its group and place, and where the pointer went down.
+struct BarDrag {
+    button: (usize, usize),
+    from: CGPoint,
+    moved: bool,
 }
 
 /// The grid on a display as the reactor has it.
@@ -82,9 +97,13 @@ impl MissionControlActor {
     }
 
     fn grid_zoom_input(&mut self, input: Input) {
-        let Some(open) = self.grid_zoom.open.as_mut().filter(|open| !open.entering) else {
+        if self.grid_zoom.open.as_ref().is_none_or(|open| open.entering) {
             return;
-        };
+        }
+        if self.grid_zoom_bar_input(&input) {
+            return;
+        }
+        let Some(open) = self.grid_zoom.open.as_mut() else { return };
         let overview = &mut open.overview;
         let command = match input {
             Input::Left => LayoutCommand::GridFocus(Direction::Left),
@@ -117,6 +136,144 @@ impl MissionControlActor {
         // Queries share the reactor's queue, so the sync sees the result.
         self.reactor.send(reactor::Event::Command(reactor::Command::Layout(command)));
         self.grid_zoom_sync();
+    }
+
+    /// Handle `input` when it is for the grid buttons: pressing, dragging and
+    /// letting go of one. Dropped on another display's group, the grid goes to
+    /// that display; let go where it was pressed, it is a click.
+    fn grid_zoom_bar_input(&mut self, input: &Input) -> bool {
+        let Some(open) = self.grid_zoom.open.as_mut() else { return false };
+        let Some(bar) = open.bar.as_mut() else { return false };
+        let local = |p: CGPoint| CGPoint::new(p.x - open.frame.origin.x, p.y - open.frame.origin.y);
+        match *input {
+            Input::PointerDown(p) => {
+                let Some(button) = bar.button_at(local(p)) else { return false };
+                open.drag = Some(BarDrag { button, from: p, moved: false });
+            }
+            Input::PointerDrag(p) => {
+                let Some(drag) = open.drag.as_mut() else { return false };
+                drag.moved |= (p.x - drag.from.x).hypot(p.y - drag.from.y) > DRAG_START;
+                if drag.moved {
+                    bar.drag(drag.button, local(p));
+                    open.overview.flush();
+                }
+            }
+            Input::PointerUp(p) | Input::Click(p) => {
+                let drag = open.drag.take();
+                let Some((button, moved)) = drag
+                    .map(|d| (d.button, d.moved))
+                    .or_else(|| bar.button_at(local(p)).map(|b| (b, false)))
+                else {
+                    return false;
+                };
+                bar.end_drag();
+                open.overview.flush();
+                let Some(pressed) = bar.button(button).cloned() else { return true };
+                if moved {
+                    let Some(group) = bar.group_at(local(p)).filter(|&g| g != button.0) else {
+                        return true;
+                    };
+                    if pressed.new {
+                        return true;
+                    }
+                    let display = bar.groups()[group].display.clone();
+                    self.reactor.send(reactor::Event::Command(reactor::Command::Layout(
+                        LayoutCommand::MoveGridToDisplay {
+                            grid: pressed.grid + 1,
+                            display: reactor::DisplaySelector::Uuid(display),
+                        },
+                    )));
+                    self.grid_zoom_sync();
+                } else {
+                    self.grid_zoom_bar_click(button.0, &pressed);
+                }
+            }
+            Input::Move(_) | Input::Scroll { .. } if open.drag.is_some() => {}
+            _ => return open.drag.is_some(),
+        }
+        true
+    }
+
+    /// A grid button clicked: this display's grid shows here, and the Overview
+    /// follows it; another display's grid shows there, and the Overview closes.
+    fn grid_zoom_bar_click(&mut self, group: usize, button: &BarButton) {
+        if button.shown == Shown::Here {
+            return;
+        }
+        let command = LayoutCommand::SwitchToGrid(button.grid + 1);
+        if group == 0 {
+            self.reactor.send(reactor::Event::Command(reactor::Command::Layout(command)));
+            self.grid_zoom_sync();
+            return;
+        }
+        if let Some(open) = self.grid_zoom.open.as_mut() {
+            open.overview.select_active();
+        }
+        self.grid_zoom_enter();
+        self.reactor.send(reactor::Event::Command(reactor::Command::Layout(command)));
+    }
+
+    /// The grid buttons: for each display, the Overview's own first, the grids
+    /// on it (shown, or holding windows); then "+" for the first grid on none.
+    fn grid_zoom_bar_groups(&self, display: &str) -> Vec<BarGroup> {
+        let mut displays = self.reactor.query_displays();
+        displays.sort_by_key(|d| d.info.display_uuid != display);
+        let mut used = [false; GRID_COUNT];
+        let mut groups: Vec<BarGroup> = displays
+            .iter()
+            .filter_map(|d| {
+                let space = d.info.space?;
+                let here = d.info.display_uuid == display;
+                let workspaces = self.reactor.query_workspaces(Some(space));
+                let shown = workspaces.iter().find(|w| w.is_active).and_then(|w| w.grid);
+                let mut grids: Vec<usize> = workspaces
+                    .iter()
+                    .filter(|w| w.window_count > 0 || w.grid == shown)
+                    .filter_map(|w| w.grid)
+                    .filter(|&g| g < GRID_COUNT)
+                    .collect();
+                grids.dedup();
+                let buttons = grids
+                    .into_iter()
+                    .map(|grid| {
+                        used[grid] = true;
+                        let shown = match () {
+                            _ if Some(grid) != shown => Shown::No,
+                            _ if here => Shown::Here,
+                            _ => Shown::Elsewhere,
+                        };
+                        BarButton { grid, shown, new: false }
+                    })
+                    .collect();
+                Some(BarGroup { display: d.info.display_uuid.clone(), buttons })
+            })
+            .collect();
+        if let Some(free) = used.iter().position(|&used| !used)
+            && let Some(first) = groups.first_mut().filter(|g| g.display == display)
+        {
+            first.buttons.push(BarButton { grid: free, shown: Shown::No, new: true });
+        }
+        groups
+    }
+
+    /// Draw the grid buttons again when they changed.
+    fn grid_zoom_bar_refresh(&mut self) {
+        let Some(display) = self.grid_zoom.open.as_ref().map(|open| open.display.clone()) else {
+            return;
+        };
+        let groups = self.grid_zoom_bar_groups(&display);
+        let Some(open) = self.grid_zoom.open.as_mut() else { return };
+        if open.drag.is_some() || open.bar.as_ref().is_some_and(|bar| bar.groups() == groups) {
+            return;
+        }
+        if let Some(bar) = open.bar.take() {
+            bar.remove();
+        }
+        if groups.iter().any(|g| !g.buttons.is_empty()) {
+            let scale = open.overview.screen_layer().contentsScale();
+            open.bar = Some(GridBar::new(open.overview.screen_layer(), groups, scale));
+        }
+        open.overview.flush();
     }
 
     /// The grid on `space`, whose display is at `frame`, as it is now.
@@ -237,7 +394,10 @@ impl MissionControlActor {
             frame,
             unknown: Vec::new(),
             entering: false,
+            bar: None,
+            drag: None,
         });
+        self.grid_zoom_bar_refresh();
         self.grid_zoom_capture(windows);
         self.input_tx.send(super::super::input::Request::SetMissionControlActive(true));
         crate::ui::grid_motion::set_overview_open(true);
@@ -279,6 +439,7 @@ impl MissionControlActor {
         let Some(open) = self.grid_zoom.open.as_mut() else { return };
         let wanted = open.overview.update(state.cells);
         open.overview.set_active(state.active, state.focused);
+        self.grid_zoom_bar_refresh();
         self.grid_zoom_capture(wanted);
     }
 
@@ -296,6 +457,10 @@ impl MissionControlActor {
             return;
         };
         open.entering = true;
+        open.drag = None;
+        if let Some(bar) = &open.bar {
+            bar.hide();
+        }
         let length = open.overview.enter();
         if !open.overview.selected_is_active()
             && let Some(&workspace) = open.overview.selected()

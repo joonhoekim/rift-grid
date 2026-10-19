@@ -215,6 +215,12 @@ impl<T: PartialEq> GridOverview<T> {
 
     pub fn generation(&self) -> u64 { self.generation }
 
+    /// The layer over the whole display, for what stays put as the camera moves.
+    pub fn screen_layer(&self) -> &CALayer { &self.root }
+
+    /// Show changes made to the screen layer.
+    pub fn flush(&self) { CATransaction::flush(); }
+
     /// The windows to capture: all of them, for the cells as first shown.
     pub fn windows(&self) -> Vec<(u32, CGSize)> {
         self.tiles.iter().map(|(id, tile)| (*id, tile.size)).collect()

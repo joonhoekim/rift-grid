@@ -29,7 +29,9 @@ use objc2_screen_capture_kit::{
 
 use crate::common::collections::HashMap;
 
+mod grid_bar;
 mod overview;
+pub use grid_bar::{BarButton, BarGroup, GridBar, Shown};
 pub use overview::{GridOverview, OverviewCell, OverviewStages, OverviewWindow};
 
 pub type Image = CFRetained<CGImage>;
