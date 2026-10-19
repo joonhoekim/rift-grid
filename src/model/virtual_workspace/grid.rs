@@ -112,6 +112,64 @@ impl WorkspaceStore {
                 .any(|&id| window_store.workspace_window_count(space, id) > 0)
     }
 
+    /// Hand grid `grid` (0-based) from `source` to `target`: each cell's layouts,
+    /// last focus and windows go to the same cell there, and the grid's current
+    /// cell with them. The target's cells, empty, come back in their place.
+    /// Returns the windows moved and each cell as (source, target), or `None`
+    /// when the target's cells of the grid hold windows.
+    pub(crate) fn move_grid(
+        &mut self,
+        window_store: &mut crate::model::WindowStore,
+        source: SpaceId,
+        target: SpaceId,
+        grid: usize,
+    ) -> Option<(
+        Vec<crate::actor::app::WindowId>,
+        Vec<(VirtualWorkspaceId, VirtualWorkspaceId)>,
+    )> {
+        if !self.grid_enabled() || grid >= GRID_COUNT || source == target {
+            return None;
+        }
+        self.ensure_space_initialized(source);
+        self.ensure_space_initialized(target);
+        if self.grid_has_windows(window_store, target, grid) {
+            return None;
+        }
+        let cells = self.cells_per_grid();
+        let current = self
+            .active_workspace(source)
+            .filter(|&id| self.grid_of_workspace(source, id) == Some(grid))
+            .or_else(|| self.grid_current_cell(source, grid));
+        let mut moved = Vec::new();
+        let mut pairs = Vec::new();
+        for index in grid * cells..(grid + 1) * cells {
+            let (Some(&from), Some(&to)) = (
+                self.workspace_ids(source).get(index),
+                self.workspace_ids(target).get(index),
+            ) else {
+                continue;
+            };
+            let [a, b] = self.workspaces.get_disjoint_mut([from, to])?;
+            std::mem::swap(&mut a.layout_system, &mut b.layout_system);
+            std::mem::swap(&mut a.layout_mode, &mut b.layout_mode);
+            std::mem::swap(&mut a.layout_state, &mut b.layout_state);
+            std::mem::swap(&mut a.last_focused, &mut b.last_focused);
+            pairs.push((from, to));
+            for wid in window_store.workspace_windows(source, from) {
+                window_store.assign_window_to_workspace(wid, super::WindowWorkspaceInfo {
+                    space: target,
+                    workspace_id: to,
+                });
+                moved.push(wid);
+            }
+            if current == Some(from) {
+                self.grid_current.insert((target, grid), to);
+            }
+        }
+        self.grid_current.remove(&(source, grid));
+        Some((moved, pairs))
+    }
+
     fn grid_of_workspace(&self, space: SpaceId, workspace: VirtualWorkspaceId) -> Option<usize> {
         let index = self.workspace_ids(space).iter().position(|&id| id == workspace)?;
         self.grid_of(index)

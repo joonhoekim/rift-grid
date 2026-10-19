@@ -117,6 +117,31 @@ impl LayoutEngine {
         )
     }
 
+    /// Hand grid `grid` (0-based) from `source` to `target`, a display of
+    /// `target_size`, which then shows it at its current cell. The focus stays
+    /// where it is. Returns the windows moved, or `None` when the grid can't go.
+    pub(crate) fn move_grid_to_space(
+        &mut self,
+        window_store: &mut WindowStore,
+        source: SpaceId,
+        target: SpaceId,
+        grid: usize,
+        target_size: objc2_core_foundation::CGSize,
+    ) -> Option<(EventResponse, Vec<WindowId>)> {
+        let (moved, cells) = self.workspaces.move_grid(window_store, source, target, grid)?;
+        for &wid in &moved {
+            self.floating.remove_active_for_window(wid);
+        }
+        self.move_departures(target, &cells);
+        self.ensure_workspace_layouts(target, target_size);
+        let cell = self.workspaces.grid_current_cell(target, grid)?;
+        let mut response = self.activate_workspace(window_store, target, cell, None);
+        response.focus_window = None;
+        self.update_active_floating_windows(window_store, source);
+        self.broadcast_windows_changed(window_store, source);
+        Some((response, moved))
+    }
+
     /// Focus the window that had the focus before the focused one, showing its
     /// cell first when it is in another one.
     fn focus_recent_window(&mut self, window_store: &WindowStore) -> EventResponse {

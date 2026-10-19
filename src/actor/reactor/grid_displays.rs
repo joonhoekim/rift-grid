@@ -4,8 +4,10 @@
 //! focus there; `move_window_to_grid` sends the window to that display. A grid
 //! on no display yet comes up on the focused one. A display that comes up showing
 //! an empty grid another display shows already is given the first free grid.
+//! `move_grid_to_display` hands a grid to another display, from the overview.
 
-use super::{Command, DisplaySelector, Event, Reactor, ReactorCommand};
+use super::events::EventOutcome;
+use super::{Command, DisplaySelector, Event, Reactor, ReactorCommand, WorkspaceSwitchOrigin};
 use crate::common::config::GRID_COUNT;
 use crate::layout_engine::LayoutCommand;
 use crate::sys::screen::SpaceId;
@@ -70,11 +72,91 @@ impl Reactor {
         ))));
     }
 
+    /// Hand grid `grid` (0-based) to the display `display` selects, which shows
+    /// it. A display that showed it shows its next grid with windows instead, or
+    /// else a free one, and the focus stays there.
+    fn hand_grid_over(&mut self, grid: usize, display: &DisplaySelector) {
+        let Some(here) = self.command_context_space() else {
+            return;
+        };
+        let source = if self.grid_is_on(here, grid) {
+            Some(here)
+        } else {
+            self.grid_elsewhere(here, grid).map(|(space, _)| space)
+        };
+        let Some(source) = source else { return };
+        let origin = self.space_state.screen_by_space(source).map(|screen| screen.frame.mid());
+        let Some(screen) = self.screen_for_selector(display, origin).cloned() else {
+            return;
+        };
+        let Some(target) = screen.space.filter(|&space| self.is_space_active(space)) else {
+            return;
+        };
+        if target == source {
+            return;
+        }
+        let shown = self.layout_manager.layout_engine.active_grid(source) == Some(grid);
+        let Some((response, moved)) = self.layout_manager.layout_engine.move_grid_to_space(
+            &mut self.state.windows,
+            source,
+            target,
+            grid,
+            screen.frame.size,
+        ) else {
+            return;
+        };
+        let mut outcome =
+            EventOutcome::layout_changed(false).with_layout_response(response, Some(target));
+        for wid in moved {
+            let Some(window) = self.state.windows.window_mut(wid) else {
+                continue;
+            };
+            let frame = Self::center_frame_on_screen(window.frame_monotonic, screen.frame);
+            window.frame_monotonic = frame;
+            let sys_id = window.info.sys_id;
+            if let Some(sys_id) = sys_id {
+                self.state.windows.observe_native_space(sys_id, target, true);
+            }
+            outcome = outcome.with_pre_layout_window_frame_write(wid, frame, true);
+        }
+        self.workspace_switch_manager
+            .start_workspace_switch(WorkspaceSwitchOrigin::Manual);
+        self.apply_event_outcome(outcome);
+        if !shown {
+            return;
+        }
+        let displays = self.grid_displays();
+        let next = (0..GRID_COUNT)
+            .find(|&g| g != grid && self.grid_has_windows(source, g))
+            .or_else(|| {
+                (0..GRID_COUNT).find(|&g| {
+                    g != grid && displays.iter().all(|&(space, _)| !self.grid_is_on(space, g))
+                })
+            });
+        if let Some(next) = next {
+            let command_space = self.space_state.command_space;
+            self.space_state.command_space = Some(source);
+            self.handle_event_inner(Event::Command(Command::Layout(LayoutCommand::SwitchToGrid(
+                next + 1,
+            ))));
+            self.space_state.command_space = command_space;
+        }
+    }
+
     /// Run a grid command on the display its grid is on. Other events come back.
     pub(super) fn handle_grid_display_event(&mut self, event: Event) -> Result<(), Event> {
         let Event::Command(Command::Layout(command)) = &event else {
             return Err(event);
         };
+        if let LayoutCommand::MoveGridToDisplay { grid, display } = command
+            && self.layout_manager.layout_engine.workspaces().grid_enabled()
+        {
+            if let Some(grid) = grid.checked_sub(1).filter(|&grid| grid < GRID_COUNT) {
+                let display = display.clone();
+                self.hand_grid_over(grid, &display);
+            }
+            return Ok(());
+        }
         let (LayoutCommand::SwitchToGrid(grid) | LayoutCommand::MoveWindowToGrid(grid)) = *command
         else {
             return Err(event);
@@ -261,5 +343,58 @@ mod tests {
             let focus = if shown { right } else { left };
             assert_eq!(reactor.raw_command_space(), Some(focus), "shown: {shown}");
         }
+    }
+
+    #[test]
+    fn a_grid_handed_to_another_display_takes_its_windows_and_layout() {
+        let (mut reactor, left, right) = two_displays();
+        let mut apps = Apps::new();
+        reactor.handle_events(apps.make_app_with_opts(
+            1,
+            make_windows(2),
+            Some(WindowId::new(1, 1)),
+            true,
+            true,
+        ));
+        reactor.handle_event(Event::ApplicationGloballyActivated(1));
+        apps.simulate_until_quiet(&mut reactor);
+        let windows = [WindowId::new(1, 1), WindowId::new(1, 2)];
+        let tiles = |reactor: &mut Reactor, space| {
+            let workspace =
+                reactor.layout_manager.layout_engine.workspaces().active_workspace(space);
+            workspace.map(|workspace| reactor.test_workspace_windows(space, workspace))
+        };
+        assert_eq!(tiles(&mut reactor, left), Some(windows.to_vec()));
+
+        reactor.handle_test_layout_command(LayoutCommand::MoveGridToDisplay {
+            grid: 1,
+            display: DisplaySelector::Uuid("test-display-1".into()),
+        });
+        apps.simulate_until_quiet(&mut reactor);
+        assert_eq!(grid(&reactor, right), Some(0), "the right display shows grid 1");
+        assert_eq!(tiles(&mut reactor, right), Some(windows.to_vec()));
+        assert_eq!(
+            grid(&reactor, left),
+            Some(1),
+            "the left display takes grid 2, free now"
+        );
+        assert!(!reactor.grid_has_windows(left, 0));
+        assert_eq!(reactor.raw_command_space(), Some(left), "the focus stays");
+        let engine = &reactor.layout_manager.layout_engine;
+        let cell = engine.workspaces().active_workspace(right).unwrap();
+        let layout = engine.workspaces().active_layout(right, cell);
+        assert!(
+            layout.is_some(),
+            "the cell has a layout for the right display's size"
+        );
+
+        // Back again, from the display that has it.
+        reactor.handle_test_layout_command(LayoutCommand::MoveGridToDisplay {
+            grid: 1,
+            display: DisplaySelector::Uuid("test-display-0".into()),
+        });
+        apps.simulate_until_quiet(&mut reactor);
+        assert_eq!(tiles(&mut reactor, left), Some(windows.to_vec()));
+        assert_eq!(grid(&reactor, left), Some(0));
     }
 }

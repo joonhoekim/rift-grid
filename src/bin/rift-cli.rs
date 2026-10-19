@@ -369,6 +369,12 @@ enum LayoutCommands {
     SwitchGrid { grid: usize },
     /// Workspace grid: send the focused window to grid N's (1-9) current cell
     MoveToGrid { grid: usize },
+    /// Workspace grid: hand grid N (1-9) to another display, which shows it
+    MoveGridToDisplay {
+        grid: usize,
+        #[command(flatten)]
+        display: DisplaySelectionArgs,
+    },
     /// Focus the window focused before this one, in whatever cell it is; again goes back
     FocusRecent,
 }
@@ -1003,6 +1009,12 @@ fn map_layout_command(cmd: LayoutCommands) -> Result<CliCommand, String> {
         }
         LayoutCommands::MoveToGrid { grid } => {
             Ok(CliCommand::Reactor(reactor::Command::Layout(LC::MoveWindowToGrid(grid))))
+        }
+        LayoutCommands::MoveGridToDisplay { grid, display } => {
+            Ok(CliCommand::Reactor(reactor::Command::Layout(LC::MoveGridToDisplay {
+                grid,
+                display: display.into_selector()?,
+            })))
         }
         LayoutCommands::FocusRecent => {
             Ok(CliCommand::Reactor(reactor::Command::Layout(LC::FocusRecentWindow)))

@@ -71,6 +71,7 @@ pub fn handle_command_layout(
             | LayoutCommand::SwitchToGrid(_)
             | LayoutCommand::MoveWindowToGrid(_)
             | LayoutCommand::SendWindowToGrid { .. }
+            | LayoutCommand::MoveGridToDisplay { .. }
             | LayoutCommand::FocusRecentWindow
     );
     let requires_workspace_space = is_grid_command

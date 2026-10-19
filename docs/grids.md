@@ -36,8 +36,15 @@ N means one place whichever display the focus is on.
   grid that a display before it shows too is moved to the first grid on no
   display: the main display starts on grid 1, the next on grid 2.
 
-Grids don't move between displays, and two displays can show the same number
-only when both hold windows in it, as state from before this model may.
+- **Handing a grid over**: `move_grid_to_display` (`rift-cli execute layout
+  move-grid-to-display <N> --uuid <display>`) gives the grid to that display.
+  Each cell goes as it is, its windows and layout, and the receiving display
+  shows the grid at its current cell. If the giving display was showing it, it
+  shows its next grid with windows, or else a free one. The focus stays on the
+  giving display. A grid can't go to a display whose cells of it hold windows.
+
+Two displays can show the same number only when both hold windows in it, as
+state from before this model may.
 
 ## Moving
 

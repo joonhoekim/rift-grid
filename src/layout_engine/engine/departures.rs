@@ -146,6 +146,27 @@ impl LayoutEngine {
     /// their neighbors.
     pub(super) fn drop_departure_snapshots(&mut self) { self.departures.snapshots.clear(); }
 
+    /// Follow cells handed to `target` as (source, target) pairs: windows that
+    /// departed from them come back there, and their snapshots go along.
+    pub(super) fn move_departures(
+        &mut self,
+        target: SpaceId,
+        cells: &[(VirtualWorkspaceId, VirtualWorkspaceId)],
+    ) {
+        let departures = &mut self.departures;
+        for &(from, to) in cells {
+            for departure in departures.windows.values_mut().filter(|d| d.workspace == from) {
+                departure.workspace = to;
+                departure.space = target;
+            }
+            let a = departures.snapshots.remove(&from);
+            let b = departures.snapshots.remove(&to);
+            departures
+                .snapshots
+                .extend(a.map(|a| (to, a)).into_iter().chain(b.map(|b| (from, b))));
+        }
+    }
+
     fn drop_unused_snapshot(&mut self, workspace: VirtualWorkspaceId) {
         if !self
             .departures
