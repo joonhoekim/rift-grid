@@ -102,7 +102,11 @@ impl Settings {
     }
 
     fn action_for(self, mode: LayoutMode, fingers: usize) -> Option<ActionConfig> {
+        // With the Overview open, only the grid's swipes.
         self.grid.for_fingers(fingers).or_else(|| {
+            if self.grid.open() {
+                return None;
+            }
             self.scroll
                 .filter(|a| mode == LayoutMode::Scrolling && a.fingers == fingers)
                 .or_else(|| self.workspace.filter(|a| a.fingers == fingers))

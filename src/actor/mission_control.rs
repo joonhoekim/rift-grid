@@ -22,6 +22,11 @@ pub enum Event {
     /// The focus, the windows or the active workspace changed.
     Changed,
     GridZoom(crate::ui::grid_motion::Note),
+    /// A stage out (opening it first) or in, from a grid swipe; handled in
+    /// `grid_zoom.rs`.
+    Step {
+        out: bool,
+    },
 }
 
 /// Whether a broadcast is one the open overview has to show.
@@ -300,7 +305,7 @@ impl MissionControlActor {
                 }
             }
             Event::Dismiss => self.close(),
-            Event::GridZoom(_) => {}
+            Event::GridZoom(_) | Event::Step { .. } => {}
             Event::Changed => {
                 if let Some(session) = &mut self.session {
                     session.sync_focus(&self.reactor, self.cache.as_ref());

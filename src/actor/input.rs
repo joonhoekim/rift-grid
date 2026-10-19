@@ -599,9 +599,10 @@ impl Input {
             }
         }
         if configure_gestures {
+            let overview = self.mission_control_active.get();
             self.gesture_control.configure(
                 state.gesture_settings,
-                state.event_processing_enabled && !self.mission_control_active.get(),
+                state.event_processing_enabled && (!overview || state.gesture_settings.grid_on()),
                 state
                     .screen_spaces
                     .iter()
@@ -613,6 +614,7 @@ impl Input {
                     })
                     .collect(),
             );
+            self.gesture_control.set_overview(overview);
         }
         drop(state);
 

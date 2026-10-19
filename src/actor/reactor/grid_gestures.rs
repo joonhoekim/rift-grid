@@ -24,8 +24,16 @@ impl Reactor {
             Direction::Down => Direction::Up,
         };
         let command = match swipe {
+            GridSwipe::Grids { .. } if matches!(fingers, Direction::Up | Direction::Down) => {
+                if let Some(wm) = &self.communication_manager.wm_sender {
+                    wm.send(crate::actor::wm_controller::WmEvent::OverviewStep {
+                        out: fingers == Direction::Up,
+                    });
+                }
+                return;
+            }
             GridSwipe::Cell => LayoutCommand::GridCell(towards),
-            GridSwipe::Grids => {
+            GridSwipe::Grids { .. } => {
                 let Some(grid) = self.next_grid_on(space, towards == Direction::Right) else {
                     return;
                 };
@@ -96,6 +104,8 @@ mod tests {
         (reactor, space, context)
     }
 
+    const GRIDS: GridSwipe = GridSwipe::Grids { overview: true, open: false };
+
     fn cell(reactor: &Reactor, space: SpaceId) -> Option<usize> {
         let workspaces = reactor.layout_manager.layout_engine.workspaces();
         let active = workspaces.active_workspace(space)?;
@@ -127,7 +137,7 @@ mod tests {
     fn four_fingers_go_round_the_displays_grids() {
         let (mut reactor, space, context) = one_display();
         let grid = |reactor: &Reactor| reactor.layout_manager.layout_engine.active_grid(space);
-        reactor.grid_swipe(&context, GridSwipe::Grids, Direction::Left);
+        reactor.grid_swipe(&context, GRIDS, Direction::Left);
         assert_eq!(grid(&reactor), Some(0), "one grid: nowhere to go");
 
         let mut apps = Apps::new();
@@ -145,15 +155,15 @@ mod tests {
         apps.simulate_until_quiet(&mut reactor);
         assert!(reactor.grid_is_on(space, 2));
 
-        reactor.grid_swipe(&context, GridSwipe::Grids, Direction::Left);
+        reactor.grid_swipe(&context, GRIDS, Direction::Left);
         assert_eq!(
             grid(&reactor),
             Some(2),
             "left goes to the next grid, past an empty one"
         );
-        reactor.grid_swipe(&context, GridSwipe::Grids, Direction::Left);
+        reactor.grid_swipe(&context, GRIDS, Direction::Left);
         assert_eq!(grid(&reactor), Some(0), "and round to the first");
-        reactor.grid_swipe(&context, GridSwipe::Grids, Direction::Right);
+        reactor.grid_swipe(&context, GRIDS, Direction::Right);
         assert_eq!(grid(&reactor), Some(2), "right goes back, round the start");
     }
 }

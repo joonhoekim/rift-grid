@@ -72,6 +72,7 @@ impl MissionControlActor {
         let open = self.grid_zoom.open.is_some();
         match event {
             Event::GridZoom(note) => self.grid_zoom_note(note),
+            Event::Step { out } => return self.overview_step(out),
             Event::ShowAll if open => self.grid_zoom_step_back(),
             Event::ShowAll
                 if self.session.is_none()
@@ -436,6 +437,25 @@ impl MissionControlActor {
     }
 
     /// Step back to the whole grid, or come in from it.
+    /// A grid swipe: up opens the Overview, then steps out to the whole grid and
+    /// stops there (Alt+O would close it); down steps in as Esc does.
+    fn overview_step(&mut self, out: bool) -> Option<Event> {
+        let zoom = self.grid_zoom.open.as_ref().map(|open| open.overview.shows_whole());
+        match (out, zoom, self.session.as_mut()) {
+            (true, Some(false), _) => self.grid_zoom_step_back(),
+            (true, Some(true), _) => {}
+            (true, None, Some(session)) => {
+                session.step_back(self.cache.as_ref());
+            }
+            (true, None, None) => return self.grid_zoom(Event::ShowAll),
+            (false, Some(_), _) | (false, None, Some(_)) => {
+                return self.grid_zoom(Event::Input(Input::Dismiss));
+            }
+            (false, None, None) => {}
+        }
+        None
+    }
+
     fn grid_zoom_step_back(&mut self) {
         match self.grid_zoom.open.as_mut().filter(|open| !open.entering) {
             Some(open) if !open.overview.shows_whole() => open.overview.show_whole(),

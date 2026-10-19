@@ -34,6 +34,15 @@ pub struct GridGestureSettings {
     /// 0 turns it off.
     #[setting(label = "Fingers for grids", enabled_by = "enabled")]
     pub grid_fingers: usize,
+    #[serde(default = "yes")]
+    /// Swiping up with the fingers for grids opens the Overview, in place of
+    /// Mission Control. Down stays App Exposé.
+    #[setting(
+        label = "Swipe up for Overview",
+        enabled_by = "enabled",
+        aliases = "mission control"
+    )]
+    pub overview: bool,
 }
 
 impl Default for GridGestureSettings {
@@ -42,6 +51,7 @@ impl Default for GridGestureSettings {
             enabled: true,
             cell_fingers: 3,
             grid_fingers: 4,
+            overview: true,
         }
     }
 }

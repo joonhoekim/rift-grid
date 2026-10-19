@@ -70,10 +70,16 @@ macOS and subline:
 | --- | --- |
 | Three fingers left / right / up / down | The cell to the right / left / below / above, like `grid_cell` |
 | Four fingers left / right | The next / previous grid on this display (shown, or holding windows), round the end |
+| Four fingers up | The Overview, as Alt+O; again steps out to the whole grid, and stops there |
+| Four fingers down (Overview open) | Steps back in a stage, as Esc |
+
+The swipes stay on while the Overview is open, so macOS doesn't get them then
+either; upstream's swipes are off there. `overview = false` leaves four fingers
+up and down to Mission Control and App Exposé.
 
 Rift takes these finger counts before macOS, so its own swipes between Spaces,
-Mission Control and App Exposé don't come with them; four fingers up or down
-are still macOS's. `enabled = false` gives them back; `cell_fingers` and
+Mission Control and App Exposé don't come with them; four fingers down is still
+App Exposé. `enabled = false` gives them back; `cell_fingers` and
 `grid_fingers` change the counts (0 turns one off). The swipe distance,
 vertical tolerance and haptics are `[settings.gestures]`'s.
 

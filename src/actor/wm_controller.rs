@@ -59,6 +59,10 @@ pub enum WmEvent {
     KeyboardLayoutChanged,
     ConfigUpdated(crate::common::config::Config),
     Command(WmCommand),
+    /// A grid swipe up (`out`) or down: the Overview's next stage.
+    OverviewStep {
+        out: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -341,6 +345,11 @@ impl WmController {
             }
             KeyboardLayoutChanged => {
                 _ = self.input_tx.send(input::Request::KeyboardLayoutChanged);
+            }
+            OverviewStep { out } => {
+                if let Some(tx) = &self.mission_control_tx {
+                    let _ = tx.try_send(mission_control::Event::Step { out });
+                }
             }
             Command(Wm(ReloadConfig)) => self.reload_config(),
             Command(Wm(BindingMode(target))) => {
