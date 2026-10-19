@@ -2281,6 +2281,7 @@ mod tests {
             windows,
             grid_cell: None,
             grid: None,
+            grid_elsewhere: false,
             layout_focus: None,
         }
     }

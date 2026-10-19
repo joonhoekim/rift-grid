@@ -13,23 +13,38 @@ Most work fits in one 3x3 grid; more grids keep separate contexts apart.
 - **Current cell**: each grid remembers the cell it was last on, the center cell
   until then.
 
-## Model (first step: grids per display)
+## Model
 
 Rift's virtual workspaces are a list per display. With `grid_columns = 3`, each
 display gets 9 grids x 9 cells = 81 workspaces; grid g (1-based) is workspaces
-`9(g-1) .. 9(g-1)+8`, read row by row from the top left. Grids are per display:
-each display has its own grid 1 to 9.
+`9(g-1) .. 9(g-1)+8`, read row by row from the top left.
 
-A later step could give each grid to one display instead (Alt+N goes to the
-display that has grid N, grids move between displays from the overview), as a
-table of which display owns which grid; with one display the two are the same.
+A grid belongs to one display at a time, as a workspace does in Hyprland: the
+display that shows it, or else the one whose cells of it hold windows. Each
+display has room for all nine, but uses only the grids that are on it, so grid
+N means one place whichever display the focus is on.
+
+- **Alt+N** shows grid N on the display it is on and moves the focus there; it
+  is the way the focus crosses displays from the keyboard. A grid on no display
+  yet (no windows, not shown) comes up on the focused display. An empty grid
+  that leaves the screen is on no display again.
+- **Alt+Ctrl+N** sends the window to grid N on its display. When that display
+  shows grid N, the focus goes along with the window; otherwise the focus stays.
+- **Alt+Ctrl+IJKL** (`move_window_to_display`) carries the window into the
+  cell on screen on the display in that direction.
+- When the displays change (login, plugging one in), a display showing an empty
+  grid that a display before it shows too is moved to the first grid on no
+  display: the main display starts on grid 1, the next on grid 2.
+
+Grids don't move between displays, and two displays can show the same number
+only when both hold windows in it, as state from before this model may.
 
 ## Moving
 
 | Key (seed config) | Command | What it does |
 | --- | --- | --- |
-| Alt+1..9 | `switch_to_grid = N` | Show grid N at its current cell |
-| Alt+Ctrl+1..9 | `move_window_to_grid = N` | Send the focused window to grid N's current cell; focus stays |
+| Alt+1..9 | `switch_to_grid = N` | Show grid N at its current cell, on the display it is on, and focus that display |
+| Alt+Ctrl+1..9 | `move_window_to_grid = N` | Send the focused window to grid N's current cell; focus stays unless grid N is on screen on another display |
 | Alt+IJKL / arrows | `grid_focus` | Tile beside, or the next cell of this grid past its edge |
 | Alt+Shift+IJKL / arrows | `grid_move` | Swap with the tile beside, or carry the window into the next cell |
 | Alt+Cmd+IJKL | `grid_cell` | Next cell of this grid |
@@ -42,8 +57,9 @@ Cells never lead into another grid: moving past the grid's edge stops.
 ## App rules
 
 `grid = N` (1-based) in an app rule sends the window to grid N's current cell on
-its display. `workspace` keeps its meaning (a cell by its index in the 81, or by
-name), and `grid` wins when both are given.
+the display the window opens on, even when grid N is on another display.
+`workspace` keeps its meaning (a cell by its index in the 81, or by name), and
+`grid` wins when both are given.
 
 ## Menu bar
 
@@ -62,10 +78,11 @@ shows it. Stepping through workspaces one by one is left out of that menu.
 
 The overview shows the grid on screen and follows it as it changes: focus
 moves, windows that open or close, and grids that are switched to or filled. A row of grid buttons at the top lists
-the grids that have windows plus the one on screen, which is highlighted.
+the display's grids, those that have windows plus the one on screen, which is
+highlighted.
 Clicking a button, or pressing Alt+N while the overview is open, switches to that
 grid and the overview stays open on it. The last button, "+", is the first grid
-not in use yet. Dropping a window's tile on a button sends the window to that
+on no display yet. Dropping a window's tile on a button sends the window to that
 grid's current cell, as Alt+Ctrl+N does; the overview stays where it is.
 
 Stages: the overview opens on the active cell at `grid_zoom` with

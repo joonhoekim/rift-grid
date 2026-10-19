@@ -8,6 +8,7 @@ mod animation;
 mod borders;
 mod events;
 mod gesture;
+mod grid_displays;
 mod grid_motion;
 pub(crate) use crate::layout_engine::WorkspaceDropRequest as OverviewDrop;
 mod main_window;
@@ -1206,6 +1207,7 @@ impl Reactor {
             return;
         }
         let Err(event) = self.handle_grid_motion_event(event) else { return };
+        let Err(event) = self.handle_grid_display_event(event) else { return };
         let grid_motion = self.grid_motion_before(&event);
         let may_make_ready = matches!(&event, Event::SpaceStateChanged(_));
         let visibility_changed = borders::changes_visibility(&event);
@@ -1231,6 +1233,9 @@ impl Reactor {
                     if let Some(tx) = self.startup_ready.take() {
                         let _ = tx.send(());
                     }
+                }
+                if may_make_ready {
+                    self.settle_display_grids();
                 }
             }
             Err(error) => warn!(%error, "reactor workflow failed"),

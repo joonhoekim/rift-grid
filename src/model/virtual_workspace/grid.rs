@@ -95,6 +95,23 @@ impl WorkspaceStore {
             .or_else(|| self.grid_center_cell(space, grid))
     }
 
+    /// Whether a cell of grid `grid` (0-based) on `space` holds a window.
+    pub fn grid_has_windows(
+        &self,
+        window_store: &crate::model::WindowStore,
+        space: SpaceId,
+        grid: usize,
+    ) -> bool {
+        let cells = self.cells_per_grid();
+        self.grid_enabled()
+            && self
+                .workspace_ids(space)
+                .iter()
+                .skip(grid * cells)
+                .take(cells)
+                .any(|&id| window_store.workspace_window_count(space, id) > 0)
+    }
+
     fn grid_of_workspace(&self, space: SpaceId, workspace: VirtualWorkspaceId) -> Option<usize> {
         let index = self.workspace_ids(space).iter().position(|&id| id == workspace)?;
         self.grid_of(index)

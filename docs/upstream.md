@@ -11,7 +11,8 @@ New code lives in fork modules; upstream files only call into them.
 
 | Upstream file | What the fork adds |
 | --- | --- |
-| `actor/reactor.rs` | Three `Event` variants (`BorderSettle`, `WindowsReordered`, `GridMotion`); in `handle_event_inner`, the border and grid motion handlers, `grid_motion_before`/`after` and `update_borders` |
+| `actor/reactor.rs` | Three `Event` variants (`BorderSettle`, `WindowsReordered`, `GridMotion`); in `handle_event_inner`, the border, grid motion and grid display handlers, `grid_motion_before`/`after`, `settle_display_grids` after a display change, and `update_borders` |
+| `actor/reactor/query.rs`, `model/server.rs` | The grid fields of `RuntimeWorkspaceData` (`grid_cell`, `grid`, `grid_elsewhere`, `layout_focus`) |
 | `actor/reactor/events/command.rs` | The list of grid commands, and switch tracking for commands that change cells only when they cross an edge |
 | `layout_engine/engine.rs` | Grid commands in `handle_command` and `handle_virtual_workspace_command`; the recent window list; the calls into `engine/departures.rs` (see below) |
 | `model/virtual_workspace.rs` | `grid_columns`, `grid_current`; `workspace_count`; `remap_grid_cells` in `remap_space`; a `grid` argument to `resolve_rule_workspace_with_policy` |
@@ -39,7 +40,7 @@ These could shrink the fork's footprint in upstream files. None is a defect.
   reorganizes these often, and each time the fork's Overview and Window Borders
   entries conflict. `grid_pages::overview` copies upstream's Overview sections,
   so check it against `interface::overview` after a merge.
-- `reactor.rs` has five separate hook calls. One `Event::Fork` variant with a
+- `reactor.rs` has seven separate hook calls. One `Event::Fork` variant with a
   hook before and after handling would make it two.
 
 ## Upstream behavior that meets the grid

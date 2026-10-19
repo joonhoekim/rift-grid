@@ -51,7 +51,8 @@ pub(super) fn grid_focus_selection(
 
 /// The overview shows one grid, the one on screen, every cell of it in place,
 /// empty or not. Returns the grids for the button row: those with windows and
-/// the one on screen, in order, then "+" for the first grid neither is.
+/// the one on screen, in order, then "+" for the first grid neither is and no
+/// other display has.
 pub(super) fn keep_grid_on_screen(workspaces: &mut Vec<RuntimeWorkspaceData>) -> Vec<GridButton> {
     let on_screen = workspaces.iter().find(|ws| ws.is_active).and_then(|ws| ws.grid);
     let mut grids: Vec<_> = workspaces
@@ -62,6 +63,7 @@ pub(super) fn keep_grid_on_screen(workspaces: &mut Vec<RuntimeWorkspaceData>) ->
     grids.dedup();
     let unused = workspaces
         .iter()
+        .filter(|ws| !ws.grid_elsewhere)
         .filter_map(|ws| ws.grid)
         .find(|grid| !grids.contains(grid));
     if on_screen.is_some() {
@@ -668,6 +670,7 @@ mod tests {
             windows,
             grid_cell: None,
             grid: None,
+            grid_elsewhere: false,
             layout_focus: None,
         }
     }
@@ -801,6 +804,19 @@ mod tests {
         );
         assert_eq!(workspaces.len(), 9, "only the grid on screen");
         assert!(workspaces.iter().all(|ws| ws.grid == Some(2)));
+
+        let mut workspaces: Vec<_> = (0..45)
+            .map(|index| RuntimeWorkspaceData {
+                grid_elsewhere: index / 9 == 1,
+                ..ws(index, Vec::new(), index == 4)
+            })
+            .collect();
+        let buttons = keep_grid_on_screen(&mut workspaces);
+        assert_eq!(
+            buttons.last(),
+            Some(&GridButton { grid: 2, on_screen: false, new: true }),
+            "grid 2 is on another display"
+        );
 
         let overview = CGSize::new(1600.0, 1000.0);
         let (row, frames) = grid_button_frames(overview, 3);
