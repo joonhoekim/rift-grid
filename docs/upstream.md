@@ -56,6 +56,11 @@ These could shrink the fork's footprint in upstream files. None is a defect.
 - The grid's swipes take their finger counts from upstream's workspace and
   Scrolling layout swipes while the grid is on: `[settings.gestures]` still
   gives them their distance, vertical tolerance and haptics.
+- `cargo test --lib` aborts now and then (about 1 run in 10 to 20, on macOS 27)
+  with `Cannot form weak reference to instance ... of class
+  SLSWindowManagementFallbackBridge` and SIGABRT, before and after the fork's
+  2026-10-20 changes alike: a SkyLight crash while tests touch the
+  WindowServer, not a failing test. Run it again.
 - `move_workspace_to_display` reorders workspaces, while the grid takes a
   workspace's grid and cell from its position. Not yet checked with grids on.
 - `VirtualWorkspaceSettings::validate` checks `default_workspace` and
@@ -93,6 +98,21 @@ These could shrink the fork's footprint in upstream files. None is a defect.
   the window left and puts them back when nothing else changed meanwhile, or
   else puts the window after its old neighbor; it works for every layout mode.
   Sent upstream as #595 (from the `joonhoekim/rift` fork, remote `pr`).
+
+## App lifecycle fixes to send
+
+Two fixes of upstream code, each its own commit so a pull request can take it
+as is. Both were reproduced before the fix and checked live after it.
+
+- `c165ce1` *drop apps that quit, whose pid Carbon can no longer read*:
+  `kEventAppTerminated` arrives after `GetProcessPID` stops resolving the
+  process, so upstream never terminates an app; every quit app stays in
+  `rift-cli query applications` with its actor and AX observer.
+- `c9eba46` *manage an app whose window shows before it turns regular*: an app
+  started outside LaunchServices (an exec binding) reads Prohibited until it
+  sets its policy, and when both discoveries read Prohibited its windows are
+  never managed. Reproduced with a small app that shows a window and turns
+  Regular three seconds later.
 
 ## Gesture changes to propose
 
