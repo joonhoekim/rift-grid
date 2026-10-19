@@ -545,6 +545,10 @@ pub struct Settings {
     #[serde(default)]
     #[setting(ignore)]
     pub gestures: GestureSettings,
+    /// Trackpad swipes on the workspace grid
+    #[serde(default)]
+    #[setting(ignore)]
+    pub grid_gestures: super::GridGestureSettings,
     /// Modifier-assisted dragging and tiled-window drop settings.
     #[serde(default)]
     #[setting(ignore)]
@@ -1609,6 +1613,7 @@ impl Settings {
 
         issues.extend(self.layout.validate());
         issues.extend(self.ui.stack_line.validate());
+        self.grid_gestures.validate(&mut issues);
 
         if !(0.10..=0.45).contains(&self.drag_drop.drop_zone_fraction) {
             issues.push(format!(

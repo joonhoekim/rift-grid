@@ -9,6 +9,7 @@ mod borders;
 mod events;
 mod gesture;
 mod grid_displays;
+mod grid_gestures;
 mod grid_motion;
 pub(crate) use crate::layout_engine::WorkspaceDropRequest as OverviewDrop;
 mod main_window;

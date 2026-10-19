@@ -62,6 +62,21 @@ state from before this model may.
 
 Cells never lead into another grid: moving past the grid's edge stops.
 
+Trackpad swipes (`[settings.grid_gestures]`, on by default) do the same on the
+focused display, one step a swipe. The content follows the fingers, as in
+macOS and subline:
+
+| Swipe | What it does |
+| --- | --- |
+| Three fingers left / right / up / down | The cell to the right / left / below / above, like `grid_cell` |
+| Four fingers left / right | The next / previous grid on this display (shown, or holding windows), round the end |
+
+Rift takes these finger counts before macOS, so its own swipes between Spaces,
+Mission Control and App Exposé don't come with them; four fingers up or down
+are still macOS's. `enabled = false` gives them back; `cell_fingers` and
+`grid_fingers` change the counts (0 turns one off). The swipe distance,
+vertical tolerance and haptics are `[settings.gestures]`'s.
+
 ## App rules
 
 `grid = N` (1-based) in an app rule sends the window to grid N's current cell on

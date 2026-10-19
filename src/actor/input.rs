@@ -334,6 +334,8 @@ impl Input {
             mission_control_tx: RefCell::new(mission_control_tx),
         };
         input.install_binding_specs(config.binding_mode_specs);
+        input.gesture_filter.borrow_mut().vertical =
+            input.state.borrow().gesture_settings.vertical();
         input
     }
 
@@ -530,6 +532,7 @@ impl Input {
                     self.events_tx.send(Event::DragCancel);
                 }
                 state.gesture_settings = super::gesture::Settings::new(&new_config);
+                self.gesture_filter.borrow_mut().vertical = state.gesture_settings.vertical();
                 let mouse_hides_on_focus = new_config.settings.mouse_hides_on_focus;
                 let focus_follows_mouse_config_enabled = new_config.settings.focus_follows_mouse;
                 let mouse_features_enabled = new_config.settings.drag_drop.enabled;

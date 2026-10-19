@@ -2,12 +2,14 @@
 pub mod borders;
 mod document;
 mod grid;
+mod grid_gestures;
 mod grid_motion;
 mod parse;
 mod schema;
 mod types;
 pub use borders::BorderSettings;
 pub use grid::{GRID_COUNT, GridFollow, GridMaps, GridStyle};
+pub use grid_gestures::GridGestureSettings;
 pub use grid_motion::GridMotionSettings;
 pub use document::ConfigDocument;
 pub use schema::*;

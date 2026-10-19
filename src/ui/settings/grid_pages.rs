@@ -60,6 +60,20 @@ pub(super) fn overview(ui: Ui, model: &Rc<Model>) -> Page {
     )
 }
 
+/// The grid's swipes, on the Mouse & Trackpad page after upstream's.
+pub(super) fn swipes(f: &mut FormBuilder) -> Section {
+    let ui = f.ui;
+    f.schema_rows(
+        Section::new(&ui, "Grid swipes").description(
+            "While workspaces form a grid. Distance, tolerance and haptics are the \
+             workspace swipes' own.",
+        ),
+        "",
+        |s| &s.settings.grid_gestures,
+        |s| &mut s.settings.grid_gestures,
+    )
+}
+
 /// A color well bound to a border color string.
 fn border_color(
     f: &mut FormBuilder,

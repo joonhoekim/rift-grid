@@ -184,6 +184,9 @@ pub struct Filter {
     dock: NativeSequence,
     app: NativeSequence,
     scroll: NativeSequence,
+    /// Vertical swipes (Mission Control, App Exposé) go through arbitration
+    /// too, for the grid's swipes.
+    pub vertical: bool,
 }
 impl Filter {
     /// No copies/allocations on the normal forward/drop path. Sequence state
@@ -254,8 +257,8 @@ impl Filter {
             // DockSwipe and NavigationSwipe only; digitizer, zoom, rotate,
             // smart zoom and vertical Mission Control never enter the filter.
             let subtype = CGEvent::integer_value_field(Some(event), HID_TYPE);
-            if !matches!(subtype, 16 | 23) || CGEvent::integer_value_field(Some(event), MOTION) != 1
-            {
+            let motion = CGEvent::integer_value_field(Some(event), MOTION);
+            if !matches!(subtype, 16 | 23) || (motion != 1 && !(self.vertical && motion == 2)) {
                 return true;
             }
             owner = ownership();

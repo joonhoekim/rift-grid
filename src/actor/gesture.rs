@@ -15,6 +15,9 @@ use crate::sys::geometry::CGRectExt;
 use crate::sys::gesture::{Owner, Ownership};
 use crate::sys::screen::SpaceId;
 
+mod grid;
+pub use grid::GridSwipe;
+
 #[derive(Clone, Copy, Debug)]
 pub struct Motion {
     pub session: u64,
@@ -32,6 +35,7 @@ pub struct ActionConfig {
     pub propagate: bool,
     pub boundary_threshold: f64,
     pub animate: Option<bool>,
+    pub grid: Option<GridSwipe>,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Settings {
@@ -40,6 +44,7 @@ pub struct Settings {
     consume: bool,
     skip_empty: Option<bool>,
     haptic: Option<HapticPattern>,
+    grid: grid::Actions,
 }
 impl Settings {
     pub fn new(config: &Config) -> Self {
@@ -49,8 +54,11 @@ impl Settings {
             let fraction = if x > 1.0 { x / 100.0 } else { x };
             fraction.clamp(0.0, 1.0)
         };
+        let grid = grid::Actions::new(config, tolerance(g.swipe_vertical_tolerance));
         Self {
-            consume: g.consume_dock_swipe,
+            grid,
+            // The grid's swipes always keep macOS from seeing them.
+            consume: g.consume_dock_swipe || grid.any(),
             skip_empty: Some(g.skip_empty),
             haptic: g.haptics_enabled.then_some(g.haptic_pattern),
             workspace: g.enabled.then_some(ActionConfig {
@@ -62,6 +70,7 @@ impl Settings {
                 propagate: false,
                 boundary_threshold: 0.0,
                 animate: None,
+                grid: None,
             }),
             scroll: s.enabled.then_some(ActionConfig {
                 fingers: s.fingers.max(1),
@@ -72,20 +81,32 @@ impl Settings {
                 propagate: s.propagate_to_workspace_swipe,
                 boundary_threshold: s.workspace_switch_threshold.max(0.0),
                 animate: s.animate,
+                grid: None,
             }),
         }
     }
 
-    pub fn enabled(self) -> bool { self.scroll.is_some() || self.workspace.is_some() }
+    pub fn enabled(self) -> bool {
+        self.scroll.is_some() || self.workspace.is_some() || self.grid.any()
+    }
+
+    /// Whether vertical native swipes (Mission Control, App Exposé) can be Rift's.
+    pub fn vertical(self) -> bool { self.grid.vertical() }
 
     fn accepts_count(self, fingers: usize) -> bool {
-        self.scroll.into_iter().chain(self.workspace).any(|a| a.fingers == fingers)
+        self.scroll
+            .into_iter()
+            .chain(self.workspace)
+            .chain(self.grid.for_fingers(fingers))
+            .any(|a| a.fingers == fingers)
     }
 
     fn action_for(self, mode: LayoutMode, fingers: usize) -> Option<ActionConfig> {
-        self.scroll
-            .filter(|a| mode == LayoutMode::Scrolling && a.fingers == fingers)
-            .or_else(|| self.workspace.filter(|a| a.fingers == fingers))
+        self.grid.for_fingers(fingers).or_else(|| {
+            self.scroll
+                .filter(|a| mode == LayoutMode::Scrolling && a.fingers == fingers)
+                .or_else(|| self.workspace.filter(|a| a.fingers == fingers))
+        })
     }
 }
 #[derive(Clone, Debug)]
@@ -112,6 +133,13 @@ pub enum Lifecycle {
     Workspace {
         context: Context,
         next: bool,
+        control: Control,
+    },
+    /// A grid swipe, by the way the fingers went.
+    Grid {
+        context: Context,
+        swipe: GridSwipe,
+        fingers: crate::layout_engine::Direction,
         control: Control,
     },
     Reset,
@@ -297,7 +325,8 @@ fn swipe_recognizer(fingers: usize) -> GestureRecognizer {
 }
 struct DeviceSession {
     context: Context,
-    alternate: Option<ActionConfig>,
+    settings: Settings,
+    mode: LayoutMode,
     max_fingers: usize,
     recognizer: GestureRecognizer,
     owner: Owner,
@@ -313,13 +342,8 @@ impl DeviceSession {
         let max_fingers = settings
             .scroll
             .map_or(0, |a| a.fingers)
-            .max(settings.workspace.map_or(0, |a| a.fingers));
-        let alternate = if context.action.scrolling {
-            settings.workspace
-        } else {
-            settings.scroll.filter(|_| mode == LayoutMode::Scrolling)
-        }
-        .filter(|a| a.fingers != context.action.fingers);
+            .max(settings.workspace.map_or(0, |a| a.fingers))
+            .max(settings.grid.max_fingers());
         Self {
             recognizer: swipe_recognizer(context.action.fingers),
             sample: Motion {
@@ -328,7 +352,8 @@ impl DeviceSession {
                 timestamp: context.started,
             },
             context,
-            alternate,
+            settings,
+            mode,
             max_fingers,
             owner: Owner::Undecided,
             blocked: false,
@@ -393,8 +418,9 @@ impl DeviceSession {
                 return;
             }
             self.max_contacts = count;
-            if let Some(action) = self.alternate.filter(|a| a.fingers == count) {
-                self.alternate = None;
+            if count != self.context.action.fingers
+                && let Some(action) = self.settings.action_for(self.mode, count)
+            {
                 self.context.action = action;
                 self.recognizer = swipe_recognizer(action.fingers);
             }
@@ -408,6 +434,13 @@ impl DeviceSession {
         };
         let c = &self.context;
         if let GestureEvent::Swipe(swipe) = event {
+            if let Some(grid) = c.action.grid
+                && matches!(swipe.phase, GesturePhase::Began | GesturePhase::Changed)
+            {
+                let (x, y) = (f64::from(swipe.translation.x), f64::from(swipe.translation.y));
+                self.grid_swipe(grid, x, y, tx, control);
+                return;
+            }
             match swipe.phase {
                 GesturePhase::Began | GesturePhase::Changed => {
                     let x = f64::from(swipe.translation.x);

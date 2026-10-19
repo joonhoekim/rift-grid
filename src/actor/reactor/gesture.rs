@@ -39,7 +39,7 @@ impl ViewportSession {
     }
 }
 impl Reactor {
-    fn gesture_space_active(&self, space: crate::sys::screen::SpaceId) -> bool {
+    pub(super) fn gesture_space_active(&self, space: crate::sys::screen::SpaceId) -> bool {
         self.is_space_active(space)
             && matches!(
                 self.mission_control_manager.mission_control_state,
@@ -128,6 +128,16 @@ impl Reactor {
             Lifecycle::Workspace { context, next, control } => {
                 if control.valid(context.epoch) {
                     self.gesture_workspace(&context, next);
+                }
+            }
+            Lifecycle::Grid {
+                context,
+                swipe,
+                fingers,
+                control,
+            } => {
+                if control.valid(context.epoch) {
+                    self.grid_swipe(&context, swipe, fingers);
                 }
             }
             Lifecycle::Reset => self.finish_gesture(None, true),

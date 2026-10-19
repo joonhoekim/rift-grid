@@ -906,6 +906,7 @@ fn input(ui: Ui, model: &Rc<Model>) -> Page {
         |s| &mut s.settings.gestures,
     );
     page = page.section(section.content(Disclosure::new(&ui, "Advanced swipe settings", tuning)));
+    page = page.section(super::grid_pages::swipes(&mut f));
     let mut section = Section::new(&ui, "Scrolling layout gestures")
         .description("These gestures navigate the Scrolling layout strip.");
     let mut tuning = Section::new(&ui, "");

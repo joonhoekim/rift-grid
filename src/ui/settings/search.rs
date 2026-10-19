@@ -107,6 +107,7 @@ fn describe(entry: &Draft) -> String {
         "Screen edges" => "Set the space between windows and screen edges.",
         "Virtual Workspaces" => "Organize your windows into separate workspaces.",
         "Workspace swipes" => "Switch workspaces using trackpad gestures.",
+        "Grid swipes" => "Move between grid cells and grids using trackpad gestures.",
         "New window position" => "Choose where newly opened windows appear.",
         "Default layout" => "Choose the layout used by default.",
         "App rules" => "Choose how Rift handles an application's windows.",
@@ -202,6 +203,13 @@ const MANUAL: &[(Category, Option<LayoutMode>, &str, &str, &str)] = &[
         "Mouse & Trackpad",
         "Workspace swipes",
         "trackpad gestures fingers swipe sensitivity haptic",
+    ),
+    (
+        Mouse,
+        None,
+        "Mouse & Trackpad",
+        "Grid swipes",
+        "trackpad gestures fingers swipe grid cell mission control",
     ),
     (
         Mouse,
@@ -350,6 +358,7 @@ fn catalog() -> &'static [Entry] {
             None,
             "Mouse & Trackpad › Advanced swipe settings",
         );
+        append::<GridGestureSettings>(&mut out, "", Mouse, None, "Mouse & Trackpad › Grid swipes");
         append::<ScrollingGestureSettings>(
             &mut out,
             "",

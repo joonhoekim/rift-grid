@@ -34,7 +34,7 @@ impl Reactor {
     }
 
     /// Whether grid `grid` (0-based) is on the display showing `space`.
-    fn grid_is_on(&self, space: SpaceId, grid: usize) -> bool {
+    pub(super) fn grid_is_on(&self, space: SpaceId, grid: usize) -> bool {
         self.layout_manager.layout_engine.active_grid(space) == Some(grid)
             || self.grid_has_windows(space, grid)
     }

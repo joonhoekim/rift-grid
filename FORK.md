@@ -33,6 +33,7 @@ What subline set out to do, and this fork does on rift:
 | Grids belong to displays: a grid is on one display at a time, Alt+N goes there, each display comes up on a grid of its own, and `move_grid_to_display` hands one over (the zoomed overview's grid buttons, grouped by display) | `actor/reactor/grid_displays.rs`, `ui/grid_motion/grid_bar.rs` | — |
 | Grid overview: two stages, follows the real focus, live previews, labels in the gaps | `ui/mission_control/grid.rs` | `[settings.ui.mission_control] grid_*`, `live_preview_interval_ms` |
 | Moves shown: the screen slides to the cell moved to, fades to another grid, and a small grid map lights the cell arrived at | `ui/grid_motion.rs`, `actor/reactor/grid_motion.rs` | `[settings.ui.grid_motion]` |
+| Trackpad swipes: three fingers to the neighboring cell any way, four fingers left and right through the display's grids; taken before macOS and upstream's swipes | `actor/gesture/grid.rs`, `actor/reactor/grid_gestures.rs` | `[settings.grid_gestures]`, `common/config/grid_gestures.rs` |
 | Menu bar 3x3 maps, one per grid in use | `ui/menu_bar/grid_map.rs` | `[settings.ui.menu_bar] grid_maps` |
 | Window borders: sliding focused border, glow, hidden under the windows above | `ui/borders.rs`, `actor/reactor/borders.rs` | `[settings.ui.borders]`, `common/config/borders.rs` |
 | Settings app pages | `ui/settings/grid_pages.rs` | — |
