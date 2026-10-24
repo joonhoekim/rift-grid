@@ -20,6 +20,8 @@ use crate::ui::grid_motion::{
 
 /// How long after a move its slide waits for the captures of the cell it goes to.
 const CAPTURE_WAIT: Duration = Duration::from_millis(130);
+/// How much longer than the screen's capture the carried windows' may take.
+const HOLD_WAIT: Duration = Duration::from_millis(40);
 /// How long a move may wait for the capture of the screen it leaves. It takes
 /// longer while the cell moved to is being captured too.
 const SCREEN_WAIT: Duration = Duration::from_millis(150);
@@ -354,9 +356,48 @@ impl Reactor {
             if let Some(hud) = &manager.hud {
                 hud.set_visible(false);
             }
-            let from = manager
-                .shareable
-                .capture_display_now(display, local, scale, &leave_out, SCREEN_WAIT);
+            // The carried windows are captured alongside, to hold their place
+            // on the overlay until they move: the screen is captured without them.
+            let held: Vec<_> = carried
+                .iter()
+                .filter_map(|&(wid, before)| {
+                    let id = self.state.windows.window(wid)?.info.sys_id?.as_u32();
+                    let rx = manager.shareable.capture_window_soon(id, before.size, 1.0)?;
+                    Some((id, before, rx))
+                })
+                .collect();
+            let from = manager.shareable.capture_display_now(
+                display,
+                local,
+                scale,
+                &leave_out,
+                SCREEN_WAIT,
+            );
+            let deadline = std::time::Instant::now() + HOLD_WAIT;
+            let held: Vec<_> = held
+                .into_iter()
+                .map(|(id, before, rx)| {
+                    let wait = deadline.saturating_duration_since(std::time::Instant::now());
+                    let image = rx.recv_timeout(wait).ok().flatten().map(|image| image.0);
+                    if image.is_some() {
+                        images.insert(id, image.clone());
+                        sizes.insert(id, before.size);
+                    }
+                    let from = CGRect::new(
+                        CGPoint::new(
+                            before.origin.x - visible.origin.x,
+                            before.origin.y - visible.origin.y,
+                        ),
+                        before.size,
+                    );
+                    Carried {
+                        from,
+                        to: from,
+                        image,
+                        captured: before.size,
+                    }
+                })
+                .collect();
             if let Some(hud) = &manager.hud {
                 hud.set_visible(true);
             }
@@ -364,7 +405,7 @@ impl Reactor {
                 debug!("Grid slide skipped: the screen was not captured in time");
                 return;
             };
-            match Pan::show(generation, visible, scale, &from) {
+            match Pan::show(generation, visible, scale, &from, &held) {
                 Ok(pan) => manager.pan = Some(pan),
                 Err(error) => {
                     debug!(?error, "Grid slide unavailable");
@@ -494,7 +535,11 @@ impl Reactor {
             Note::Window { generation, window, image } => {
                 let ready = manager.pending.as_mut().filter(|p| p.generation == generation).and_then(
                     |p| {
-                        p.images.insert(window, image.map(|i| i.0));
+                        // A failed capture keeps one already held.
+                        match image {
+                            Some(image) => _ = p.images.insert(window, Some(image.0)),
+                            None => _ = p.images.entry(window).or_insert(None),
+                        }
                         p.waiting = p.waiting.saturating_sub(1);
                         (p.waiting == 0 && !p.wallpaper).then_some(generation)
                     },

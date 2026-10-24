@@ -309,6 +309,37 @@ impl Shareable {
         generation: u64,
         send: impl Fn(Note) + Send + 'static,
     ) -> bool {
+        self.window_capture(window, size, scale, move |image| {
+            send(Note::Window {
+                generation,
+                window,
+                image: image.map(SendBox),
+            })
+        })
+    }
+
+    /// Start capturing one window as `capture_window` does, the image to come on
+    /// the receiver; none when the window is not one ScreenCaptureKit knows yet.
+    pub fn capture_window_soon(
+        &self,
+        window: u32,
+        size: CGSize,
+        scale: f64,
+    ) -> Option<std::sync::mpsc::Receiver<Option<SendBox<Image>>>> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        self.window_capture(window, size, scale, move |image| {
+            let _ = tx.try_send(image.map(SendBox));
+        })
+        .then_some(rx)
+    }
+
+    fn window_capture(
+        &self,
+        window: u32,
+        size: CGSize,
+        scale: f64,
+        done: impl Fn(Option<Image>) + 'static,
+    ) -> bool {
         let Some(sc_window) = self.window(window) else { return false };
         let filter = unsafe {
             SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &sc_window)
@@ -320,8 +351,7 @@ impl Shareable {
             config.setPreservesAspectRatio(false);
         }
         let callback = RcBlock::new(move |image: *mut CGImage, _: *mut NSError| {
-            let image = std::ptr::NonNull::new(image).map(|i| unsafe { CFRetained::retain(i) });
-            send(Note::Window { generation, window, image: image.map(SendBox) });
+            done(std::ptr::NonNull::new(image).map(|i| unsafe { CFRetained::retain(i) }));
         });
         unsafe {
             SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
@@ -426,12 +456,15 @@ impl Drop for Pan {
 }
 
 impl Pan {
-    /// Cover `frame` with `from`, the screen as it was, before the windows move.
+    /// Cover `frame` with `from`, the screen as it was, before the windows move,
+    /// with `held` where they were: the windows to be carried along, which
+    /// `from` leaves out so that they do not show twice once they move.
     pub fn show(
         generation: u64,
         frame: CGRect,
         scale: f64,
         from: &CGImage,
+        held: &[Carried],
     ) -> Result<Self, CgsWindowError> {
         let size = frame.size;
         let root = CALayer::layer();
@@ -459,10 +492,7 @@ impl Pan {
         window.set_resolution(scale)?;
         window.set_level(NSPopUpMenuWindowLevel as i32)?;
         let surface = WindowSurface::new_scaled(window.id(), root.bounds(), &root, scale)?;
-        surface.flush();
-        window.order_above(None)?;
-        CATransaction::flush();
-        Ok(Self {
+        let mut pan = Self {
             generation,
             frame,
             root,
@@ -475,7 +505,19 @@ impl Pan {
             scale,
             _surface: surface,
             _window: window,
-        })
+        };
+        with_disabled_actions(|| {
+            for c in held {
+                let layer = pan.tile_layer(c.from, c.image.as_deref(), c.captured);
+                layer.setZPosition(10.0);
+                pan.camera.addSublayer(&layer);
+                pan.carried.push(layer);
+            }
+        });
+        pan._surface.flush();
+        pan._window.order_above(None)?;
+        CATransaction::flush();
+        Ok(pan)
     }
 
     pub fn generation(&self) -> u64 { self.generation }
