@@ -43,9 +43,9 @@ struct Fail: Error { let message: String }
 
 func riftCLI(_ args: [String]) throws -> Any {
     let p = Process()
-    let candidates = [NSHomeDirectory() + "/.local/bin/rift-cli", "/opt/homebrew/bin/rift-cli", "/usr/local/bin/rift-cli"]
+    let candidates = [NSHomeDirectory() + "/.local/bin/rift-grid-cli"]
     guard let path = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
-        throw Fail(message: "rift-cli not found")
+        throw Fail(message: "rift-grid-cli not found")
     }
     p.executableURL = URL(fileURLWithPath: path)
     p.arguments = args
@@ -55,7 +55,7 @@ func riftCLI(_ args: [String]) throws -> Any {
     try p.run()
     let data = out.fileHandleForReading.readDataToEndOfFile()
     p.waitUntilExit()
-    guard p.terminationStatus == 0 else { throw Fail(message: "rift-cli \(args.joined(separator: " ")) failed") }
+    guard p.terminationStatus == 0 else { throw Fail(message: "rift-grid-cli \(args.joined(separator: " ")) failed") }
     return (try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])) ?? ""
 }
 
@@ -107,7 +107,7 @@ func record(_ name: String, _ ok: Bool, _ detail: String) {
 
 func check(display wanted: String?) throws {
     // rift and its settings
-    let riftPids = serverPidsNamed("rift")
+    let riftPids = serverPidsNamed("rift-grid")
     record("rift.process", !riftPids.isEmpty, "pids \(riftPids)")
     guard let rift = riftPids.first else { return }
     let config = (try riftCLI(["execute", "config", "get"]) as? [String: Any])?["settings"] as? [String: Any] ?? [:]

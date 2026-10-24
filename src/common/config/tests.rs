@@ -228,10 +228,10 @@ fn menu_bar_binding_mode_label_defaults_on_and_can_be_disabled() {
 fn menu_bar_layout_folder_defaults_and_expands_home() {
     let settings: MenuBarSettings = toml::from_str("").unwrap();
 
-    assert_eq!(settings.layout_folder, PathBuf::from("~/.config/rift/layouts"));
+    assert_eq!(settings.layout_folder, PathBuf::from("~/.config/rift-grid/layouts"));
     assert_eq!(
         settings.resolved_layout_folder(),
-        dirs::home_dir().unwrap().join(".config/rift/layouts")
+        dirs::home_dir().unwrap().join(".config/rift-grid/layouts")
     );
 }
 

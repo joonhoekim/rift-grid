@@ -9,9 +9,10 @@ use std::process::{Command, Stdio};
 
 use clap::Subcommand;
 use nix::unistd::getuid;
+use rift_protocol::names::{BINARY, SERVICE_NAME};
 
 const LAUNCHCTL_PATH: &str = "/bin/launchctl";
-const RIFT_PLIST: &str = "git.acsandmann.rift";
+const RIFT_PLIST: &str = SERVICE_NAME;
 
 #[derive(Subcommand)]
 pub enum ServiceCommands {
@@ -57,7 +58,7 @@ fn plist_path() -> io::Result<PathBuf> {
 fn find_rift_executable_in_path(path_env: &std::ffi::OsStr) -> io::Result<Option<PathBuf>> {
     let mut current_dir: Option<PathBuf> = None;
     for dir in env::split_paths(path_env) {
-        let candidate = dir.join("rift");
+        let candidate = dir.join(BINARY);
         if candidate.is_file() {
             if candidate.is_absolute() {
                 return Ok(Some(candidate));
@@ -89,7 +90,7 @@ fn find_rift_executable() -> io::Result<PathBuf> {
             "unable to retrieve path of current executable",
         )
     })?;
-    let sibling = exe_path.with_file_name("rift");
+    let sibling = exe_path.with_file_name(BINARY);
     if sibling.is_file() {
         return Ok(sibling);
     }
@@ -142,9 +143,9 @@ fn plist_contents() -> io::Result<String> {
         <true/>
     </dict>
     <key>StandardOutPath</key>
-    <string>/tmp/rift_{user}.out.log</string>
+    <string>/tmp/{binary}_{user}.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/rift_{user}.err.log</string>
+    <string>/tmp/{binary}_{user}.err.log</string>
     <key>ProcessType</key>
     <string>Interactive</string>
     <key>LimitLoadToSessionType</key>
@@ -157,7 +158,8 @@ fn plist_contents() -> io::Result<String> {
         name = RIFT_PLIST,
         exe = exe_str,
         path_env = path_env,
-        user = user
+        user = user,
+        binary = BINARY
     );
 
     Ok(plist)
@@ -424,7 +426,7 @@ mod tests {
             fs::set_permissions(&real, perms).unwrap();
         }
 
-        let link = dir.join("rift");
+        let link = dir.join(BINARY);
         unix_fs::symlink(&real, &link).unwrap();
 
         let found = find_rift_executable_in_path(dir.as_os_str())

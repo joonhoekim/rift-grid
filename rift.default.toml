@@ -1,5 +1,5 @@
 # rift config
-# Copy this file to ~/.config/rift/config.toml or $HOME~/.config/rift/config.toml
+# Copy this file to ~/.config/rift-grid/config.toml or $HOME~/.config/rift-grid/config.toml
 
 [settings]
 # Animations
@@ -223,7 +223,7 @@ active_label = "index"
 # options are "layout" or "label" (i3-style)
 display_style = "layout"
 # .ron files in this folder appear under Layout Files in the menu bar
-layout_folder = "~/.config/rift/layouts"
+layout_folder = "~/.config/rift-grid/layouts"
 
 [settings.ui.stack_line]
 # native tabs beside stacked windows (defaults to on)

@@ -37,7 +37,7 @@ N means one place whichever display the focus is on.
   display: the main display starts on grid 1, the next on grid 2.
 
 - **Handing a grid over**: in the zoomed overview, dragging a grid button onto
-  another display's group (or `move_grid_to_display`, `rift-cli execute layout
+  another display's group (or `move_grid_to_display`, `rift-grid-cli execute layout
   move-grid-to-display <N> --uuid <display>`) gives the grid to that display.
   Each cell goes as it is, its windows and layout, and the receiving display
   shows the grid at its current cell. If the giving display was showing it, it

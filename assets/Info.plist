@@ -5,9 +5,9 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>rift</string>
+	<string>rift-grid</string>
 	<key>CFBundleIdentifier</key>
-	<string>git.acsandmann.rift</string>
+	<string>io.github.joonhoekim.rift-grid</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>0.1.0</string>
 	<key>CFBundleName</key>

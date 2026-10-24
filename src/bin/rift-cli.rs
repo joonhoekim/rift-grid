@@ -16,7 +16,7 @@ use serde_json::Value;
 
 #[derive(Parser)]
 #[command(version = env!("RIFT_VERSION"))]
-#[command(name = "rift-cli")]
+#[command(name = "rift-grid-cli")]
 #[command(about = "Command-line interface for rift window manager")]
 struct Cli {
     #[command(subcommand)]
@@ -269,7 +269,7 @@ struct LayoutFileSelection {
     /// Layout file path.
     #[arg(value_name = "PATH")]
     path: Option<PathBuf>,
-    /// Use Rift's master file (~/.rift/layout.ron).
+    /// Use Rift's master file (~/.rift-grid/layout.ron).
     #[arg(long)]
     master: bool,
 }
@@ -566,7 +566,7 @@ fn main() {
     let request = match cli.command {
         Commands::Service { .. } => {
             println!(
-                "service commands have been moved to the `rift` binary. (ie `rift service install`)"
+                "service commands have been moved to the `rift-grid` binary. (ie `rift-grid service install`)"
             );
             process::exit(0);
         }
@@ -575,7 +575,7 @@ fn main() {
         } => {
             if let Err(e) = run_mach_subscription(event) {
                 eprintln!("Communication error: {}", e);
-                eprintln!("Hint: ensure the rift service is running (try `rift service start`).");
+                eprintln!("Hint: ensure the rift service is running (try `rift-grid service start`).");
                 process::exit(1);
             }
             process::exit(0);
@@ -623,7 +623,7 @@ fn main() {
         },
         Err(e) => {
             eprintln!("Communication error: {}", e);
-            eprintln!("Hint: ensure the rift service is running (try `rift service start`).");
+            eprintln!("Hint: ensure the rift service is running (try `rift-grid service start`).");
             process::exit(1);
         }
     }

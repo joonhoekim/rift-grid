@@ -7,6 +7,7 @@
 mod commands;
 mod events;
 mod layout;
+pub mod names;
 mod queries;
 mod selectors;
 mod transport;

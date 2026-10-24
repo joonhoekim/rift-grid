@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use regex::RegexBuilder;
+use rift_protocol::names::DIR_NAME;
 pub use rift_protocol::{AnimationEasing, ConfigCommand, LayoutMode, WorkspaceSelector};
 use serde::{Deserialize, Serialize};
 
@@ -19,10 +20,10 @@ pub(super) const DEPRECATED_MAP: &[(&str, &str)] = &[
     ("toggle_tile_orientation", "toggle_orientation"),
 ];
 
-pub fn data_dir() -> PathBuf { dirs::home_dir().unwrap().join(".rift") }
+pub fn data_dir() -> PathBuf { dirs::home_dir().unwrap().join(format!(".{DIR_NAME}")) }
 pub fn restore_file() -> PathBuf { data_dir().join("layout.ron") }
 pub fn config_file() -> PathBuf {
-    dirs::home_dir().unwrap().join(".config").join("rift").join("config.toml")
+    dirs::home_dir().unwrap().join(".config").join(DIR_NAME).join("config.toml")
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, ConfigSchema)]
@@ -1867,7 +1868,7 @@ fn default_animation_duration() -> f64 { 0.3 }
 
 fn default_animation_fps() -> f64 { 100.0 }
 
-fn default_layout_folder() -> PathBuf { PathBuf::from("~/.config/rift/layouts") }
+fn default_layout_folder() -> PathBuf { PathBuf::from("~/.config/rift-grid/layouts") }
 
 fn default_workspace_count() -> usize { 4 }
 

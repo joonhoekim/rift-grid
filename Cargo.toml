@@ -9,8 +9,13 @@ members = [".", "crates/rift-client", "crates/rift-protocol", "crates/rift-confi
 resolver = "3"
 
 [[bin]]
-name = "rift"
+name = "rift-grid"
+path = "src/bin/rift.rs"
 test = false
+
+[[bin]]
+name = "rift-grid-cli"
+path = "src/bin/rift-cli.rs"
 
 [profile.dev]
 opt-level = 0

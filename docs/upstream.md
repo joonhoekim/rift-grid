@@ -25,6 +25,7 @@ New code lives in fork modules; upstream files only call into them.
 | `actor/wm_controller.rs`, `actor/mission_control.rs` | `WmEvent::OverviewStep` passed on as `mission_control::Event::Step`, handled in `grid_zoom.rs` |
 | `actor/reactor/gesture.rs` | `Lifecycle::Grid` goes to `grid_gestures.rs`; `gesture_space_active` is `pub(super)` |
 | `actor/wm_controller.rs` | The Overview closes on a space state update only when `grid_motion::screens_changed` says the displays or their Spaces changed |
+| `sys/mach.rs`, `sys/service.rs`, `common/config/types.rs`, `crates/rift-client/src/lib.rs`, `Cargo.toml`, `assets/Info.plist`, `rift.default.toml` | The fork's names (`crates/rift-protocol/src/names.rs`): the Mach service and launchd label, the binary looked up on `PATH`, the log paths, the config and data directories, the default layout folder, the `[[bin]]` names, the bundle id; clap's `name` in both binaries |
 | `ui/settings/*` | A Window Borders category (also in `sidebar.rs`'s color match), the fork's Overview page in place of `interface::overview`, and their search entries; in `mod.rs`, one call that ends a field's editing on a click elsewhere or when the window goes to the back (`settings/editing.rs`), checked in `native_tests.rs` |
 
 ## Where merges conflict most
@@ -107,7 +108,7 @@ as is. Both were reproduced before the fix and checked live after it.
 - `c165ce1` *drop apps that quit, whose pid Carbon can no longer read*:
   `kEventAppTerminated` arrives after `GetProcessPID` stops resolving the
   process, so upstream never terminates an app; every quit app stays in
-  `rift-cli query applications` with its actor and AX observer.
+  `rift-grid-cli query applications` with its actor and AX observer.
 - `c9eba46` *manage an app whose window shows before it turns regular*: an app
   started outside LaunchServices (an exec binding) reads Prohibited until it
   sets its policy, and when both discoveries read Prohibited its windows are

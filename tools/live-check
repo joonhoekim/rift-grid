@@ -7,7 +7,7 @@
 # windows moved off screen and back.
 #
 #   tools/live-check                 on the display rift has active
-#   tools/live-check DISPLAY-UUID    on that display (rift-cli query displays)
+#   tools/live-check DISPLAY-UUID    on that display (rift-grid-cli query displays)
 #
 # It switches that display to two empty cells side by side, opens two test
 # windows there, moves to the neighbor and back, opens and closes the Overview,

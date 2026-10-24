@@ -38,6 +38,13 @@ What subline set out to do, and this fork does on rift:
 | Window borders: sliding focused border, glow, hidden under the windows above | `ui/borders.rs`, `actor/reactor/borders.rs` | `[settings.ui.borders]`, `common/config/borders.rs` |
 | Settings app pages | `ui/settings/grid_pages.rs` | — |
 
+The fork's binaries, Mach service, launchd label, bundle id and directories have
+names of their own (`rift-grid`, `rift-grid-cli`, `io.github.joonhoekim.rift-grid`,
+`~/.config/rift-grid`, `~/.rift-grid`), so it never talks to an upstream rift
+or reads its files. They are kept in `crates/rift-protocol/src/names.rs`; the
+user-visible "Rift" in menus and windows stays upstream's.
+[docs/install.md](docs/install.md) has the side-by-side table.
+
 Upstream's own files keep only the lines that call into these modules. Keep it
 that way: new fork code goes in a module of its own, and a change inside an
 upstream file is a hook of a few lines.
