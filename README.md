@@ -1,6 +1,7 @@
 > **rift-grid** is an unofficial fork of [rift](https://github.com/acsandmann/rift)
 > that lays the virtual workspaces out as grids of cells and draws its own window
-> borders. What it adds, and how it follows upstream, is in [FORK.md](FORK.md).
+> borders. What it adds, and how it follows upstream, is in [FORK.md](FORK.md);
+> installing it is in [docs/install.md](docs/install.md).
 > Everything below is upstream's README.
 
 
