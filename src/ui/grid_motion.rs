@@ -56,6 +56,10 @@ pub enum Note {
     End(u64),
     HudFade(u64),
     HudGone(u64),
+    /// Capture the carried windows again now that they have their new size.
+    Recapture(u64),
+    /// A carried window as it is at its new size.
+    Carried { generation: u64, window: u32, image: Option<SendBox<Image>> },
     /// The Overview's overlay has faded out after coming in to a cell.
     OverviewGone(u64),
 }
@@ -333,12 +337,14 @@ impl Shareable {
         .then_some(rx)
     }
 
-    fn window_capture(
+    /// Capture one window wherever it is, handing the image to `done`. False
+    /// when the window is not one ScreenCaptureKit knows yet.
+    pub fn window_capture(
         &self,
         window: u32,
         size: CGSize,
         scale: f64,
-        done: impl Fn(Option<Image>) + 'static,
+        done: impl Fn(Option<Image>) + Send + 'static,
     ) -> bool {
         let Some(sc_window) = self.window(window) else { return false };
         let filter = unsafe {
@@ -395,6 +401,8 @@ pub struct Tile {
 /// A window carried along into the cell moved to: from where it was to where it
 /// lands, in the overlay's coordinates. It stays put while the cells slide.
 pub struct Carried {
+    /// Its WindowServer id, to show it again at the size it lands at.
+    pub window: Option<u32>,
     pub from: CGRect,
     pub to: CGRect,
     pub image: Option<Image>,
@@ -438,7 +446,7 @@ pub struct Pan {
     /// Where the cell last moved to lies in `world`; the slide heads there.
     offset: CGPoint,
     /// The last move's carried windows, replaced by the next move's.
-    carried: Vec<Retained<CALayer>>,
+    carried: Vec<(Option<u32>, Retained<CALayer>)>,
     /// Where cells already have a layer in `world`, by their offset in it.
     drawn: Vec<CGPoint>,
     size: CGSize,
@@ -511,7 +519,7 @@ impl Pan {
                 let layer = pan.tile_layer(c.from, c.image.as_deref(), c.captured);
                 layer.setZPosition(10.0);
                 pan.camera.addSublayer(&layer);
-                pan.carried.push(layer);
+                pan.carried.push((c.window, layer));
             }
         });
         pan._surface.flush();
@@ -533,6 +541,27 @@ impl Pan {
         fade.setBeginTime(CACurrentMediaTime() + delay);
         fade.setFillMode(unsafe { kCAFillModeBackwards });
         self.root.addAnimation_forKey(&fade, Some(&NSString::from_str("opacity")));
+        CATransaction::commit();
+        CATransaction::flush();
+    }
+
+    /// Cross-fade carried `window` from how it looked where it was, stretched
+    /// as it grows or shrinks, to `image`, how it looks at its new size, over
+    /// `duration`.
+    pub fn show_carried_as(&self, window: u32, image: &CGImage, duration: f64) {
+        let Some((_, layer)) = self.carried.iter().find(|(id, _)| *id == Some(window)) else {
+            return;
+        };
+        CATransaction::begin();
+        CATransaction::setDisableActions(true);
+        let before = unsafe { layer.presentationLayer() }
+            .and_then(|shown| unsafe { shown.contents() })
+            .or_else(|| unsafe { layer.contents() });
+        set_contents(layer, image);
+        if let Some(before) = before {
+            let fade = basic("contents", &before, duration, &timing());
+            layer.addAnimation_forKey(&fade, Some(&NSString::from_str("contents")));
+        }
         CATransaction::commit();
         CATransaction::flush();
     }
@@ -596,7 +625,7 @@ impl Pan {
                     self.fill_grid(shape, image);
                 }
             }
-            for layer in self.carried.drain(..) {
+            for (_, layer) in self.carried.drain(..) {
                 layer.removeFromSuperlayer();
             }
             for c in carried {
@@ -605,7 +634,7 @@ impl Pan {
                 // Above the cells but under the camera: it draws back with them.
                 self.camera.addSublayer(&layer);
                 layer.setFrame(c.to);
-                moving.push((layer, c.from));
+                moving.push((c.window, layer, c.from));
             }
         });
         match step {
@@ -651,9 +680,9 @@ impl Pan {
                 animate_with(&to, "transform.scale", &NSNumber::new_f64(lean), duration, &timing);
             }
         }
-        for (layer, from) in moving {
+        for (window, layer, from) in moving {
             glide_with(&layer, from, duration, &timing);
-            self.carried.push(layer);
+            self.carried.push((window, layer));
         }
         CATransaction::commit();
         CATransaction::flush();

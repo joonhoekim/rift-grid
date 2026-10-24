@@ -15,7 +15,7 @@ use crate::layout_engine::LayoutCommand;
 use crate::model::VirtualWorkspaceId;
 use crate::sys::screen::SpaceId;
 use crate::ui::grid_motion::{
-    Carried, Hud, HudView, Image, Motion, Note, Pan, Shareable, Step, Tile,
+    Carried, Hud, HudView, Image, Motion, Note, Pan, SendBox, Shareable, Step, Tile,
 };
 
 /// How long after a move its slide waits for the captures of the cell it goes to.
@@ -30,6 +30,11 @@ const CONTENT_AGE: Duration = Duration::from_secs(20);
 /// How long after a slide its overlay starts to fade out, and how long that takes.
 const REDRAW_WAIT: Duration = Duration::from_millis(40);
 const FADE_OUT: Duration = Duration::from_millis(150);
+/// How far into a slide a carried window that changes size is captured again,
+/// as a share of the slide: its app has redrawn it at its new size by then.
+const RECAPTURE_AT: f64 = 0.3;
+/// The shortest cross-fade from a carried window's old look to its new one.
+const SHORTEST_FADE: Duration = Duration::from_millis(80);
 
 #[derive(Default)]
 pub(super) struct GridMotionManager {
@@ -37,9 +42,17 @@ pub(super) struct GridMotionManager {
     generation: u64,
     pan: Option<Pan>,
     pending: Option<Pending>,
+    recapture: Option<Recapture>,
     hud: Option<Hud>,
 }
 
+/// The carried windows of a slide that change size, to capture again once they
+/// have it, and when the slide ends.
+struct Recapture {
+    generation: u64,
+    windows: Vec<(u32, CGSize)>,
+    end: std::time::Instant,
+}
 
 // Made empty with the reactor; its windows, layers and captures are only made and
 // used on the reactor's thread.
@@ -395,6 +408,7 @@ impl Reactor {
                         before.size,
                     );
                     Carried {
+                        window: Some(id),
                         from,
                         to: from,
                         image,
@@ -492,7 +506,13 @@ impl Reactor {
                 let id = window.info.sys_id.map(|id| id.as_u32());
                 let image = id.and_then(|id| images.remove(&id)).flatten();
                 let to = local(window.frame_monotonic);
-                Some(Carried { from: local(*before), to, image, captured: captured(id, *before) })
+                Some(Carried {
+                    window: id,
+                    from: local(*before),
+                    to,
+                    image,
+                    captured: captured(id, *before),
+                })
             })
             .collect();
         let bounds = CGDisplayBounds(pending.display);
@@ -511,6 +531,27 @@ impl Reactor {
         let settled = Duration::from_secs_f64(duration) + REDRAW_WAIT;
         pan.fade_out(settled.as_secs_f64(), FADE_OUT.as_secs_f64());
         self.grid_motion_later(settled + FADE_OUT, Note::End(generation));
+        // A carried window that changes size is stretched as it goes; it turns
+        // into how its app draws it at the new size, captured partway.
+        let windows: Vec<_> = carried
+            .iter()
+            .filter(|c| {
+                (c.from.size.width - c.to.size.width).abs() >= 2.0
+                    || (c.from.size.height - c.to.size.height).abs() >= 2.0
+            })
+            .filter_map(|c| Some((c.window?, c.to.size)))
+            .collect();
+        self.grid_motion_manager.recapture = (!windows.is_empty()).then(|| Recapture {
+            generation,
+            windows,
+            end: std::time::Instant::now() + Duration::from_secs_f64(duration),
+        });
+        if self.grid_motion_manager.recapture.is_some() {
+            self.grid_motion_later(
+                Duration::from_secs_f64(duration * RECAPTURE_AT),
+                Note::Recapture(generation),
+            );
+        }
     }
 
     /// Handle the slide's and the map's own events, or hand `event` back.
@@ -569,6 +610,40 @@ impl Reactor {
             }
             // The Overview's own; it never comes here.
             Note::OverviewGone(_) => {}
+            Note::Recapture(generation) => {
+                let send = self.grid_motion_send();
+                let manager = &self.grid_motion_manager;
+                let Some(recapture) =
+                    manager.recapture.as_ref().filter(|r| r.generation == generation)
+                else {
+                    return Ok(());
+                };
+                for &(window, size) in &recapture.windows {
+                    let send = send.clone();
+                    manager.shareable.window_capture(window, size, 1.0, move |image| {
+                        send(Note::Carried {
+                            generation,
+                            window,
+                            image: image.map(SendBox),
+                        })
+                    });
+                }
+            }
+            Note::Carried { generation, window, image } => {
+                let Some(image) = image else { return Ok(()) };
+                let Some(end) = manager
+                    .recapture
+                    .as_ref()
+                    .filter(|r| r.generation == generation)
+                    .map(|r| r.end)
+                else {
+                    return Ok(());
+                };
+                if let Some(pan) = manager.pan.as_ref().filter(|p| p.generation() == generation) {
+                    let left = end.saturating_duration_since(std::time::Instant::now());
+                    pan.show_carried_as(window, &image.0, left.max(SHORTEST_FADE).as_secs_f64());
+                }
+            }
         }
         Ok(())
     }
