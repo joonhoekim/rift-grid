@@ -115,6 +115,21 @@ as is. Both were reproduced before the fix and checked live after it.
   never managed. Reproduced with a small app that shows a window and turns
   Regular three seconds later.
 
+## Display move fixes to send
+
+Two fixes of #601's revisioned space state, each its own commit. Before them,
+`move_window_to_display` (Alt+Ctrl+IJKL) left the window at its old size or
+place on the new display until the next layout. Both were reproduced with
+trace logs and checked live after the fix.
+
+- `994c7d5` *keep the frames in flight when a window only moves between
+  Spaces*: the window's own change of Space bumped the revision and revoked the
+  resize sent a moment before. With a test in `spaces/tests.rs` that fails
+  without the fix.
+- `89385be` *don't end animations on a space snapshot that revoked nothing*:
+  the repeat of the accepted revision about 100 ms later stopped every
+  animation where it was; seen with Chrome, whose resizes are slow.
+
 ## Gesture changes to propose
 
 The grid's trackpad swipes hook into upstream's gesture code in several
