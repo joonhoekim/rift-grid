@@ -28,12 +28,18 @@ const CONTENT_WAIT: Duration = Duration::from_millis(250);
 const SCREEN_WAIT: Duration = Duration::from_millis(200);
 /// How old that list may be before an opening fetches it again, for the next.
 const CONTENT_AGE: Duration = Duration::from_secs(5);
+/// How long the overlay takes to fade out once it has come in to a cell, and
+/// how long it waits first when that cell's windows were just switched to.
+const FADE_OUT: Duration = Duration::from_millis(150);
+const REDRAW_WAIT: Duration = Duration::from_millis(120);
 
 #[derive(Default)]
 pub(super) struct GridZoom {
     shareable: Shareable,
     generation: u64,
     open: Option<Open>,
+    /// The overlay fading out after the Overview closed into a cell.
+    closing: Option<GridOverview<VirtualWorkspaceId>>,
 }
 
 struct Open {
@@ -328,6 +334,8 @@ impl MissionControlActor {
         let Some(state) = self.grid_zoom_state(space, frame) else { return false };
 
         let zoom = &mut self.grid_zoom;
+        // An overlay still fading would be in the capture of the screen.
+        zoom.closing = None;
         if !zoom.shareable.has_content() {
             zoom.shareable.fetch_now(CONTENT_WAIT);
         }
@@ -474,6 +482,7 @@ impl MissionControlActor {
             bar.hide();
         }
         let length = open.overview.enter();
+        let mut after = Duration::from_secs_f64(length);
         if !open.overview.selected_is_active()
             && let Some(&workspace) = open.overview.selected()
         {
@@ -481,9 +490,11 @@ impl MissionControlActor {
                 display: open.display.clone(),
                 workspace,
             });
+            // Windows shown again redraw a moment after they arrive.
+            after += REDRAW_WAIT;
         }
-        // A little longer: windows shown again redraw a moment after they arrive.
-        let after = Duration::from_secs_f64(length) + Duration::from_millis(120);
+        // The overlay fades as soon as the move ends; the Overview closes then.
+        open.overview.fade_out(after.as_secs_f64(), FADE_OUT.as_secs_f64());
         let when = dispatchr::time::Time::new_after(
             dispatchr::time::Time::NOW,
             i64::try_from(after.as_nanos()).unwrap_or(i64::MAX),
@@ -526,14 +537,43 @@ impl MissionControlActor {
             }
             Note::End(generation) => {
                 if zoom.open.as_ref().is_some_and(|open| open.overview.generation() == generation) {
-                    self.grid_zoom_close();
+                    self.grid_zoom_fade_out();
+                }
+            }
+            Note::OverviewGone(generation) => {
+                if zoom
+                    .closing
+                    .as_ref()
+                    .is_some_and(|overview| overview.generation() == generation)
+                {
+                    zoom.closing = None;
                 }
             }
             _ => {}
         }
     }
 
+    /// Close into the cell come in to, its overlay fading out over the screen
+    /// as it is now rather than leaving in one frame.
+    fn grid_zoom_fade_out(&mut self) {
+        let Some(open) = self.grid_zoom.open.take() else { return };
+        let generation = open.overview.generation();
+        self.grid_zoom.closing = Some(open.overview);
+        self.input_tx.send(super::super::input::Request::SetMissionControlActive(false));
+        crate::ui::grid_motion::set_overview_open(false);
+        let when = dispatchr::time::Time::new_after(
+            dispatchr::time::Time::NOW,
+            i64::try_from(FADE_OUT.as_nanos()).unwrap_or(i64::MAX),
+        );
+        dispatchr::queue::main().after_f_s(
+            when,
+            (self.tx.clone(), generation),
+            |(tx, generation)| tx.send(Event::GridZoom(Note::OverviewGone(generation))),
+        );
+    }
+
     fn grid_zoom_close(&mut self) {
+        self.grid_zoom.closing = None;
         if self.grid_zoom.open.take().is_some() {
             self.input_tx.send(super::super::input::Request::SetMissionControlActive(false));
             crate::ui::grid_motion::set_overview_open(false);

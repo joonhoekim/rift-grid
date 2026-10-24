@@ -520,6 +520,8 @@ impl Reactor {
                     manager.hud = None;
                 }
             }
+            // The Overview's own; it never comes here.
+            Note::OverviewGone(_) => {}
         }
         Ok(())
     }

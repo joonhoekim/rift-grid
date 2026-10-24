@@ -56,6 +56,8 @@ pub enum Note {
     End(u64),
     HudFade(u64),
     HudGone(u64),
+    /// The Overview's overlay has faded out after coming in to a cell.
+    OverviewGone(u64),
 }
 
 /// The slide's settings, for the Overview, which draws back the same way.

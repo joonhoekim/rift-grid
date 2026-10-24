@@ -480,6 +480,22 @@ impl<T: PartialEq> GridOverview<T> {
     }
 
     /// Come in to the cell selected; returns how long it takes, in seconds.
+    /// Fade the overlay out over `duration`, `delay` seconds from now,
+    /// uncovering the screen under it: the cell as it is now, where the overlay
+    /// shows it as it was. The render server starts it, so it follows the end
+    /// of a move without waiting on this thread.
+    pub fn fade_out(&self, delay: f64, duration: f64) {
+        CATransaction::begin();
+        CATransaction::setDisableActions(true);
+        self.root.setOpacity(0.0);
+        let fade = basic("opacity", &NSNumber::new_f64(1.0), duration, &timing());
+        fade.setBeginTime(CACurrentMediaTime() + delay);
+        fade.setFillMode(unsafe { kCAFillModeBackwards });
+        self.root.addAnimation_forKey(&fade, Some(&NSString::from_str("opacity")));
+        CATransaction::commit();
+        CATransaction::flush();
+    }
+
     pub fn enter(&mut self) -> f64 {
         let size = self.frame.size;
         let step = CGSize::new(size.width + self.gap, size.height + self.gap);
