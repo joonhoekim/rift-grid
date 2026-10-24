@@ -542,7 +542,8 @@ impl Pan {
             for c in carried {
                 let layer = self.tile_layer(c.from, c.image.as_deref(), c.captured);
                 layer.setZPosition(10.0);
-                self.root.addSublayer(&layer);
+                // Above the cells but under the camera: it draws back with them.
+                self.camera.addSublayer(&layer);
                 layer.setFrame(c.to);
                 moving.push((layer, c.from));
             }
