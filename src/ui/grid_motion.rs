@@ -516,8 +516,7 @@ impl Pan {
         };
         with_disabled_actions(|| {
             for c in held {
-                let layer = pan.tile_layer(c.from, c.image.as_deref(), c.captured);
-                layer.setZPosition(10.0);
+                let layer = pan.carried_layer(c);
                 pan.camera.addSublayer(&layer);
                 pan.carried.push((c.window, layer));
             }
@@ -545,9 +544,9 @@ impl Pan {
         CATransaction::flush();
     }
 
-    /// Cross-fade carried `window` from how it looked where it was, stretched
-    /// as it grows or shrinks, to `image`, how it looks at its new size, over
-    /// `duration`.
+    /// Cross-fade carried `window` from how it looked where it was, covering
+    /// its frame as it grows or shrinks, to `image`, how it looks at its new
+    /// size, over `duration`.
     pub fn show_carried_as(&self, window: u32, image: &CGImage, duration: f64) {
         let Some((_, layer)) = self.carried.iter().find(|(id, _)| *id == Some(window)) else {
             return;
@@ -629,8 +628,7 @@ impl Pan {
                 layer.removeFromSuperlayer();
             }
             for c in carried {
-                let layer = self.tile_layer(c.from, c.image.as_deref(), c.captured);
-                layer.setZPosition(10.0);
+                let layer = self.carried_layer(c);
                 // Above the cells but under the camera: it draws back with them.
                 self.camera.addSublayer(&layer);
                 layer.setFrame(c.to);
@@ -740,6 +738,17 @@ impl Pan {
             .and_then(|shown| shown.valueForKeyPath(&key))
             .and_then(|value| value.downcast::<NSNumber>().ok())
             .map_or(1.0, |value| value.as_f64())
+    }
+
+    /// A carried window over the cells, at where it was. As its frame grows or
+    /// shrinks, its capture keeps its proportions and covers the frame, cut to
+    /// it, rather than stretching.
+    fn carried_layer(&self, c: &Carried) -> Retained<CALayer> {
+        let layer = self.tile_layer(c.from, c.image.as_deref(), c.captured);
+        layer.setZPosition(10.0);
+        unsafe { layer.setContentsGravity(objc2_quartz_core::kCAGravityResizeAspectFill) };
+        layer.setMasksToBounds(true);
+        layer
     }
 
     fn tile_layer(&self, frame: CGRect, image: Option<&CGImage>, captured: CGSize) -> Retained<CALayer> {

@@ -531,8 +531,8 @@ impl Reactor {
         let settled = Duration::from_secs_f64(duration) + REDRAW_WAIT;
         pan.fade_out(settled.as_secs_f64(), FADE_OUT.as_secs_f64());
         self.grid_motion_later(settled + FADE_OUT, Note::End(generation));
-        // A carried window that changes size is stretched as it goes; it turns
-        // into how its app draws it at the new size, captured partway.
+        // A carried window that changes size shows its old look as it goes; it
+        // turns into how its app draws it at the new size, captured partway.
         let windows: Vec<_> = carried
             .iter()
             .filter(|c| {
