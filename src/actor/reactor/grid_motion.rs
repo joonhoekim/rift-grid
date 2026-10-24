@@ -27,6 +27,9 @@ const HOLD_WAIT: Duration = Duration::from_millis(40);
 const SCREEN_WAIT: Duration = Duration::from_millis(150);
 /// How old the list of capturable windows may get before it is fetched again.
 const CONTENT_AGE: Duration = Duration::from_secs(20);
+/// How long after a slide its overlay starts to fade out, and how long that takes.
+const REDRAW_WAIT: Duration = Duration::from_millis(40);
+const FADE_OUT: Duration = Duration::from_millis(150);
 
 #[derive(Default)]
 pub(super) struct GridMotionManager {
@@ -36,6 +39,7 @@ pub(super) struct GridMotionManager {
     pending: Option<Pending>,
     hud: Option<Hud>,
 }
+
 
 // Made empty with the reactor; its windows, layers and captures are only made and
 // used on the reactor's thread.
@@ -502,12 +506,11 @@ impl Reactor {
         let shape = (pending.columns, pending.cell);
         let duration =
             pan.run(pending.step, shape, wallpaper.map(|w| &**w), &tiles, &carried, motion);
-        // A little longer than the slide: windows shown again redraw at their new
-        // size a moment after they arrive.
-        self.grid_motion_later(
-            Duration::from_secs_f64(duration) + Duration::from_millis(120),
-            Note::End(generation),
-        );
+        // The overlay fades out a moment after the slide, as windows shown again
+        // redraw at their new size a moment after they arrive.
+        let settled = Duration::from_secs_f64(duration) + REDRAW_WAIT;
+        pan.fade_out(settled.as_secs_f64(), FADE_OUT.as_secs_f64());
+        self.grid_motion_later(settled + FADE_OUT, Note::End(generation));
     }
 
     /// Handle the slide's and the map's own events, or hand `event` back.
@@ -533,8 +536,8 @@ impl Reactor {
                 }
             }
             Note::Window { generation, window, image } => {
-                let ready = manager.pending.as_mut().filter(|p| p.generation == generation).and_then(
-                    |p| {
+                let ready =
+                    manager.pending.as_mut().filter(|p| p.generation == generation).and_then(|p| {
                         // A failed capture keeps one already held.
                         match image {
                             Some(image) => _ = p.images.insert(window, Some(image.0)),
@@ -542,8 +545,7 @@ impl Reactor {
                         }
                         p.waiting = p.waiting.saturating_sub(1);
                         (p.waiting == 0 && !p.wallpaper).then_some(generation)
-                    },
-                );
+                    });
                 if let Some(generation) = ready {
                     self.run_pan(generation);
                 }

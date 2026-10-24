@@ -522,6 +522,21 @@ impl Pan {
 
     pub fn generation(&self) -> u64 { self.generation }
 
+    /// Fade the overlay out over `duration`, `delay` seconds from now, uncovering
+    /// the windows under it rather than leaving in one frame. The render server
+    /// starts it, as it does the slide.
+    pub fn fade_out(&self, delay: f64, duration: f64) {
+        CATransaction::begin();
+        CATransaction::setDisableActions(true);
+        self.root.setOpacity(0.0);
+        let fade = basic("opacity", &NSNumber::new_f64(1.0), duration, &timing());
+        fade.setBeginTime(CACurrentMediaTime() + delay);
+        fade.setFillMode(unsafe { kCAFillModeBackwards });
+        self.root.addAnimation_forKey(&fade, Some(&NSString::from_str("opacity")));
+        CATransaction::commit();
+        CATransaction::flush();
+    }
+
     /// Whether a move on `frame` can go on from this slide.
     pub fn covers(&self, frame: CGRect) -> bool { self.frame == frame }
 
@@ -558,6 +573,9 @@ impl Pan {
         // frames before their animations do.
         CATransaction::begin();
         CATransaction::setDisableActions(true);
+        // A move during the fade out takes the overlay back.
+        self.root.removeAnimationForKey(&NSString::from_str("opacity"));
+        self.root.setOpacity(1.0);
         with_disabled_actions(|| {
             to.setFrame(rect(offset.x, offset.y, w, h));
             to.setMasksToBounds(true);
