@@ -415,6 +415,9 @@ impl WindowCard {
         if bare {
             caption.setBackgroundColor(Some(&color(0.06, 0.06, 0.08, 0.78)));
             caption.setCornerRadius(LABEL_ROW / 2.0);
+            // The label sits on the preview, which the workspace's canvas draws
+            // at z 1.
+            card.setZPosition(2.0);
         } else {
             title.setOpacity(0.65);
         }
