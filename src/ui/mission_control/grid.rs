@@ -9,9 +9,10 @@ use crate::common::config::{GRID_COUNT, GridFollow};
 mod grid_bar;
 pub(super) use grid_bar::*;
 
-// The app and title over a grid tile's bottom left corner, and its distance from it.
-pub(super) const LABEL_ROW: f64 = 22.0;
-pub(super) const LABEL_INSET: f64 = 6.0;
+// The row of app, title and close button across a grid tile's top.
+pub(super) const LABEL_ROW: f64 = 24.0;
+/// The close button at the end of a tile's label.
+pub(super) const LABEL_CLOSE: f64 = 16.0;
 // Grid cards are bare previews with a hairline gap between tiles.
 pub(super) const BARE_INSET: f64 = 1.5;
 
@@ -116,6 +117,19 @@ pub(super) fn grid_bar_groups(reactor: &ReactorHandle, here: &str) -> Vec<BarGro
         })
         .collect();
     bar_groups(&displays, here)
+}
+
+/// The close button ending a grid tile's label, in `caption`.
+pub(super) fn label_close_button(caption: &CALayer, scale: f64) -> Retained<CALayer> {
+    let button = layer(rect(0.0, 0.0, LABEL_CLOSE, LABEL_CLOSE), scale);
+    button.setCornerRadius(LABEL_CLOSE / 2.0);
+    button.setBackgroundColor(Some(&color(1.0, 1.0, 1.0, 0.18)));
+    let cross = label(&button, "✕", rect(0.0, (LABEL_CLOSE - 12.0) / 2.0, LABEL_CLOSE, 12.0), scale);
+    unsafe { cross.setAlignmentMode(objc2_quartz_core::kCAAlignmentCenter) };
+    cross.setFontSize(9.0);
+    cross.setForegroundColor(Some(&color(1.0, 1.0, 1.0, 0.9)));
+    caption.addSublayer(&button);
+    button
 }
 
 /// The size to capture a card's preview at: at most 1024×768, or with full
@@ -522,10 +536,58 @@ impl OverviewSession {
         })
     }
 
+    /// The window whose label's close button is at `point`, a little beyond it
+    /// included.
+    fn close_button_at(&self, point: CGPoint) -> Option<WindowServerId> {
+        let d = self.displays.iter().find(|d| contains(d.bounds, point))?;
+        for view in &d.views {
+            for card in &view.cards {
+                let Some(button) = &card.close else { continue };
+                if card.caption.isHidden() {
+                    continue;
+                }
+                let at = |l: &CALayer| l.frame().origin;
+                let (v, c, cap) = (at(&view.layer), at(&card.layer), at(&card.caption));
+                let frame = button.frame();
+                let hit = rect(
+                    d.bounds.origin.x + v.x + c.x + cap.x + frame.origin.x - 3.0,
+                    d.bounds.origin.y + v.y + c.y + cap.y + frame.origin.y - 3.0,
+                    frame.size.width + 6.0,
+                    frame.size.height + 6.0,
+                );
+                if contains(hit, point) {
+                    return d
+                        .workspaces
+                        .iter()
+                        .flat_map(|ws| &ws.windows)
+                        .find(|w| w.id == card.id)
+                        .and_then(|w| w.info.sys_id);
+                }
+            }
+        }
+        None
+    }
+
+    /// The fork's input before the overview's own: a label's close button,
+    /// then the grid buttons.
+    pub(super) fn grid_input(&mut self, input: &Input) -> Option<Option<OverviewAction>> {
+        match input {
+            // Pressed on the button, not a drag of the card under it.
+            &Input::PointerDown(p) if self.close_button_at(p).is_some() => return Some(None),
+            &(Input::PointerUp(p) | Input::Click(p)) if self.drag.is_none() => {
+                if let Some(id) = self.close_button_at(p) {
+                    return Some(Some(OverviewAction::CloseWindow(id)));
+                }
+            }
+            _ => {}
+        }
+        self.grid_bar_input(input)
+    }
+
     /// Pressing, dragging and letting go of a grid button: let go on another
     /// display's row, the grid goes to that display; let go where it was
     /// pressed, the grid shows. None when `input` is not the buttons'.
-    pub(super) fn grid_bar_input(&mut self, input: &Input) -> Option<Option<OverviewAction>> {
+    fn grid_bar_input(&mut self, input: &Input) -> Option<Option<OverviewAction>> {
         use crate::layout_engine::LayoutCommand;
         let local = |d: &DisplayOverview, p: CGPoint| {
             CGPoint::new(p.x - d.bounds.origin.x, p.y - d.bounds.origin.y)

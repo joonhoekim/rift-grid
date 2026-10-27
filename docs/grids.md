@@ -141,8 +141,11 @@ When the active cell changes in the first stage, the camera moves as
 `[settings.ui.mission_control] grid_follow` says: `"reveal"` (default) moves only as far as it takes to show the active cell whole, a gap
 from the edges; `"center"` centers the active cell every time.
 
-Each window's tile carries its app and title at its bottom left corner
-(`grid_labels`, on by default).
+Each window's tile carries a row across its top (`grid_labels`, on by
+default): the app's icon, the window's title, and a close button at the end,
+which asks the window to close, as its own close button would; the overview
+stays open. The row is the tile's width and 24 points high, and is left out on
+a tile too small for it.
 
 The overview closes when a display comes or goes, moves, or shows another
 Space; other display updates, such as windows moving between displays, leave it

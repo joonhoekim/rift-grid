@@ -304,6 +304,11 @@ impl MissionControlActor {
                 }
                 if matches!(action, Some(OverviewAction::Dismiss)) {
                     self.close();
+                } else if let Some(OverviewAction::CloseWindow(id)) = action {
+                    // The overview follows when the window has gone.
+                    self.reactor.send(reactor::Event::Command(reactor::Command::Reactor(
+                        reactor::ReactorCommand::CloseWindow { window_server_id: Some(id.as_u32()) },
+                    )));
                 } else if let Some(OverviewAction::Command(command)) = action {
                     // Queries share the reactor's queue, so the refresh sees the result.
                     self.reactor.send(reactor::Event::Command(reactor::Command::Layout(command)));

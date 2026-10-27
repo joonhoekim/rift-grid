@@ -346,6 +346,8 @@ pub(crate) enum OverviewAction {
     /// Run a layout command and keep the overview open; the overview then follows
     /// the focus it produces.
     Command(crate::layout_engine::LayoutCommand),
+    /// Ask a window to close, from its label's close button; the overview stays.
+    CloseWindow(WindowServerId),
     Activate {
         display: String,
         workspace: crate::model::VirtualWorkspaceId,
@@ -364,6 +366,8 @@ struct WindowCard {
     caption: Retained<CALayer>,
     title: Retained<CATextLayer>,
     icon: Option<Retained<CALayer>>,
+    /// A bare card's label ends in a close button.
+    close: Option<Retained<CALayer>>,
 }
 impl WindowCard {
     fn new(
@@ -410,17 +414,24 @@ impl WindowCard {
         caption.setHidden(bare && !labelled);
         if bare {
             caption.setBackgroundColor(Some(&color(0.06, 0.06, 0.08, 0.78)));
-            caption.setCornerRadius(LABEL_ROW / 2.0);
+            // A header over the preview's top, its corners the preview's.
+            caption.setCornerRadius(CORNER);
+            caption.setMaskedCorners(
+                objc2_quartz_core::CACornerMask::LayerMinXMinYCorner
+                    | objc2_quartz_core::CACornerMask::LayerMaxXMinYCorner,
+            );
             // The label sits on the preview, which the workspace's canvas draws
             // at z 1.
             card.setZPosition(2.0);
         } else {
             title.setOpacity(0.65);
         }
+        let close = (bare && labelled).then(|| label_close_button(&caption, scale));
         let result = Self {
             id: data.id,
             bare,
             label: labelled,
+            close,
             layer: card,
             image,
             caption,
@@ -437,26 +448,27 @@ impl WindowCard {
         self.image.setFrame(image);
         if self.bare {
             if self.label {
-                let (icon, pad) = (16.0, 6.0);
-                let text_x = pad + if self.icon.is_some() { icon + 5.0 } else { 0.0 };
-                let room = image.size.width - 2.0 * LABEL_INSET;
-                let width = (text_x + self.title.preferredFrameSize().width + 2.0 * pad).min(room);
-                self.caption.setFrame(rect(
-                    image.origin.x + LABEL_INSET,
-                    image.max().y - LABEL_INSET - LABEL_ROW,
-                    width.max(1.0),
-                    LABEL_ROW,
-                ));
-                self.caption.setHidden(image.size.height < LABEL_ROW + 2.0 * LABEL_INSET);
+                // A row of fixed height across the preview's top.
+                let (icon, pad) = (16.0, 8.0);
+                let close = if self.close.is_some() { LABEL_CLOSE + 6.0 } else { 0.0 };
+                let text_x = pad + if self.icon.is_some() { icon + 6.0 } else { 0.0 };
+                let width = image.size.width;
+                self.caption.setFrame(rect(image.origin.x, image.origin.y, width, LABEL_ROW));
+                self.caption
+                    .setHidden(image.size.height < 2.0 * LABEL_ROW || width < 4.0 * LABEL_ROW);
                 if let Some(layer) = &self.icon {
                     layer.setFrame(rect(pad, (LABEL_ROW - icon) / 2.0, icon, icon));
                 }
                 self.title.setFrame(rect(
                     text_x,
                     (LABEL_ROW - 16.0) / 2.0,
-                    (width - text_x - pad).max(1.0),
+                    (width - text_x - pad - close).max(1.0),
                     16.0,
                 ));
+                if let Some(layer) = &self.close {
+                    let at = (LABEL_ROW - LABEL_CLOSE) / 2.0;
+                    layer.setFrame(rect(width - at - LABEL_CLOSE, at, LABEL_CLOSE, LABEL_CLOSE));
+                }
             }
             return;
         }
@@ -1667,7 +1679,7 @@ impl OverviewSession {
     }
 
     pub(crate) fn input(&mut self, input: Input) -> Option<OverviewAction> {
-        if let Some(action) = self.grid_bar_input(&input) {
+        if let Some(action) = self.grid_input(&input) {
             return action;
         }
         // Most sampled motion stays in the same card: no layer writes or compositor flush.
