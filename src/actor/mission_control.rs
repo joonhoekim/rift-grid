@@ -116,6 +116,16 @@ pub fn channel_if_enabled(settings: &MissionControlSettings) -> Option<(Sender, 
     settings.enabled.then(actor::channel)
 }
 
+/// Keep one run-loop timer across input events; dropping it invalidates the native timer.
+fn update_live_timer(timer: &mut Option<Timer>, interval_ms: Option<f64>) {
+    match interval_ms {
+        Some(ms) => {
+            timer.get_or_insert_with(|| Timer::sleep(std::time::Duration::from_secs_f64(ms / 1000.0)));
+        }
+        None => *timer = None,
+    }
+}
+
 fn update_edge_timer(timer: &mut Option<Timer>, active: bool) {
     if active {
         timer.get_or_insert_with(|| Timer::sleep(std::time::Duration::from_millis(150)));
@@ -163,6 +173,7 @@ impl MissionControlActor {
 
     pub async fn run(mut self) {
         let mut edge_timer = None;
+        let mut live_timer = None;
         let mut pending_event = None;
         // While the overview is open, look for changes no broadcast reported (windows
         // in other grids) this often.
@@ -170,12 +181,22 @@ impl MissionControlActor {
         loop {
             let edge_active = self.session.as_ref().is_some_and(OverviewSession::edge_active);
             update_edge_timer(&mut edge_timer, edge_active);
+            // The cards' previews are live; the zoomed overview's are captured again.
+            let live = self.grid_zoom_live() && self.settings.live_preview_interval_ms > 0.0;
+            update_live_timer(
+                &mut live_timer,
+                live.then_some(self.settings.live_preview_interval_ms.max(50.0)),
+            );
             if self.session.is_some() {
                 watch_timer.get_or_insert_with(|| Timer::sleep(WATCH_INTERVAL));
             } else {
                 watch_timer = None;
             }
             tokio::select! {
+                _ = async { if let Some(timer) = &mut live_timer { timer.await } else { std::future::pending().await } } => {
+                    live_timer = None;
+                    self.grid_zoom_recapture();
+                }
                 _ = async { if let Some(timer) = &mut watch_timer { timer.await } else { std::future::pending().await } } => {
                     watch_timer = None;
                     if let Some(session) = &mut self.session { session.sync_focus(&self.reactor); }

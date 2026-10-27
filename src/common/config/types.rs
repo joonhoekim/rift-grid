@@ -1136,12 +1136,12 @@ pub struct MissionControlSettings {
     #[setting(label = "Fade duration", unit = "ms", enabled_by = "enabled")]
     pub fade_duration_ms: f64,
     #[serde(default)]
-    /// Capture visible window previews again at this interval while Overview is
-    /// open, in milliseconds. 0 captures each window once.
+    /// Capture the zoomed grid Overview's windows again at this interval while
+    /// it is open, in milliseconds. 0 captures each window once. The cards'
+    /// previews are live without it.
     #[setting(
         label = "Live preview interval",
         unit = "ms",
-        enabled_by = "window_previews",
         aliases = "refresh recapture live previews"
     )]
     pub live_preview_interval_ms: f64,

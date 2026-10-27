@@ -16,7 +16,7 @@ pub(super) fn overview(ui: Ui, model: &Rc<Model>) -> Page {
     f.tooltips = true;
     let visibility = f.fields(
         Section::new(&ui, "Workspaces"),
-        &["enabled", "show_empty_workspaces", "window_previews", "live_preview_interval_ms"],
+        &["enabled", "show_empty_workspaces", "window_previews"],
         |s| &s.settings.ui.mission_control,
         |s| &mut s.settings.ui.mission_control,
     );
@@ -53,7 +53,15 @@ pub(super) fn overview(ui: Ui, model: &Rc<Model>) -> Page {
     });
     let grid = f.fields(
         Section::new(&ui, "Grid").description("When workspaces form a grid."),
-        &["grid_style", "grid_fit", "grid_zoom", "grid_follow", "grid_gap", "grid_labels"],
+        &[
+            "grid_style",
+            "grid_fit",
+            "grid_zoom",
+            "grid_follow",
+            "grid_gap",
+            "grid_labels",
+            "live_preview_interval_ms",
+        ],
         |s| &s.settings.ui.mission_control,
         |s| &mut s.settings.ui.mission_control,
     );

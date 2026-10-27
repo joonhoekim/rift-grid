@@ -47,6 +47,8 @@ struct Open {
     display: String,
     /// The display's frame, which window frames are taken relative to.
     frame: CGRect,
+    /// The scale windows are captured at.
+    capture: f64,
     /// Windows newer than the list of capturable ones, asked for when it comes.
     unknown: Vec<(u32, CGSize)>,
     /// Coming in to a cell; the overlay goes when that ends.
@@ -393,6 +395,7 @@ impl MissionControlActor {
             overview,
             display: display.info.display_uuid.clone(),
             frame,
+            capture: crate::ui::grid_motion::capture_scale(scale),
             unknown: Vec::new(),
             entering: false,
             bar: None,
@@ -414,13 +417,30 @@ impl MissionControlActor {
         let send = move |note| tx.send(Event::GridZoom(note));
         let generation = open.overview.generation();
         for (id, size) in windows {
-            if !zoom.shareable.capture_window(id, size, 1.0, generation, send.clone()) {
+            if !zoom.shareable.capture_window(id, size, open.capture, generation, send.clone())
+                && !open.unknown.iter().any(|&(unknown, _)| unknown == id)
+            {
                 open.unknown.push((id, size));
             }
         }
         if !open.unknown.is_empty() || zoom.shareable.wants(CONTENT_AGE) {
             zoom.shareable.refresh(send);
         }
+    }
+
+    /// Whether the zoomed overview is open and not on its way into a cell.
+    pub(super) fn grid_zoom_live(&self) -> bool {
+        self.grid_zoom.open.as_ref().is_some_and(|open| !open.entering)
+    }
+
+    /// Capture every window shown again; each keeps its image until the new one
+    /// arrives.
+    pub(super) fn grid_zoom_recapture(&mut self) {
+        let Some(open) = self.grid_zoom.open.as_ref().filter(|open| !open.entering) else {
+            return;
+        };
+        let windows = open.overview.windows();
+        self.grid_zoom_capture(windows);
     }
 
     /// Show the grid as it is now: the cell and window focused, windows that
@@ -516,7 +536,7 @@ impl MissionControlActor {
                     let send = move |note| tx.send(Event::GridZoom(note));
                     let generation = open.overview.generation();
                     for (id, size) in std::mem::take(&mut open.unknown) {
-                        zoom.shareable.capture_window(id, size, 1.0, generation, send.clone());
+                        zoom.shareable.capture_window(id, size, open.capture, generation, send.clone());
                     }
                 }
             }

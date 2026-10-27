@@ -134,7 +134,9 @@ Tab move the focus as in the cards, and the overview follows it, along with
 windows that open or close and grids switched to. Pointing at a cell selects it;
 Return, a click or the overview key in the last stage goes to it. It moves with
 the slide's `[settings.ui.grid_motion]` duration and easing, and needs Screen
-Recording access; without it, or outside a grid, the cards show instead.
+Recording access; without it, or outside a grid, the cards show instead. While
+it is open, its windows are captured again every `live_preview_interval_ms`
+(0 captures each once); the cards' previews are live without it.
 `"cards"` (default) is the overview above.
 
 The zoomed overview has a row of grid buttons at the top, a group per display
@@ -175,6 +177,9 @@ open.
 - `hud`: a small map of the grid, its number beside it, for `hud_ms` (700)
   after the last move; the lit cell glides from the cell left to the cell
   arrived at.
+- `full_resolution`: capture windows for the slide and the zoomed overview at
+  the display's resolution rather than one pixel a point (default). Twice as
+  sharp on a Retina display, for four times the pixels to capture and hold.
 
 A move made while a slide is still playing carries the slide on from where it
 has got to.

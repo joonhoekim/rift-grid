@@ -128,6 +128,8 @@ pub fn run(ui: Ui) {
             let before = settings.model().source.borrow().as_ref().clone();
             let mut enabled = before.clone();
             enabled.settings.ui.mission_control.enabled = true;
+            // The fade's duration is the page's first text field.
+            enabled.settings.ui.mission_control.fade_enabled = true;
             settings.router.model.replace_source(enabled);
             let page = grid_pages::overview(ui, &settings.router.model);
             page.synchronize(&settings.router.model);

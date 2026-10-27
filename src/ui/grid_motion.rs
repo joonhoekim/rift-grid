@@ -83,6 +83,13 @@ pub fn motion() -> Motion {
     Motion::new(&settings)
 }
 
+/// The scale to capture windows at on a display of `backing` scale: one point
+/// a pixel, or the display's own with `full_resolution`.
+pub fn capture_scale(backing: f64) -> f64 {
+    let full = MOTION.lock().ok().is_some_and(|m| m.as_ref().is_some_and(|m| m.full_resolution));
+    if full { backing.max(1.0) } else { 1.0 }
+}
+
 static OVERVIEW_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Note whether the Overview is open: it shows moves itself, and a slide would

@@ -65,6 +65,15 @@ pub struct GridMotionSettings {
     /// How long the map stays after the last move.
     #[setting(label = "Map time", unit = "ms", enabled_by = "hud")]
     pub hud_ms: f64,
+    #[serde(default)]
+    /// Capture windows for slides and the zoomed Overview at the display's full
+    /// resolution, twice as sharp on a Retina display, for four times the pixels
+    /// to capture and keep.
+    #[setting(
+        label = "Full-resolution captures",
+        aliases = "quality sharp retina resolution blurry soft previews capture"
+    )]
+    pub full_resolution: bool,
 }
 
 fn default_duration_ms() -> f64 { 240.0 }
@@ -84,6 +93,7 @@ impl Default for GridMotionSettings {
             zoom_in_time: default_zoom_in_time(),
             hud: true,
             hud_ms: default_hud_ms(),
+            full_resolution: false,
         }
     }
 }

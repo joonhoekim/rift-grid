@@ -51,6 +51,7 @@ pub(super) struct GridMotionManager {
 struct Recapture {
     generation: u64,
     windows: Vec<(u32, CGSize)>,
+    capture: f64,
     end: std::time::Instant,
 }
 
@@ -69,6 +70,8 @@ struct Pending {
     /// The usable part of the display, which the overlay covers.
     screen: CGRect,
     display: u32,
+    /// The scale windows are captured at.
+    capture: f64,
     carried: Vec<(WindowId, CGRect)>,
     images: HashMap<u32, Option<Image>>,
     /// Each window's size when its capture was asked for.
@@ -318,6 +321,7 @@ impl Reactor {
         let started = std::time::Instant::now();
         let display = screen.id.as_u32();
         let scale = screen.backing_scale.max(1.0);
+        let capture = crate::ui::grid_motion::capture_scale(scale);
         let bounds = CGDisplayBounds(display);
         let visible = screen.frame;
         let local = CGRect::new(
@@ -342,8 +346,9 @@ impl Reactor {
             let Some(id) = window.info.sys_id.map(|id| id.as_u32()) else { continue };
             let size = window.frame_monotonic.size;
             sizes.insert(id, size);
-            // At one point a pixel: they are seen only in motion, and it is faster.
-            if manager.shareable.capture_window(id, size, 1.0, generation, send.clone()) {
+            // At one point a pixel unless asked for more: they are seen only in
+            // motion, and it is faster.
+            if manager.shareable.capture_window(id, size, capture, generation, send.clone()) {
                 waiting += 1;
             } else {
                 images.insert(id, None);
@@ -369,7 +374,7 @@ impl Reactor {
                 .iter()
                 .filter_map(|&(wid, before)| {
                     let id = self.state.windows.window(wid)?.info.sys_id?.as_u32();
-                    let rx = manager.shareable.capture_window_soon(id, before.size, 1.0)?;
+                    let rx = manager.shareable.capture_window_soon(id, before.size, capture)?;
                     Some((id, before, rx))
                 })
                 .collect();
@@ -429,6 +434,7 @@ impl Reactor {
             workspace: to,
             screen: visible,
             display,
+            capture,
             carried,
             images,
             sizes,
@@ -531,6 +537,7 @@ impl Reactor {
         self.grid_motion_manager.recapture = (!windows.is_empty()).then(|| Recapture {
             generation,
             windows,
+            capture: pending.capture,
             end: std::time::Instant::now() + Duration::from_secs_f64(duration),
         });
         if self.grid_motion_manager.recapture.is_some() {
@@ -607,7 +614,7 @@ impl Reactor {
                 };
                 for &(window, size) in &recapture.windows {
                     let send = send.clone();
-                    manager.shareable.window_capture(window, size, 1.0, move |image| {
+                    manager.shareable.window_capture(window, size, recapture.capture, move |image| {
                         send(Note::Carried {
                             generation,
                             window,
