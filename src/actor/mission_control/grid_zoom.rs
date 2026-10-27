@@ -97,7 +97,7 @@ impl MissionControlActor {
                 return Some(event);
             }
             Event::Changed | Event::RefreshCurrentWorkspace if open => self.grid_zoom_sync(),
-            Event::PumpPreviews | Event::StartPreviews(_) if open => {}
+            Event::PumpPreviews if open => {}
             event => return Some(event),
         }
         None
@@ -453,7 +453,7 @@ impl MissionControlActor {
             (true, Some(false), _) => self.grid_zoom_step_back(),
             (true, Some(true), _) => {}
             (true, None, Some(session)) => {
-                session.step_back(self.cache.as_ref());
+                session.step_back();
             }
             (true, None, None) => return self.grid_zoom(Event::ShowAll),
             (false, Some(_), _) | (false, None, Some(_)) => {

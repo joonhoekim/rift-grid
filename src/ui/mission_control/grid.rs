@@ -2,6 +2,8 @@
 //! (the active cell and its neighbours, then the whole grid), following the real
 //! focus.
 
+use cgs::with_disabled_actions;
+
 use super::*;
 use crate::common::config::GridFollow;
 
@@ -535,7 +537,7 @@ impl OverviewSession {
     /// Follow focus changes without rebuilding the cards: re-read which cell is
     /// active and which window the system has focused, and move the outlines.
     /// Anything more than that waits for a full refresh.
-    pub(crate) fn sync_focus(&mut self, reactor: &ReactorHandle, cache: Option<&PreviewCache>) {
+    pub(crate) fn sync_focus(&mut self, reactor: &ReactorHandle) {
         if self.drag.is_some() {
             return;
         }
@@ -552,7 +554,7 @@ impl OverviewSession {
             });
         if !same_cards {
             // Windows came or went, or the grid changed: rebuild.
-            self.reload(reactor, cache, None);
+            self.reload(reactor, None);
             return;
         }
         d.set_grid_buttons(buttons);
@@ -570,7 +572,7 @@ impl OverviewSession {
             && d.workspaces.iter().position(|ws| ws.is_active) != active_was;
         if follow {
             d.animate = true;
-            d.rebuild(cache);
+            d.rebuild();
         }
         let Some(selection) = grid_focus_selection(&d.workspaces, rift_moved) else {
             return;
@@ -580,15 +582,12 @@ impl OverviewSession {
             self.selection = selection;
             self.highlight(Some(old));
         }
-        if follow {
-            self.sync_images(cache);
-            self.request_previews(cache);
-        }
+        self.sync_metal();
     }
 
     /// Step a grid overview back from the active cell to the whole grid. False when
     /// there is no further stage, and opening Overview again closes it.
-    pub(crate) fn step_back(&mut self, cache: Option<&PreviewCache>) -> bool {
+    pub(crate) fn step_back(&mut self) -> bool {
         let grids = self.displays.iter().filter(|d| d.grid().is_some());
         if grids.clone().count() == 0 || grids.into_iter().all(|d| d.look.stage == GridStage::Whole) {
             return false;
@@ -597,18 +596,17 @@ impl OverviewSession {
         for d in self.displays.iter_mut().filter(|d| d.grid().is_some()) {
             d.look.stage = GridStage::Whole;
             d.animate = true;
-            d.rebuild(cache);
+            d.rebuild();
         }
         self.highlight(None);
-        self.sync_images(cache);
-        self.request_previews(cache);
+        self.sync_metal();
         true
     }
 
     /// Esc: step a grid overview in from the whole grid to the active cell. False
     /// when it is already there, or the whole grid is its only stage, and Esc
     /// closes it.
-    pub(crate) fn step_in(&mut self, cache: Option<&PreviewCache>) -> bool {
+    pub(crate) fn step_in(&mut self) -> bool {
         let whole = |d: &DisplayOverview| {
             d.grid().is_some() && d.look.stage == GridStage::Whole && !d.look.fit
         };
@@ -620,25 +618,53 @@ impl OverviewSession {
             d.look.stage = GridStage::Cell;
             d.camera.set(None);
             d.animate = true;
-            d.rebuild(cache);
+            d.rebuild();
         }
         self.highlight(None);
-        self.sync_images(cache);
-        self.request_previews(cache);
+        self.sync_metal();
         true
     }
 
-    /// Capture the visible windows again. Cards keep their current image until
-    /// the new one arrives.
-    pub(crate) fn recapture(&mut self, cache: Option<&PreviewCache>) {
-        let Some(previews) = &mut self.previews else {
-            return;
-        };
-        if previews.failed {
-            return;
-        }
-        previews.schedule.expire();
-        self.request_previews(cache);
+    /// The window a grid overview outlines as focused on display `display`.
+    pub(super) fn grid_focused(&self, display: usize) -> Option<WindowId> {
+        (display == self.active && self.displays.get(display)?.grid().is_some())
+            .then_some(self.selection.window)
+            .flatten()
+    }
+}
+
+/// A preview's border: thick for the focused window of a grid, thin while
+/// hovered.
+pub(super) fn preview_border(
+    id: WindowId,
+    focused: Option<WindowId>,
+    hovered: Option<WindowId>,
+) -> f64 {
+    if Some(id) == focused {
+        2.5
+    } else if Some(id) == hovered {
+        1.5
+    } else {
+        0.0
+    }
+}
+
+/// Keep a workspace canvas the size of its workspace: a grid cell grows and
+/// shrinks between the overview's stages.
+pub(super) fn fit_canvas(
+    canvas: &mut Option<cgs::PreviewCompositor>,
+    sizes: &mut HashMap<usize, CGSize>,
+    index: usize,
+    size: CGSize,
+    scale: f64,
+) {
+    let resized = sizes.insert(index, size).is_some_and(|was| was != size);
+    if resized
+        && let Some(metal) = canvas
+        && let Err(error) = metal.resize(rect(0.0, 0.0, size.width, size.height), scale)
+    {
+        tracing::warn!(?error, "Workspace preview canvas resize failed");
+        *canvas = None;
     }
 }
 
@@ -674,16 +700,6 @@ mod tests {
             layout_focus: None,
             display_uuid: None,
             is_focused: false,
-        }
-    }
-
-    fn request(id: u32) -> PreviewRequest {
-        PreviewRequest {
-            id: WindowId::new(123, id),
-            sys_id: WindowServerId::new(id),
-            bundle: Some("org.example".into()),
-            width: 200,
-            height: 100,
         }
     }
 
@@ -860,25 +876,6 @@ mod tests {
         // A cell larger than the view with its margins is centered.
         let big = GridLook { zoom: 0.99, ..look };
         assert_eq!(follow_camera(Some((1.0, 1.0)), (1, 2), display, display, big), (1.0, 2.0));
-    }
-
-    #[test]
-    fn expiring_the_schedule_recaptures_only_settled_windows() {
-        let mut schedule = PreviewSchedule::default();
-        for id in 1..=3 {
-            schedule.enqueue(request(id));
-        }
-        let first = schedule.next().unwrap().id;
-        schedule.complete(first);
-        let second = schedule.next().unwrap().id;
-        // First is captured, second is in flight, third is still queued.
-        schedule.expire();
-        assert!(schedule.needs(first));
-        assert!(!schedule.needs(second));
-        assert!(!schedule.needs(WindowId::new(123, 3)));
-        schedule.enqueue(request(1));
-        schedule.enqueue(request(3));
-        assert_eq!(schedule.pending.iter().map(|p| p.id.idx.get()).collect::<Vec<_>>(), [3, 1]);
     }
 
     #[test]

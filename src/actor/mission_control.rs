@@ -1,18 +1,18 @@
 use objc2_core_foundation::CGPoint;
-use objc2_core_graphics::CGEventFlags;
+use objc2_core_graphics::{
+    CGEventFlags, CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess,
+};
 use objc2_foundation::MainThreadMarker;
 
 use crate::actor::{self, reactor};
 use crate::common::config::MissionControlSettings;
-use crate::sys::dispatch::DispatchExt;
 use crate::sys::timer::Timer;
-use crate::ui::mission_control::{OverviewAction, OverviewSession, PreviewCache};
+use crate::ui::mission_control::{OverviewAction, OverviewSession, PreviewRenderers};
 
 mod grid_zoom;
 
 #[derive(Debug)]
 pub enum Event {
-    StartPreviews(u64),
     PumpPreviews,
     ShowAll,
     Dismiss,
@@ -116,16 +116,6 @@ pub fn channel_if_enabled(settings: &MissionControlSettings) -> Option<(Sender, 
     settings.enabled.then(actor::channel)
 }
 
-/// Keep one run-loop timer across input events; dropping it invalidates the native timer.
-fn update_live_timer(timer: &mut Option<Timer>, interval_ms: Option<f64>) {
-    match interval_ms {
-        Some(ms) => {
-            timer.get_or_insert_with(|| Timer::sleep(std::time::Duration::from_secs_f64(ms / 1000.0)));
-        }
-        None => *timer = None,
-    }
-}
-
 fn update_edge_timer(timer: &mut Option<Timer>, active: bool) {
     if active {
         timer.get_or_insert_with(|| Timer::sleep(std::time::Duration::from_millis(150)));
@@ -138,10 +128,9 @@ pub struct MissionControlActor {
     settings: MissionControlSettings,
     rx: Receiver,
     tx: Sender,
-    cache: Option<PreviewCache>,
+    cache: Option<PreviewRenderers>,
     reactor: reactor::ReactorHandle,
     session: Option<OverviewSession>,
-    generation: u64,
     mtm: MainThreadMarker,
     input_tx: super::input::Sender,
     grid_zoom: grid_zoom::GridZoom,
@@ -156,6 +145,9 @@ impl MissionControlActor {
         mtm: MainThreadMarker,
         input_tx: super::input::Sender,
     ) -> Self {
+        if settings.enabled && settings.window_previews && CGPreflightScreenCaptureAccess() {
+            let _ = cgs::PreviewCompositor::prepare();
+        }
         Self {
             settings,
             rx,
@@ -163,7 +155,6 @@ impl MissionControlActor {
             cache: None,
             reactor,
             session: None,
-            generation: 0,
             mtm,
             input_tx,
             grid_zoom: Default::default(),
@@ -172,7 +163,6 @@ impl MissionControlActor {
 
     pub async fn run(mut self) {
         let mut edge_timer = None;
-        let mut live_timer = None;
         let mut pending_event = None;
         // While the overview is open, look for changes no broadcast reported (windows
         // in other grids) this often.
@@ -180,32 +170,19 @@ impl MissionControlActor {
         loop {
             let edge_active = self.session.as_ref().is_some_and(OverviewSession::edge_active);
             update_edge_timer(&mut edge_timer, edge_active);
-            let live = self.session.is_some()
-                && self.settings.window_previews
-                && self.settings.live_preview_interval_ms > 0.0;
-            update_live_timer(
-                &mut live_timer,
-                live.then_some(self.settings.live_preview_interval_ms.max(50.0)),
-            );
             if self.session.is_some() {
                 watch_timer.get_or_insert_with(|| Timer::sleep(WATCH_INTERVAL));
             } else {
                 watch_timer = None;
             }
             tokio::select! {
-                _ = async { if let Some(timer) = &mut live_timer { timer.await } else { std::future::pending().await } } => {
-                    live_timer = None;
-                    if let Some(session) = &mut self.session {
-                        session.recapture(self.cache.as_ref());
-                    }
-                }
                 _ = async { if let Some(timer) = &mut watch_timer { timer.await } else { std::future::pending().await } } => {
                     watch_timer = None;
-                    if let Some(session) = &mut self.session { session.sync_focus(&self.reactor, self.cache.as_ref()); }
+                    if let Some(session) = &mut self.session { session.sync_focus(&self.reactor); }
                 }
                 _ = async { if let Some(timer) = &mut edge_timer { timer.await } else { std::future::pending().await } } => {
                     edge_timer = None;
-                    if let Some(session) = &mut self.session { session.edge_tick(self.cache.as_ref()); }
+                    if let Some(session) = &mut self.session { session.edge_tick(); }
                 }
                 event = async {
                     if pending_event.is_some() { pending_event.take() } else { self.rx.recv().await }
@@ -224,35 +201,15 @@ impl MissionControlActor {
                     self.handle(event);
                     if !self.settings.enabled { break; }
                 }
-                result = async {
-                    if let Some(previews) = self.session.as_mut().and_then(|s| s.previews.as_mut()) {
-                        previews.rx.recv().await
-                    } else { std::future::pending().await }
-                } => {
-                    if let Some((_, result)) = result {
-                        let current = result.window_id().and_then(|id| self.reactor.query_window_info(id));
-                        if let Some(session) = &mut self.session { session.preview_ready(result, current.as_ref(), &mut self.cache); }
-                    }
-                }
             }
         }
         self.close();
     }
 
     fn close(&mut self) {
-        if let Some(session) = self.session.take() {
+        if let Some(mut session) = self.session.take() {
+            session.retain_previews(&mut self.cache);
             drop(session);
-            if let Some(cache) = &mut self.cache {
-                cache.close();
-            }
-            let (cache_preview_count, cache_preview_bytes) =
-                self.cache.as_ref().map(PreviewCache::stats).unwrap_or_default();
-            tracing::debug!(
-                cache_preview_count,
-                cache_preview_bytes,
-                outstanding_captures = crate::ui::mission_control::outstanding_preview_captures(),
-                "Overview closed"
-            );
         }
         self.input_tx.send(super::input::Request::SetMissionControlActive(false));
         crate::ui::grid_motion::set_overview_open(false);
@@ -262,40 +219,35 @@ impl MissionControlActor {
         let Some(event) = self.grid_zoom(event) else { return };
         match event {
             Event::PumpPreviews => {
-                if let Some(previews) = self.session.as_mut().and_then(|s| s.previews.as_mut()) {
-                    previews.pump(self.generation);
-                }
-            }
-            Event::StartPreviews(generation) => {
-                if let Some(session) = &mut self.session {
-                    session.start_previews(
-                        generation,
-                        self.settings.window_previews,
-                        self.tx.clone(),
-                        self.cache.as_ref(),
-                    );
+                if let Some(session) = self.session.as_mut() {
+                    session.pump_previews();
                 }
             }
             Event::ShowAll => {
                 // Opening it again steps a grid overview back to the whole grid, then closes.
                 if let Some(session) = &mut self.session {
-                    if !session.step_back(self.cache.as_ref()) {
+                    if !session.step_back() {
                         self.close();
                     }
                 } else if self.settings.enabled {
-                    self.generation = self.generation.wrapping_add(1);
+                    if self.settings.window_previews && !CGPreflightScreenCaptureAccess() {
+                        CGRequestScreenCaptureAccess();
+                        return;
+                    }
+                    if self.settings.window_previews {
+                        let _ = cgs::PreviewCompositor::prepare();
+                    }
                     self.session = OverviewSession::new(
                         &self.reactor,
                         self.mtm,
                         &self.settings,
-                        self.generation,
                         &mut self.cache,
                     );
-                    if self.session.is_some() && self.settings.window_previews {
-                        dispatchr::queue::main().after_f_s(
-                            dispatchr::time::Time::NOW,
-                            (self.tx.clone(), self.generation),
-                            |(tx, generation)| tx.send(Event::StartPreviews(generation)),
+                    if let Some(session) = &mut self.session {
+                        session.start_previews(
+                            self.settings.window_previews,
+                            self.tx.clone(),
+                            self.cache.as_mut(),
                         );
                     }
                     self.input_tx.send(super::input::Request::SetMissionControlActive(
@@ -308,12 +260,12 @@ impl MissionControlActor {
             Event::GridZoom(_) | Event::Step { .. } => {}
             Event::Changed => {
                 if let Some(session) = &mut self.session {
-                    session.sync_focus(&self.reactor, self.cache.as_ref());
+                    session.sync_focus(&self.reactor);
                 }
             }
             Event::RefreshCurrentWorkspace => {
                 if let Some(session) = &mut self.session {
-                    session.refresh(&self.reactor, self.cache.as_ref(), None);
+                    session.refresh(&self.reactor, None);
                 }
                 if self.session.as_ref().is_some_and(OverviewSession::is_empty) {
                     self.close();
@@ -328,26 +280,19 @@ impl MissionControlActor {
             }
             Event::Input(Input::Dismiss) => {
                 // Esc steps out a stage at a time.
-                if !self.session.as_mut().is_some_and(|s| s.step_in(self.cache.as_ref())) {
+                if !self.session.as_mut().is_some_and(|s| s.step_in()) {
                     self.close();
                 }
             }
             Event::Input(input) => {
-                let action = self
-                    .session
-                    .as_mut()
-                    .and_then(|session| session.input(input, self.cache.as_ref()));
+                let action = self.session.as_mut().and_then(|session| session.input(input));
                 if let Some(intent) = self.session.as_mut().and_then(OverviewSession::take_drop) {
                     let window = intent.window;
                     let (reply, rx) = std::sync::mpsc::sync_channel(1);
                     self.reactor.send(reactor::Event::OverviewDrop { intent, reply });
                     let changed = rx.recv().unwrap_or(false);
                     if let Some(session) = &mut self.session {
-                        session.refresh(
-                            &self.reactor,
-                            self.cache.as_ref(),
-                            changed.then_some(window),
-                        );
+                        session.refresh(&self.reactor, changed.then_some(window));
                     }
                 }
                 if matches!(action, Some(OverviewAction::Dismiss)) {
@@ -356,7 +301,7 @@ impl MissionControlActor {
                     // Queries share the reactor's queue, so the refresh sees the result.
                     self.reactor.send(reactor::Event::Command(reactor::Command::Layout(command)));
                     if let Some(session) = &mut self.session {
-                        session.refresh(&self.reactor, self.cache.as_ref(), None);
+                        session.refresh(&self.reactor, None);
                     }
                 } else if let Some(OverviewAction::Activate {
                     display,

@@ -390,6 +390,7 @@ struct WorkspaceRenderData {
     fill_alpha: f64,
     windows: Vec<CGRect>,
     label_line: Option<CachedTextLine>,
+    fullscreen_brackets: bool,
 }
 
 struct WorkspaceRenderInput<'a> {
@@ -397,6 +398,7 @@ struct WorkspaceRenderInput<'a> {
     space: SpaceId,
     workspace: &'a Workspace,
     label: Cow<'a, str>,
+    fullscreen_brackets: bool,
     show_windows: bool,
     grid_cell: Option<(usize, usize)>,
     grid: Option<usize>,
@@ -409,6 +411,7 @@ fn render_inputs<'a>(
     let show_windows = settings.display_style == WorkspaceDisplayStyle::Layout;
     displays
         .iter()
+        .filter(|display| !settings.current_display_only || display.is_active_context)
         .flat_map(|display| {
             // A grid shows every cell in place, whatever the display mode and style.
             let grid = !display.workspaces.is_empty()
@@ -441,6 +444,10 @@ fn render_inputs<'a>(
                             label
                         }
                     },
+                    fullscreen_brackets: show_windows
+                        && !grid
+                        && settings.show_fullscreen_indicator
+                        && workspace.has_fullscreen,
                     show_windows: show_windows && !grid,
                     grid_cell: workspace.grid_cell.filter(|_| grid),
                     grid: workspace.grid.filter(|_| grid),
@@ -460,6 +467,7 @@ struct WorkspaceRenderKey {
     space: SpaceId,
     workspace_id: String,
     label: String,
+    fullscreen_brackets: bool,
     show_windows: bool,
     grid_cell: Option<(usize, usize)>,
     grid: Option<usize>,
@@ -478,6 +486,7 @@ impl MenuIconRenderKey {
                 space: input.space,
                 workspace_id: input.workspace.id.clone(),
                 label: input.label.to_string(),
+                fullscreen_brackets: input.fullscreen_brackets,
                 show_windows: input.show_windows,
                 grid_cell: input.grid_cell,
                 grid: input.grid,
@@ -518,6 +527,7 @@ impl MenuIconRenderKey {
                     && key.space == input.space
                     && key.workspace_id == input.workspace.id
                     && key.label == input.label
+                    && key.fullscreen_brackets == input.fullscreen_brackets
                     && key.show_windows == input.show_windows
                     && key.grid_cell == input.grid_cell
                     && key.grid == input.grid
@@ -1403,6 +1413,27 @@ mod layout_library_tests {
     }
 
     #[test]
+    fn current_display_only_follows_the_active_menu_bar_display() {
+        let mut displays = displays();
+        for display_style in [WorkspaceDisplayStyle::Label, WorkspaceDisplayStyle::Layout] {
+            let settings = MenuBarSettings {
+                current_display_only: true,
+                show_empty: true,
+                display_style,
+                ..Default::default()
+            };
+            for active in 0..2 {
+                for (index, display) in displays.iter_mut().enumerate() {
+                    display.is_active_context = index == active;
+                }
+                let inputs = render_inputs(&displays, &settings);
+                assert_eq!(inputs.len(), 2);
+                assert!(inputs.iter().all(|input| input.space == SpaceId::new(active as u64 + 1)));
+            }
+        }
+    }
+
+    #[test]
     fn grouped_geometry_highlights_both_displays_without_outer_gaps() {
         let displays = displays();
         let attrs = build_text_attrs(&NSFont::systemFontOfSize_weight(FONT_SIZE, unsafe {
@@ -1497,7 +1528,7 @@ mod layout_library_tests {
     }
 
     #[test]
-    fn fullscreen_indicator_brackets_labels_only_when_enabled() {
+    fn fullscreen_indicator_brackets_labels_and_layouts_only_when_enabled() {
         let mut displays = displays();
         displays[0].workspaces[1].name = "Development".into();
         displays[0].workspaces[1].has_fullscreen = true;
@@ -1528,6 +1559,21 @@ mod layout_library_tests {
         displays[0].workspaces[1].has_fullscreen = true;
         settings.display_style = WorkspaceDisplayStyle::Layout;
         assert!(labels(&displays, &settings).iter().all(String::is_empty));
+        let inputs = render_inputs(&displays, &settings);
+        let attrs = build_text_attrs(&NSFont::systemFontOfSize(12.0));
+        let layout = build_layout(&inputs, &attrs);
+        assert!(layout.workspaces[1].fullscreen_brackets);
+        assert_eq!(
+            layout.workspaces.iter().filter(|w| w.fullscreen_brackets).count(),
+            1
+        );
+        let key = MenuIconRenderKey::from_inputs(&inputs);
+        settings.show_fullscreen_indicator = false;
+        let inputs = render_inputs(&displays, &settings);
+        assert!(!key.matches_inputs(&inputs));
+        let plain = build_layout(&inputs, &attrs);
+        assert!(plain.workspaces.iter().all(|w| !w.fullscreen_brackets));
+        assert_eq!(layout.size.width, plain.size.width + 8.0);
     }
 
     #[test]
@@ -1566,6 +1612,7 @@ mod layout_library_tests {
             space: SpaceId::new(1),
             workspace: &workspace,
             label: Cow::Borrowed("1"),
+            fullscreen_brackets: false,
             show_windows: false,
             grid_cell: None,
             grid: None,
@@ -1576,6 +1623,7 @@ mod layout_library_tests {
             space: SpaceId::new(1),
             workspace: &workspace,
             label: Cow::Borrowed("1"),
+            fullscreen_brackets: false,
             show_windows: false,
             grid_cell: None,
             grid: None,
@@ -1587,6 +1635,7 @@ mod layout_library_tests {
             space: SpaceId::new(1),
             workspace: &workspace,
             label: Cow::Borrowed("1"),
+            fullscreen_brackets: false,
             show_windows: false,
             grid_cell: None,
             grid: None,
@@ -1707,12 +1756,31 @@ impl MenuBarPreview {
         let view = MenuIconView::build(ui.mtm(), false);
         Self {
             view,
-            displays: vec![DisplayWorkspaces {
-                display_uuid: "preview".into(),
-                space: SpaceId::new(1),
-                is_active_context: true,
-                workspaces,
-            }],
+            displays: vec![
+                DisplayWorkspaces {
+                    display_uuid: "preview".into(),
+                    space: SpaceId::new(1),
+                    is_active_context: true,
+                    workspaces,
+                },
+                DisplayWorkspaces {
+                    display_uuid: "preview-secondary".into(),
+                    space: SpaceId::new(2),
+                    is_active_context: false,
+                    workspaces: vec![Workspace {
+                        id: "mail".into(),
+                        index: 0,
+                        name: "Mail".into(),
+                        layout_mode: "bsp".into(),
+                        is_active: true,
+                        window_count: 1,
+                        windows: vec![frame(0.0, 0.0, 1200.0, 800.0)],
+                        has_fullscreen: false,
+                        grid_cell: None,
+                        grid: None,
+                    }],
+                },
+            ],
         }
     }
 
@@ -1793,12 +1861,15 @@ fn build_layout(
         } else {
             label_cell_width(label_line.as_ref().map_or(0.0, |line| line.width))
         };
+        if input.fullscreen_brackets {
+            width += 4.0;
+        }
         let bg_rect = if input.show_windows {
             workspace_cell_rect(width, cell_width, height)
         } else {
             CGRect::new(CGPoint::new(width, 0.0), CGSize::new(cell_width, height))
         };
-        width += cell_width;
+        width += cell_width + if input.fullscreen_brackets { 4.0 } else { 0.0 };
 
         let fill_alpha = if input.show_windows {
             if workspace.is_active {
@@ -1843,6 +1914,7 @@ fn build_layout(
             fill_alpha,
             windows,
             label_line,
+            fullscreen_brackets: input.fullscreen_brackets,
         });
     }
 
@@ -1986,6 +2058,24 @@ fn draw_menu_icon(cg: &CGContext, bounds: CGRect, layout: &MenuIconLayout, clear
                 window.size.height,
                 1.5,
             );
+            CGContext::stroke_path(Some(cg));
+            CGContext::restore_g_state(Some(cg));
+        }
+
+        if workspace.fullscreen_brackets {
+            CGContext::save_g_state(Some(cg));
+            foreground.setStroke();
+            CGContext::set_line_width(Some(cg), 1.0);
+            CGContext::begin_path(Some(cg));
+            for (x, inward) in [
+                (rect.origin.x - 3.0, 2.0),
+                (rect.origin.x + rect.size.width + 3.0, -2.0),
+            ] {
+                CGContext::move_to_point(Some(cg), x + inward, bg_y);
+                CGContext::add_line_to_point(Some(cg), x, bg_y);
+                CGContext::add_line_to_point(Some(cg), x, bg_y + rect.size.height);
+                CGContext::add_line_to_point(Some(cg), x + inward, bg_y + rect.size.height);
+            }
             CGContext::stroke_path(Some(cg));
             CGContext::restore_g_state(Some(cg));
         }

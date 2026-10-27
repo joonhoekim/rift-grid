@@ -1,6 +1,9 @@
 //! The settings app's pages for the grid fork: the grid Overview with how moves
 //! between cells are shown, and the window borders.
 
+use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
+
+use super::interface::screen_recording_status;
 use super::*;
 use crate::common::config::*;
 
@@ -17,6 +20,23 @@ pub(super) fn overview(ui: Ui, model: &Rc<Model>) -> Page {
         |s| &s.settings.ui.mission_control,
         |s| &mut s.settings.ui.mission_control,
     );
+    let permission = Rc::new(Caption::new(&ui, ""));
+    f.sync(&permission, |caption, _| {
+        caption.set_text(screen_recording_status())
+    });
+    let status = Rc::downgrade(&permission);
+    let check = Button::new(&ui, "Check Screen Recording Access…").on_click(move || {
+        if !CGPreflightScreenCaptureAccess() && !CGRequestScreenCaptureAccess() {
+            Application::open(
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+            );
+        }
+        if let Some(status) = status.upgrade() {
+            status.set_text(screen_recording_status());
+        }
+    });
+    let recording = Section::new(&ui, "Screen Recording")
+        .content(VStack::new(&ui).spacing(8.0).push(permission).push(check));
     let transitions = f.fields(
         Section::new(&ui, "Transitions"),
         &["fade_enabled"],
@@ -49,6 +69,7 @@ pub(super) fn overview(ui: Ui, model: &Rc<Model>) -> Page {
     f.finish(
         SettingsPage::new(&ui, "")
             .section(visibility)
+            .section(recording)
             .section(transitions.row(duration))
             .section(grid)
             .section(motion)
