@@ -1,0 +1,61 @@
+mod app;
+mod bridge;
+mod chips;
+mod collection;
+pub mod compositor;
+mod control;
+mod drawing;
+mod help;
+mod input;
+mod layout;
+mod menu;
+mod navigation;
+mod picker;
+mod preview;
+mod settings;
+mod tab_bar;
+mod text;
+mod view;
+mod window;
+pub use app::*;
+pub use chips::*;
+pub use collection::*;
+pub use compositor::*;
+pub use control::*;
+pub use drawing::*;
+pub use help::*;
+pub use input::*;
+pub use layout::*;
+pub use menu::*;
+pub use navigation::*;
+pub use objc2::MainThreadMarker;
+pub use objc2::rc::Weak;
+pub use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+pub use objc2_foundation::NSEdgeInsets as Insets;
+pub use picker::*;
+pub use preview::*;
+pub use settings::*;
+pub use tab_bar::*;
+pub use text::*;
+pub use view::*;
+pub use window::*;
+
+/// Equal insets on every edge.
+pub const fn uniform_insets(value: f64) -> Insets {
+    Insets {
+        top: value,
+        left: value,
+        bottom: value,
+        right: value,
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Ui {
+    mtm: MainThreadMarker,
+}
+impl Ui {
+    pub fn new(mtm: MainThreadMarker) -> Self { Self { mtm } }
+
+    pub fn mtm(&self) -> MainThreadMarker { self.mtm }
+}

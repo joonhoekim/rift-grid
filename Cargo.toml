@@ -215,3 +215,7 @@ test_bin = "0.5.0"
 [[test]]
 name = "settings_native"
 harness = false
+
+# cgs 0.3.15 as published, with the fork's patch on top (see docs/upstream.md).
+[patch.crates-io]
+cgs = { path = "cgs" }
