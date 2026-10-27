@@ -12,6 +12,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use capture::Captures;
+
+/// Set how many bytes of window capture may be reserved: by the process, by one
+/// compositor's streams together, and by one stream. A capture is reserved at
+/// eight frames of its size; a stream or a compositor past its limit does not
+/// start the capture. Takes effect for captures started after it.
+pub fn set_capture_limits(process: usize, compositor: usize, stream: usize) {
+    capture::set_capture_limits(process, compositor, stream);
+}
 use gpu::Gpu;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;

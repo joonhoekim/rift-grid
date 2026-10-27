@@ -289,7 +289,18 @@ static WAITERS: Mutex<Vec<std::sync::Weak<Wake>>> = Mutex::new(Vec::new());
 static STREAMS: AtomicUsize = AtomicUsize::new(0);
 static LIVE_STREAMS: AtomicUsize = AtomicUsize::new(0);
 static CAPTURE_BYTES: AtomicUsize = AtomicUsize::new(0);
-const PROCESS_CAPTURE_BYTES: usize = 512 * 1024 * 1024;
+// How much capture memory may be reserved: by the whole process, by one
+// compositor's streams together, and by one stream. Settable through
+// `set_capture_limits`; the defaults are the ones cgs was published with.
+static PROCESS_CAPTURE_BYTES: AtomicUsize = AtomicUsize::new(512 * 1024 * 1024);
+static COMPOSITOR_CAPTURE_BYTES: AtomicUsize = AtomicUsize::new(256 * 1024 * 1024);
+static STREAM_CAPTURE_BYTES: AtomicUsize = AtomicUsize::new(256 * 1024 * 1024);
+pub(super) fn set_capture_limits(process: usize, compositor: usize, stream: usize) {
+    PROCESS_CAPTURE_BYTES.store(process, Ordering::Release);
+    COMPOSITOR_CAPTURE_BYTES.store(compositor, Ordering::Release);
+    STREAM_CAPTURE_BYTES.store(stream, Ordering::Release);
+}
+fn stream_limit() -> usize { STREAM_CAPTURE_BYTES.load(Ordering::Acquire) }
 pub(super) fn reserved_bytes() -> usize { CAPTURE_BYTES.load(Ordering::Acquire) }
 struct StreamLease {
     bytes: AtomicUsize,
@@ -307,7 +318,8 @@ impl StreamLease {
         let extra = bytes - previous;
         if CAPTURE_BYTES
             .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                n.checked_add(extra).filter(|n| *n <= PROCESS_CAPTURE_BYTES)
+                n.checked_add(extra)
+                    .filter(|n| *n <= PROCESS_CAPTURE_BYTES.load(Ordering::Acquire))
             })
             .is_err()
         {
@@ -754,7 +766,7 @@ fn open_source(
         CaptureResolution::Native => native.unwrap_or(native_dimensions),
         CaptureResolution::Thumbnail { width, height } => (width, height),
     };
-    if dimensions.0 == 0 || dimensions.1 == 0 || capture_bytes(dimensions) > 256 * 1024 * 1024 {
+    if dimensions.0 == 0 || dimensions.1 == 0 || capture_bytes(dimensions) > stream_limit() {
         return Err("capture memory limit".into());
     }
     if !lease.reserve(capture_bytes(dimensions)) {
@@ -1235,7 +1247,7 @@ impl Captures {
         // Reserve eight surface-sized buffers per admitted source (queue, latest,
         // in-flight reads and texture-view cache), including 64-byte row alignment.
         // GPU reads of the previous scene may briefly outlive active admission.
-        let mut budget = 256usize * 1024 * 1024;
+        let mut budget = COMPOSITOR_CAPTURE_BYTES.load(Ordering::Acquire);
         let mut desired = Vec::with_capacity(8);
         let pending = self
             .requested
@@ -1391,7 +1403,7 @@ impl Captures {
                 dimensions
             };
             let bytes = capture_bytes(dimensions).max(capture_bytes(previous));
-            if dimensions.0 == 0 || dimensions.1 == 0 || bytes > 256 * 1024 * 1024 {
+            if dimensions.0 == 0 || dimensions.1 == 0 || bytes > stream_limit() {
                 self.unavailable.insert(request.window_id, "capture memory limit".into());
                 continue;
             }
