@@ -135,8 +135,10 @@ impl LayoutEngine {
         self.move_departures(target, &cells);
         self.ensure_workspace_layouts(target, target_size);
         let cell = self.workspaces.grid_current_cell(target, grid)?;
+        // Showing the grid there must not take the focus to that display.
         let mut response = self.activate_workspace(window_store, target, cell, None);
         response.focus_window = None;
+        response.workspace_space = None;
         self.update_active_floating_windows(window_store, source);
         self.broadcast_windows_changed(window_store, source);
         Some((response, moved))
@@ -148,8 +150,8 @@ impl LayoutEngine {
         let current = self.focused_window;
         let target = self.recent.0.iter().copied().filter(|&wid| Some(wid) != current).find_map(
             |wid| {
-                let assignment = window_store.workspace_info_for_window(wid)?;
-                Some((wid, assignment.space, assignment.workspace_id))
+                let workspace = window_store.workspace_for_window(wid)?;
+                Some((wid, self.workspaces.workspace_space(workspace)?, workspace))
             },
         );
         let Some((wid, target_space, workspace)) = target else {
@@ -222,7 +224,7 @@ impl LayoutEngine {
                     changed: true,
                     focus_window: Some(next),
                     raise_windows: vec![next],
-                    boundary_hit: None,
+                    ..EventResponse::default()
                 };
                 self.apply_focus_response(window_store, space, ws_id, layout, &response);
                 return response;
@@ -245,7 +247,7 @@ impl LayoutEngine {
                 area.w / 2.0
             });
             let wid = tiles[grid_nav::entered(&rects, area, dir, along)?].0;
-            (window_store.workspace_for_window(space, wid) == Some(target)).then_some(wid)
+            (window_store.workspace_for_window(wid) == Some(target)).then_some(wid)
         });
         let response = self.activate_workspace(window_store, space, target, entry);
         self.record_grid_focus(space, target, &response);
@@ -280,7 +282,6 @@ impl LayoutEngine {
         let Some(wid) = self.focused_tile(space) else {
             return EventResponse::default();
         };
-        self.workspaces[ws_id].layout_state.last_saved = Some(layout);
         if self.workspaces[ws_id].layout_system.move_selection(layout, direction) {
             return EventResponse {
                 changed: true,
@@ -418,8 +419,8 @@ mod tests {
         let west = cell(&mut engine, 3);
         assert_eq!(engine.workspaces().active_workspace(space), Some(west));
         assert_eq!(response.focus_window, Some(right));
-        assert_eq!(window_store.workspace_for_window(space, right), Some(west));
-        assert_eq!(window_store.workspace_for_window(space, left), Some(center));
+        assert_eq!(window_store.workspace_for_window(right), Some(west));
+        assert_eq!(window_store.workspace_for_window(left), Some(center));
 
         // The grid does not wrap.
         let response = grid(
@@ -581,7 +582,7 @@ mod tests {
         );
         let _ = engine.handle_event(&mut store, LayoutEvent::WindowFocused(space, wid));
         let _ = run(&mut engine, &mut store, LayoutCommand::MoveWindowToGrid(1));
-        assert_eq!(store.workspace_for_window(space, wid), Some(cell(&mut engine, 5)));
+        assert_eq!(store.workspace_for_window(wid), Some(cell(&mut engine, 5)));
         assert_eq!(active(&engine), Some(cell(&mut engine, 13)), "focus stays in grid 2");
 
         // The window focused before is reached wherever it is, and back again.

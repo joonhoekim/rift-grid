@@ -29,6 +29,7 @@ pub struct Workspace {
     pub grid_cell: Option<(usize, usize)>,
     /// The grid (0-based) the workspace is a cell of.
     pub grid: Option<usize>,
+    pub has_fullscreen: bool,
 }
 
 /// Menu-bar-only projection; workspace indices remain local to each space.
@@ -394,6 +395,7 @@ pub(crate) fn sig(update: &Update) -> u64 {
             workspace.window_count.hash(&mut hash);
             workspace.grid_cell.hash(&mut hash);
             workspace.grid.hash(&mut hash);
+            workspace.has_fullscreen.hash(&mut hash);
             workspace.windows.len().hash(&mut hash);
             for window in &workspace.windows {
                 let frame = *window;
@@ -425,6 +427,7 @@ mod tests {
             windows: Vec::new(),
             grid_cell: None,
             grid: None,
+            has_fullscreen: false,
         }
     }
 
@@ -476,5 +479,14 @@ mod tests {
         let after = sig(&update(changed));
 
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn signature_changes_when_workspace_fullscreen_changes() {
+        let base = vec![workspace("bsp")];
+        let mut changed = base.clone();
+        changed[0].has_fullscreen = true;
+
+        assert_ne!(sig(&update(base)), sig(&update(changed)));
     }
 }

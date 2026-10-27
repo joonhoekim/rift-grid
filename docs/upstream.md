@@ -13,9 +13,9 @@ New code lives in fork modules; upstream files only call into them.
 | --- | --- |
 | `actor/reactor.rs` | Three `Event` variants (`BorderSettle`, `WindowsReordered`, `GridMotion`); in `handle_event_inner`, the border, grid motion and grid display handlers, `grid_motion_before`/`after`, `settle_display_grids` after a display change, and `update_borders` |
 | `actor/reactor/query.rs`, `model/server.rs` | The grid fields of `RuntimeWorkspaceData` (`grid_cell`, `grid`, `grid_elsewhere`, `layout_focus`) |
-| `actor/reactor/events/command.rs` | The list of grid commands, and switch tracking for commands that change cells only when they cross an edge |
+| `actor/reactor/events/command.rs` | The list of grid commands and their arm in the command-kind `match`, and switch tracking for commands that change cells only when they cross an edge |
 | `layout_engine/engine.rs` | Grid commands in `handle_command` and `handle_virtual_workspace_command`; the recent window list; the calls into `engine/departures.rs` (see below) |
-| `model/virtual_workspace.rs` | `grid_columns`, `grid_current`; `workspace_count`; `remap_grid_cells` in `remap_space`; a `grid` argument to `resolve_rule_workspace_with_policy` |
+| `model/virtual_workspace.rs` | `grid_current`; the settings kept as `grid::effective_settings` (a workspace for every cell, named by grid and cell) in `new_with_config`, `plan_settings_names` and `apply_settings`; `remember_grid_cell` in `set_active_workspace`; `remap_grid_cells` in `remap_space`; app rules' `grid` through `rule_workspace` in `apply_app_rule_decision` |
 | `common/config/types.rs` | `grid_columns`, app rules' `grid`, `validate_grid`; grid fields in `MissionControlSettings`, whose `Default` is written out by hand |
 | `ui/mission_control.rs`, `actor/mission_control.rs` | The grid overview's two stages, gliding cards, and refresh on reactor broadcasts; in the actor, a `GridZoom` event and one call that hands events to the zoomed overview (`actor/mission_control/grid_zoom.rs`) |
 | `ui/menu_bar.rs`, `actor/menu_bar.rs` | Grid maps and the grid entries of the Workspace menu; the grid fields in the settings preview's `Workspace` |
@@ -35,14 +35,10 @@ These could shrink the fork's footprint in upstream files. None is a defect.
 - The grid commands are listed in three places: `command.rs` and twice in
   `engine.rs`. A `LayoutCommand::is_grid()` in the protocol crate would leave
   one.
-- `command.rs` puts `is_grid_command ||` before upstream's `matches!`, which
-  re-indents upstream's lines; putting it after would not.
 - `MissionControlSettings` lost its derived `Default`, so every field upstream
   adds must also go into the fork's impl. Moving the grid fields to their own
   `[settings.ui.grid_overview]` table would restore the derive, at the cost of a
   config change.
-- `resolve_rule_workspace_with_policy` takes an extra `grid` argument. Resolving
-  the grid at its one call site would leave upstream's signature alone.
 - The settings app's category list, page match and search catalog: upstream
   reorganizes these often, and each time the fork's Overview and Window Borders
   entries conflict. `grid_pages::overview` copies upstream's Overview sections,
@@ -66,7 +62,17 @@ These could shrink the fork's footprint in upstream files. None is a defect.
   workspace's grid and cell from its position. Not yet checked with grids on.
 - `VirtualWorkspaceSettings::validate` checks `default_workspace` and
   `workspace_names` against `default_workspace_count`, which grids ignore: they
-  have `9 × grid_columns²` workspaces and name cells per grid.
+  have `9 × grid_columns²` workspaces and name cells per grid. The store keeps
+  the grid's own count and names (`grid::effective_settings`), so upstream's
+  naming and repair code sees them as configured.
+- `activate_workspace` reports the space it shows in `workspace_space`, and the
+  reactor then makes that the command display. Handing a grid to another
+  display clears it, so the focus stays where it was.
+- The workspace mode `global` (#603) puts each workspace on one display at a
+  time, as grids are under `grid_displays.rs`. The grid has not been tried with
+  it; it is meant for `per_display`, the default.
+- `named_pin_reload_moves_immediately_without_growing_catalog` fails on
+  upstream `3114cc5` as well, on this Mac.
 - Upstream is formatted with nightly rustfmt (`rustfmt.toml` sets unstable
   options). Stable `cargo fmt` rewrites much of upstream, so format the fork's
   own files only, with nightly when available.

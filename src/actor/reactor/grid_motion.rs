@@ -61,7 +61,6 @@ unsafe impl Send for GridMotionManager {}
 /// A slide waiting for the captures of the cell it goes to.
 struct Pending {
     generation: u64,
-    space: SpaceId,
     step: Step,
     /// The cell moved to, and how many columns (and rows) its grid has.
     cell: (usize, usize),
@@ -134,11 +133,7 @@ impl Reactor {
         }
         let space = self.command_context_space()?;
         let workspace = self.layout_manager.layout_engine.workspaces().active_workspace(space)?;
-        let windows = self
-            .layout_manager
-            .layout_engine
-            .workspaces()
-            .workspace_windows(&self.state.windows, space, workspace)
+        let windows = self.state.windows.workspace_windows(workspace)
             .into_iter()
             .filter_map(|wid| self.state.windows.window(wid).map(|w| (wid, w.frame_monotonic)))
             .collect();
@@ -236,7 +231,7 @@ impl Reactor {
                 let occupied = per_grid
                     .iter()
                     .map(|&(_, &id)| {
-                        !store.workspace_windows(&self.state.windows, space, id).is_empty()
+                        !self.state.windows.workspace_windows(id).is_empty()
                     })
                     .collect();
                 Some(HudView {
@@ -260,9 +255,9 @@ impl Reactor {
         {
             let carried: Vec<_> = windows
                 .into_iter()
-                .filter(|(wid, _)| self.state.windows.workspace_for_window(space, *wid) == Some(to))
+                .filter(|(wid, _)| self.state.windows.workspace_for_window(*wid) == Some(to))
                 .collect();
-            self.begin_pan(generation, space, step, to, to_cell, &screen, carried);
+            self.begin_pan(generation, step, to, to_cell, &screen, carried);
         }
 
         if let Some(view) = view.flatten() {
@@ -297,7 +292,6 @@ impl Reactor {
     fn begin_pan(
         &mut self,
         generation: u64,
-        space: SpaceId,
         step: Step,
         to: VirtualWorkspaceId,
         cell: (usize, usize),
@@ -341,11 +335,7 @@ impl Reactor {
         let mut sizes = HashMap::default();
         let mut waiting = 0;
         let mut unknown = false;
-        let windows = self
-            .layout_manager
-            .layout_engine
-            .workspaces()
-            .workspace_windows(&self.state.windows, space, to);
+        let windows = self.state.windows.workspace_windows(to);
         let manager = &self.grid_motion_manager;
         for wid in windows {
             let Some(window) = self.state.windows.window(wid) else { continue };
@@ -433,7 +423,6 @@ impl Reactor {
         }
         self.grid_motion_manager.pending = Some(Pending {
             generation,
-            space,
             step,
             cell,
             columns: self.config.virtual_workspaces.grid_columns,
@@ -479,9 +468,7 @@ impl Reactor {
         let captured = |id: Option<u32>, frame: CGRect| {
             id.and_then(|id| sizes.get(&id).copied()).unwrap_or(frame.size)
         };
-        let mut windows: Vec<(bool, CGRect, Option<Image>, CGSize)> = engine
-            .workspaces()
-            .workspace_windows(&self.state.windows, pending.space, pending.workspace)
+        let mut windows: Vec<(bool, CGRect, Option<Image>, CGSize)> = self.state.windows.workspace_windows(pending.workspace)
             .into_iter()
             .filter(|wid| !pending.carried.iter().any(|(c, _)| c == wid))
             .filter_map(|wid| {

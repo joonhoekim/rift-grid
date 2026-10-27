@@ -315,6 +315,7 @@ mod tests {
             windows: Vec::new(),
             grid_cell: None,
             grid: None,
+            has_fullscreen: false,
         }
     }
 

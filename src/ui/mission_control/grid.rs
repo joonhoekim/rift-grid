@@ -672,6 +672,8 @@ mod tests {
             grid: None,
             grid_elsewhere: false,
             layout_focus: None,
+            display_uuid: None,
+            is_focused: false,
         }
     }
 

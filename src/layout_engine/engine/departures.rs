@@ -58,15 +58,15 @@ impl LayoutEngine {
         }
         let Some((space, workspace_id)) = tiled_in.or_else(|| {
             // Floating windows are only known through their assignment.
-            let assigned = window_store.workspace_info_for_window(wid)?;
-            Some((assigned.space, assigned.workspace_id))
+            let assigned = window_store.workspace_for_window(wid)?;
+            Some((self.workspaces.workspace_space(assigned)?, assigned))
         }) else {
             return;
         };
 
         // The engine rebalances the parent split when the store no longer
         // assigns the window, as after minimizing.
-        let rebalanced = window_store.workspaces_for_window(wid).is_empty();
+        let rebalanced = window_store.workspace_for_window(wid).is_none();
         let workspace = &mut self.workspaces[workspace_id];
         let order = workspace
             .active_layout()
@@ -495,7 +495,7 @@ mod tests {
         let w = windows(2);
         let mut setup = Setup::new(LayoutMode::Bsp, &w);
         let space = setup.space;
-        let left = setup.store.workspace_for_window(space, w[0]).unwrap();
+        let left = setup.store.workspace_for_window(w[0]).unwrap();
         let _ = setup.store.remove_window_assignment(w[0]);
         setup.event(LayoutEvent::WindowRemoved(w[0]));
         let ids = setup.engine.workspaces.workspace_ids(space);
@@ -513,7 +513,7 @@ mod tests {
         let w = windows(2);
         let mut setup = Setup::new(LayoutMode::Bsp, &w);
         let space = setup.space;
-        let left = setup.store.workspace_for_window(space, w[0]).unwrap();
+        let left = setup.store.workspace_for_window(w[0]).unwrap();
         // Minimizing clears the store's assignment before the removal.
         let _ = setup.store.remove_window_assignment(w[0]);
         setup.event(LayoutEvent::WindowRemoved(w[0]));
@@ -521,6 +521,6 @@ mod tests {
         let other = *ids.iter().find(|&&id| id != left).unwrap();
         setup.engine.workspaces.set_active_workspace(space, other);
         setup.event(LayoutEvent::WindowAdded(space, w[0]));
-        assert_eq!(setup.store.workspace_for_window(space, w[0]), Some(left));
+        assert_eq!(setup.store.workspace_for_window(w[0]), Some(left));
     }
 }

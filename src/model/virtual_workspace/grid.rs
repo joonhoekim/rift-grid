@@ -6,13 +6,31 @@ pub use crate::common::config::GRID_COUNT;
 use crate::common::config::VirtualWorkspaceSettings;
 use crate::common::grid_nav;
 
-/// How many workspaces each display gets: every cell of every grid when
-/// workspaces form grids, as the config says otherwise.
-pub(super) fn workspace_count(config: &VirtualWorkspaceSettings) -> usize {
-    match config.grid_columns {
-        0 => config.default_workspace_count,
-        columns => GRID_COUNT * columns * columns,
+/// The settings the store works with. When workspaces form grids, each display
+/// gets every cell of every grid, and a cell's name repeats in every grid after
+/// its number: "2·5", or "2·Mail" with a name for cell 5.
+pub(super) fn effective_settings(config: &VirtualWorkspaceSettings) -> VirtualWorkspaceSettings {
+    let mut settings = config.clone();
+    let columns = config.grid_columns;
+    if columns == 0 {
+        return settings;
     }
+    let cells = columns * columns;
+    settings.default_workspace_count = GRID_COUNT * cells;
+    settings.workspace_names = (0..settings.default_workspace_count)
+        .map(|index| {
+            let cell = index % cells;
+            let name = config
+                .workspace_names
+                .get(cell)
+                .filter(|name| !name.is_empty())
+                .cloned()
+                .unwrap_or_else(|| (cell + 1).to_string());
+            format!("{}·{}", index / cells + 1, name)
+        })
+        .collect();
+    settings.default_workspace = config.default_workspace.min(settings.default_workspace_count - 1);
+    settings
 }
 
 pub(crate) fn grid_dir(dir: Direction) -> grid_nav::Dir {
@@ -41,11 +59,11 @@ pub(crate) fn grid_neighbor_index(
 
 impl WorkspaceStore {
     pub fn grid_enabled(&self) -> bool {
-        self.grid_columns > 0
+        self.settings.grid_columns > 0
     }
 
     fn cells_per_grid(&self) -> usize {
-        self.grid_columns * self.grid_columns
+        self.settings.grid_columns * self.settings.grid_columns
     }
 
     /// The grid (0-based) the workspace at `index` is a cell of.
@@ -57,23 +75,25 @@ impl WorkspaceStore {
     pub fn grid_cell(&self, index: usize) -> Option<(usize, usize)> {
         self.grid_enabled().then(|| {
             let cell = index % self.cells_per_grid();
-            (cell / self.grid_columns, cell % self.grid_columns)
+            (cell / self.settings.grid_columns, cell % self.settings.grid_columns)
         })
     }
 
-    /// A workspace's name from the config. In a grid, cell names repeat in every
-    /// grid after its number: "2·5", or "2·Mail" with a name for cell 5.
-    pub(super) fn configured_name(&self, index: usize) -> Option<String> {
-        let Some(grid) = self.grid_of(index) else {
-            return self.default_workspace_names.get(index).cloned();
-        };
-        let cell = index % self.cells_per_grid();
-        let name = self.default_workspace_names.get(cell).cloned();
-        Some(format!(
-            "{}·{}",
-            grid + 1,
-            name.unwrap_or_else(|| (cell + 1).to_string())
-        ))
+    /// Where an app rule puts a window: its `grid`'s current cell, else its
+    /// `workspace`.
+    pub(super) fn rule_workspace<'a>(
+        &self,
+        context: impl Into<super::WorkspaceContext<'a>>,
+        selector: Option<&crate::common::config::WorkspaceSelector>,
+        grid: Option<usize>,
+    ) -> Option<VirtualWorkspaceId> {
+        let context = context.into();
+        grid.and_then(|grid| self.grid_current_cell(context.space, grid.checked_sub(1)?))
+            .or_else(|| {
+                selector
+                    .and_then(|selector| self.resolve_workspace(context, selector))
+                    .map(|target| target.id)
+            })
     }
 
     pub(super) fn remember_grid_cell(&mut self, space: SpaceId, workspace: VirtualWorkspaceId) {
@@ -109,7 +129,7 @@ impl WorkspaceStore {
                 .iter()
                 .skip(grid * cells)
                 .take(cells)
-                .any(|&id| window_store.workspace_window_count(space, id) > 0)
+                .any(|&id| window_store.workspace_window_count(id) > 0)
     }
 
     /// Hand grid `grid` (0-based) from `source` to `target`: each cell's layouts,
@@ -155,11 +175,8 @@ impl WorkspaceStore {
             std::mem::swap(&mut a.layout_state, &mut b.layout_state);
             std::mem::swap(&mut a.last_focused, &mut b.last_focused);
             pairs.push((from, to));
-            for wid in window_store.workspace_windows(source, from) {
-                window_store.assign_window_to_workspace(wid, super::WindowWorkspaceInfo {
-                    space: target,
-                    workspace_id: to,
-                });
+            for wid in window_store.workspace_windows(from) {
+                window_store.assign_window_to_workspace(wid, to);
                 moved.push(wid);
             }
             if current == Some(from) {
@@ -207,7 +224,7 @@ impl WorkspaceStore {
         let cells = self.cells_per_grid();
         let start = self.grid_of(index)? * cells;
         let count = cells.min(self.workspace_ids(space).len().saturating_sub(start));
-        grid_neighbor_index(index - start, count, self.grid_columns, dir)
+        grid_neighbor_index(index - start, count, self.settings.grid_columns, dir)
             .map(|cell| self.workspace_ids(space)[start + cell])
     }
 }
@@ -243,15 +260,15 @@ mod tests {
         let space = SpaceId::new(5);
         store.ensure_space_initialized(space);
         let ids = store.workspace_ids(space).to_vec();
-        let resolve = |store: &mut WorkspaceStore, selector: Option<&WorkspaceSelector>, grid| {
-            store.resolve_rule_workspace_with_policy(space, selector, grid, None, false).unwrap()
+        let resolve = |store: &WorkspaceStore, selector: Option<&WorkspaceSelector>, grid| {
+            store.rule_workspace(space, selector, grid).unwrap()
         };
-        assert_eq!(resolve(&mut store, None, Some(2)), ids[13], "grid 2's center at first");
+        assert_eq!(resolve(&store, None, Some(2)), ids[13], "grid 2's center at first");
         store.set_active_workspace(space, ids[10]);
-        assert_eq!(resolve(&mut store, None, Some(2)), ids[10], "then where grid 2 was left");
+        assert_eq!(resolve(&store, None, Some(2)), ids[10], "then where grid 2 was left");
         let cell = WorkspaceSelector::Index(0);
-        assert_eq!(resolve(&mut store, Some(&cell), Some(2)), ids[10], "grid wins over workspace");
-        assert_eq!(resolve(&mut store, Some(&cell), None), ids[0]);
+        assert_eq!(resolve(&store, Some(&cell), Some(2)), ids[10], "grid wins over workspace");
+        assert_eq!(resolve(&store, Some(&cell), None), ids[0]);
     }
 
     #[test]

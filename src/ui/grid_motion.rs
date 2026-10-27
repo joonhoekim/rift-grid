@@ -1089,6 +1089,7 @@ mod tests {
             backing_scale: 2.0,
             display_uuid: "a".into(),
             name: None,
+            is_builtin: false,
             space: Some(SpaceId::new(space)),
         };
         screens_changed(&[screen(1)]);
