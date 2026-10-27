@@ -1136,14 +1136,9 @@ pub struct MissionControlSettings {
     #[setting(label = "Fade duration", unit = "ms", enabled_by = "enabled")]
     pub fade_duration_ms: f64,
     #[serde(default)]
-    /// Capture the zoomed grid Overview's windows again at this interval while
-    /// it is open, in milliseconds. 0 captures each window once. The cards'
-    /// previews are live without it.
-    #[setting(
-        label = "Live preview interval",
-        unit = "ms",
-        aliases = "refresh recapture live previews"
-    )]
+    /// No longer used: the Overview's previews are live in both grid styles.
+    /// Kept so that configs which set it still load.
+    #[setting(label = "Live preview interval", unit = "ms")]
     pub live_preview_interval_ms: f64,
     #[serde(default = "default_mission_control_grid_gap")]
     /// Space between the cells of a workspace grid in Overview, as a fraction of the
@@ -1195,9 +1190,9 @@ pub struct MissionControlSettings {
     )]
     pub grid_follow: super::GridFollow,
     #[serde(default)]
-    /// How a grid Overview looks: cards of the cells' windows, or the screen
-    /// drawing back until the whole grid shows.
-    #[setting(label = "Grid style", choices, enabled_by = "enabled", aliases = "grid overview zoom")]
+    /// No longer used: the grid Overview is the cards. Kept so that configs
+    /// which set it still load.
+    #[setting(label = "Grid style", choices)]
     pub grid_style: super::GridStyle,
 }
 

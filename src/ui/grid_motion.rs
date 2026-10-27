@@ -29,11 +29,6 @@ use objc2_screen_capture_kit::{
 
 use crate::common::collections::HashMap;
 
-mod grid_bar;
-mod overview;
-pub use grid_bar::{BarButton, BarGroup, GridBar, Shown};
-pub use overview::{GridOverview, OverviewCell, OverviewStages, OverviewWindow};
-
 pub type Image = CFRetained<CGImage>;
 
 /// Carries ScreenCaptureKit's results from its queue to the reactor.
@@ -60,8 +55,6 @@ pub enum Note {
     Recapture(u64),
     /// A carried window as it is at its new size.
     Carried { generation: u64, window: u32, image: Option<SendBox<Image>> },
-    /// The Overview's overlay has faded out after coming in to a cell.
-    OverviewGone(u64),
 }
 
 /// The slide's settings, for the Overview, which draws back the same way.

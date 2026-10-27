@@ -54,13 +54,11 @@ pub(super) fn overview(ui: Ui, model: &Rc<Model>) -> Page {
     let grid = f.fields(
         Section::new(&ui, "Grid").description("When workspaces form a grid."),
         &[
-            "grid_style",
             "grid_fit",
             "grid_zoom",
             "grid_follow",
             "grid_gap",
             "grid_labels",
-            "live_preview_interval_ms",
         ],
         |s| &s.settings.ui.mission_control,
         |s| &mut s.settings.ui.mission_control,

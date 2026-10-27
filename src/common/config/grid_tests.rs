@@ -43,7 +43,6 @@ fn grid_settings_are_in_the_settings_app() {
     for (key, unit, scale) in [
         ("grid_gap", "%", 100.0),
         ("grid_zoom", "%", 100.0),
-        ("live_preview_interval_ms", "ms", 1.0),
     ] {
         let field = MissionControlSettings::field(key).unwrap();
         assert!(matches!(field.kind, FieldKind::Number { integer: false }), "{key}");

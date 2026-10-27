@@ -30,7 +30,7 @@ What subline set out to do, and this fork does on rift:
 | Feature | Where | Settings |
 | --- | --- | --- |
 | Grids of cells (see [docs/grids.md](docs/grids.md)): `switch_to_grid`, `move_window_to_grid`, `grid_focus`, `grid_move`, `grid_cell`, `grid_center`, `focus_recent_window`, app rules' `grid` | `layout_engine/engine/grid.rs`, `model/virtual_workspace/grid.rs`; topology in `common/grid_nav.rs` | `[virtual_workspaces] grid_columns` |
-| Grids belong to displays: a grid is on one display at a time, Alt+N goes there, each display comes up on a grid of its own, and `move_grid_to_display` hands one over (the zoomed overview's grid buttons, grouped by display) | `actor/reactor/grid_displays.rs`, `ui/grid_motion/grid_bar.rs` | — |
+| Grids belong to displays: a grid is on one display at a time, Alt+N goes there, each display comes up on a grid of its own, and `move_grid_to_display` hands one over (the overview's grid buttons, a row per display) | `actor/reactor/grid_displays.rs`, `ui/mission_control/grid_bar.rs` | — |
 | Grid overview: two stages, follows the real focus, live previews, labels in the gaps | `ui/mission_control/grid.rs` | `[settings.ui.mission_control] grid_*` |
 | Moves shown: the screen slides to the cell moved to, fades to another grid, and a small grid map lights the cell arrived at | `ui/grid_motion.rs`, `actor/reactor/grid_motion.rs` | `[settings.ui.grid_motion]` |
 | Trackpad swipes: three fingers to the neighboring cell any way, four fingers left and right through the display's grids and up for the Overview; taken before macOS and upstream's swipes | `actor/gesture/grid.rs`, `actor/reactor/grid_gestures.rs` | `[settings.grid_gestures]`, `common/config/grid_gestures.rs` |

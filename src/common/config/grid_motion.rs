@@ -66,7 +66,7 @@ pub struct GridMotionSettings {
     #[setting(label = "Map time", unit = "ms", enabled_by = "hud")]
     pub hud_ms: f64,
     #[serde(default)]
-    /// Capture windows for slides and the zoomed Overview at the display's full
+    /// Capture windows for slides at the display's full
     /// resolution, twice as sharp on a Retina display, for four times the pixels
     /// to capture and keep.
     #[setting(

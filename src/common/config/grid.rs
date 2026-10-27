@@ -41,7 +41,7 @@ pub enum GridMaps {
     Active,
 }
 
-/// How a grid Overview looks.
+/// How a grid Overview looked; only the cards are left.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy, Default, ConfigEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum GridStyle {
@@ -49,8 +49,7 @@ pub enum GridStyle {
     #[default]
     #[setting(label = "Cards")]
     Cards,
-    /// The screen itself draws back until the whole grid shows, as the slide
-    /// between cells does, and comes in again to the cell chosen.
+    /// Removed; read as the cards.
     #[setting(label = "Zoom out")]
     Zoom,
 }

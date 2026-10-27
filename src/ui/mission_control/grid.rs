@@ -2,10 +2,12 @@
 //! (the active cell and its neighbours, then the whole grid), following the real
 //! focus.
 
-use cgs::with_disabled_actions;
-
 use super::*;
-use crate::common::config::GridFollow;
+use crate::common::config::{GRID_COUNT, GridFollow};
+
+#[path = "grid_bar.rs"]
+mod grid_bar;
+pub(super) use grid_bar::*;
 
 // The app and title over a grid tile's bottom left corner, and its distance from it.
 pub(super) const LABEL_ROW: f64 = 22.0;
@@ -52,71 +54,68 @@ pub(super) fn grid_focus_selection(
 }
 
 /// The overview shows one grid, the one on screen, every cell of it in place,
-/// empty or not. Returns the grids for the button row: those with windows and
-/// the one on screen, in order, then "+" for the first grid neither is and no
-/// other display has.
-pub(super) fn keep_grid_on_screen(workspaces: &mut Vec<RuntimeWorkspaceData>) -> Vec<GridButton> {
+/// empty or not.
+pub(super) fn keep_grid_on_screen(workspaces: &mut Vec<RuntimeWorkspaceData>) {
     let on_screen = workspaces.iter().find(|ws| ws.is_active).and_then(|ws| ws.grid);
-    let mut grids: Vec<_> = workspaces
-        .iter()
-        .filter(|ws| !ws.windows.is_empty() || ws.grid == on_screen)
-        .filter_map(|ws| ws.grid)
-        .collect();
-    grids.dedup();
-    let unused = workspaces
-        .iter()
-        .filter(|ws| !ws.grid_elsewhere)
-        .filter_map(|ws| ws.grid)
-        .find(|grid| !grids.contains(grid));
     if on_screen.is_some() {
         workspaces.retain(|ws| ws.grid == on_screen);
     }
-    grids
-        .into_iter()
-        .map(|grid| GridButton { grid, on_screen: Some(grid) == on_screen, new: false })
-        .chain(unused.map(|grid| GridButton { grid, on_screen: false, new: true }))
-        .collect()
 }
 
-/// A button in the overview's grid row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct GridButton {
-    /// 0-based.
-    pub(super) grid: usize,
-    pub(super) on_screen: bool,
-    /// "+": a grid not in use yet.
-    pub(super) new: bool,
-}
-
-/// The overview's grid row as drawn.
-pub(super) struct GridRow {
-    layer: Retained<CALayer>,
-    cells: Vec<Retained<CALayer>>,
-    buttons: Vec<GridButton>,
-}
-
-const BUTTON: CGSize = CGSize { width: 34.0, height: 26.0 };
-const BUTTON_GAP: f64 = 6.0;
-const BUTTON_PAD: f64 = 5.0;
-
-/// The grid row, centered at the top of the overview: the row's frame and each
-/// button's frame within it.
-pub(super) fn grid_button_frames(overview: CGSize, count: usize) -> (CGRect, Vec<CGRect>) {
-    let n = count as f64;
-    let width = n * BUTTON.width + (n - 1.0).max(0.0) * BUTTON_GAP + 2.0 * BUTTON_PAD;
-    let height = BUTTON.height + 2.0 * BUTTON_PAD;
-    let row = rect((overview.width - width) / 2.0, 12.0, width, height);
-    let buttons = (0..count)
-        .map(|i| {
-            rect(
-                BUTTON_PAD + i as f64 * (BUTTON.width + BUTTON_GAP),
-                BUTTON_PAD,
-                BUTTON.width,
-                BUTTON.height,
-            )
+/// The grid buttons drawn on display `here`: a row per display, `displays`
+/// as (UUID, name, workspaces), with the grids on it (shown, or holding
+/// windows), and "+" ending `here`'s row for the first grid on none.
+pub(super) fn bar_groups(
+    displays: &[(String, String, Vec<RuntimeWorkspaceData>)],
+    here: &str,
+) -> Vec<BarGroup> {
+    let mut used = [false; GRID_COUNT];
+    let mut groups: Vec<BarGroup> = displays
+        .iter()
+        .map(|(display, name, workspaces)| {
+            let shown = workspaces.iter().find(|w| w.is_active).and_then(|w| w.grid);
+            let mut grids: Vec<usize> = workspaces
+                .iter()
+                .filter(|w| w.window_count > 0 || w.grid == shown)
+                .filter_map(|w| w.grid)
+                .filter(|&g| g < GRID_COUNT)
+                .collect();
+            grids.dedup();
+            let buttons = grids
+                .into_iter()
+                .map(|grid| {
+                    used[grid] = true;
+                    let shown = match () {
+                        _ if Some(grid) != shown => Shown::No,
+                        _ if display == here => Shown::Here,
+                        _ => Shown::Elsewhere,
+                    };
+                    BarButton { grid, shown, new: false }
+                })
+                .collect();
+            BarGroup { display: display.clone(), name: name.clone(), buttons }
         })
         .collect();
-    (row, buttons)
+    if let Some(free) = used.iter().position(|&used| !used)
+        && let Some(row) = groups.iter_mut().find(|g| g.display == here)
+    {
+        row.buttons.push(BarButton { grid: free, shown: Shown::No, new: true });
+    }
+    groups
+}
+
+/// The grid buttons for display `here`, as the reactor has the grids now.
+pub(super) fn grid_bar_groups(reactor: &ReactorHandle, here: &str) -> Vec<BarGroup> {
+    let displays: Vec<_> = reactor
+        .query_displays()
+        .into_iter()
+        .filter_map(|d| {
+            let space = d.info.space?;
+            let name = d.info.name.clone().unwrap_or_else(|| "Display".to_owned());
+            Some((d.info.display_uuid.clone(), name, reactor.query_workspaces(Some(space))))
+        })
+        .collect();
+    bar_groups(&displays, here)
 }
 
 /// Rows and columns when the workspaces form a grid.
@@ -324,13 +323,15 @@ pub(super) fn project_grid(
     look: GridLook,
 ) -> Vec<WorkspaceProjection> {
     let (row, column) = active_cell(workspaces, shape);
-    project_grid_at(display, overview, workspaces, shape, look, (row as f64, column as f64))
+    let area = rect(0.0, 0.0, overview.width, overview.height);
+    project_grid_at(display, area, workspaces, shape, look, (row as f64, column as f64))
 }
 
-/// Every cell of the grid at once, the first stage's camera at `camera`.
+/// Every cell of the grid at once in `area`, a part of the overview, the first
+/// stage's camera at `camera`.
 pub(super) fn project_grid_at(
     display: CGRect,
-    overview: CGSize,
+    area: CGRect,
     workspaces: &[RuntimeWorkspaceData],
     shape: (usize, usize),
     look: GridLook,
@@ -344,8 +345,10 @@ pub(super) fn project_grid_at(
         .iter()
         .enumerate()
         .filter_map(|(source, ws)| {
-            let frame =
-                grid_cell_frame(overview, display.size, shape, ws.grid_cell?, gap, look, camera);
+            let mut frame =
+                grid_cell_frame(area.size, display.size, shape, ws.grid_cell?, gap, look, camera);
+            frame.origin.x += area.origin.x;
+            frame.origin.y += area.origin.y;
             let scale = frame.size.width / display.size.width;
             let (windows, scene) = project_windows(ws, display, frame, scale, 0.0);
             Some(WorkspaceProjection {
@@ -398,105 +401,66 @@ pub(super) fn glide(layer: &CALayer, from: CGRect) {
 impl DisplayOverview {
     pub(super) fn grid(&self) -> Option<(usize, usize)> { grid_shape(&self.workspaces) }
 
-    /// Redraw the grid row when the grids in use or the one on screen changed.
-    pub(super) fn set_grid_buttons(&mut self, buttons: Vec<GridButton>) {
-        if self.grid_row.as_ref().is_some_and(|drawn| drawn.buttons == buttons) {
+    /// The menu bar's height on this display.
+    fn menu_bar(&self) -> f64 { (self.info.frame.origin.y - self.bounds.origin.y).max(0.0) }
+
+    /// Redraw the grid buttons when they changed.
+    pub(super) fn set_grid_bar(&mut self, groups: Vec<BarGroup>) {
+        if self.grid_row.as_ref().is_some_and(|bar| bar.groups() == groups) {
             return;
         }
-        if let Some(drawn) = self.grid_row.take() {
-            drawn.layer.removeFromSuperlayer();
+        if let Some(bar) = self.grid_row.take() {
+            bar.remove();
         }
-        if buttons.is_empty() || self.grid().is_none() {
+        if self.grid().is_none() || groups.iter().all(|g| g.buttons.is_empty()) {
             return;
         }
-        let (frame, frames) = grid_button_frames(self.bounds.size, buttons.len());
-        let row = layer(pixel_aligned(frame, self.scale), self.scale);
-        row.setZPosition(10.0);
-        row.setCornerRadius(10.0);
-        row.setBackgroundColor(Some(&color(0.06, 0.06, 0.08, 0.72)));
-        let mut cells = Vec::with_capacity(buttons.len());
-        with_disabled_actions(|| {
-            for (button, frame) in buttons.iter().zip(frames) {
-                let cell = layer(frame, self.scale);
-                cell.setCornerRadius(6.0);
-                if button.on_screen {
-                    cell.setBackgroundColor(Some(&NSColor::controlAccentColor().CGColor()));
-                } else {
-                    cell.setBackgroundColor(Some(&color(1.0, 1.0, 1.0, 0.1)));
-                }
-                let text = if button.new { "+".to_owned() } else { (button.grid + 1).to_string() };
-                let number = label(
-                    &cell,
-                    &text,
-                    rect(0.0, (frame.size.height - 16.0) / 2.0, frame.size.width, 16.0),
-                    self.scale,
-                );
-                unsafe {
-                    number.setAlignmentMode(objc2_quartz_core::kCAAlignmentCenter);
-                }
-                number.setFontSize(13.0);
-                if button.on_screen {
-                    number.setForegroundColor(Some(&color(1.0, 1.0, 1.0, 1.0)));
-                }
-                row.addSublayer(&cell);
-                cells.push(cell);
-            }
-        });
-        self.root.addSublayer(&row);
-        self.grid_row = Some(GridRow { layer: row, cells, buttons });
+        self.grid_row = Some(GridBar::new(&self.root, self.menu_bar(), groups, self.scale));
     }
 
     /// Outline the button a dragged window would go to, or none.
     pub(super) fn outline_grid_button(&self, grid: Option<usize>) {
-        let Some(drawn) = &self.grid_row else { return };
-        with_disabled_actions(|| {
-            for (cell, button) in drawn.cells.iter().zip(&drawn.buttons) {
-                if Some(button.grid) == grid {
-                    cell.setBorderWidth(2.0);
-                    cell.setBorderColor(Some(&color(1.0, 1.0, 1.0, 0.9)));
-                } else {
-                    cell.setBorderWidth(0.0);
-                }
-            }
-        });
+        if let Some(bar) = &self.grid_row {
+            bar.outline(grid);
+        }
     }
 
     /// The grid (0-based) whose button is at `local`, a point in the overview.
     pub(super) fn grid_button_at(&self, local: CGPoint) -> Option<usize> {
-        let drawn = self.grid_row.as_ref()?;
-        let (row, frames) = grid_button_frames(self.bounds.size, drawn.buttons.len());
-        frames.iter().zip(&drawn.buttons).find_map(|(frame, button)| {
-            let frame = rect(
-                row.origin.x + frame.origin.x,
-                row.origin.y + frame.origin.y,
-                frame.size.width,
-                frame.size.height,
-            );
-            contains(frame, local).then_some(button.grid)
-        })
+        let bar = self.grid_row.as_ref()?;
+        bar.button(bar.button_at(local)?).map(|b| b.grid)
     }
 
-    /// Whether `local` is on the grid row, buttons or the space between them.
+    /// Whether `local` is on the grid buttons.
     pub(super) fn on_grid_row(&self, local: CGPoint) -> bool {
-        self.grid_row.as_ref().is_some_and(|drawn| {
-            contains(grid_button_frames(self.bounds.size, drawn.buttons.len()).0, local)
-        })
+        self.grid_row.as_ref().is_some_and(|bar| bar.contains(local))
+    }
+
+    /// Where the grid's cells go in the overview: below the grid buttons.
+    fn grid_area(&self) -> CGRect {
+        let size = self.bounds.size;
+        let top = self
+            .grid_row
+            .as_ref()
+            .map_or(0.0, |bar| bar_bottom(self.menu_bar(), bar.groups().len()));
+        rect(0.0, top, size.width, (size.height - top).max(1.0))
     }
 
     pub(super) fn project(&self) -> Vec<WorkspaceProjection> {
         match self.grid() {
             Some(shape) => {
+                let area = self.grid_area();
                 let camera = follow_camera(
                     self.camera.get(),
                     active_cell(&self.workspaces, shape),
-                    self.bounds.size,
+                    area.size,
                     self.info.frame.size,
                     self.look,
                 );
                 self.camera.set(Some(camera));
                 project_grid_at(
                     self.info.frame,
-                    self.bounds.size,
+                    area,
                     &self.workspaces,
                     shape,
                     self.look,
@@ -534,6 +498,56 @@ impl OverviewSession {
         })
     }
 
+    /// Pressing, dragging and letting go of a grid button: let go on another
+    /// display's row, the grid goes to that display; let go where it was
+    /// pressed, the grid shows. None when `input` is not the buttons'.
+    pub(super) fn grid_bar_input(&mut self, input: &Input) -> Option<Option<OverviewAction>> {
+        use crate::layout_engine::LayoutCommand;
+        let local = |d: &DisplayOverview, p: CGPoint| {
+            CGPoint::new(p.x - d.bounds.origin.x, p.y - d.bounds.origin.y)
+        };
+        let pressed = self
+            .displays
+            .iter()
+            .position(|d| d.grid_row.as_ref().is_some_and(GridBar::is_pressed));
+        match (input, pressed) {
+            (&Input::PointerDown(p), _) => {
+                let d = self.displays.iter_mut().find(|d| contains(d.bounds, p))?;
+                let at = local(d, p);
+                let bar = d.grid_row.as_mut().filter(|bar| bar.contains(at))?;
+                bar.press(at);
+                Some(None)
+            }
+            (&(Input::PointerDrag(p) | Input::Move(p)), Some(i)) => {
+                let d = &mut self.displays[i];
+                let at = local(d, p);
+                d.grid_row.as_mut()?.drag(at);
+                Some(None)
+            }
+            (&(Input::PointerUp(p) | Input::Click(p)), Some(i)) => {
+                let d = &mut self.displays[i];
+                let at = local(d, p);
+                let released = d.grid_row.as_mut()?.release(at);
+                Some(released.map(|(button, to)| {
+                    OverviewAction::Command(match to {
+                        Some(display) => LayoutCommand::MoveGridToDisplay {
+                            grid: button.grid + 1,
+                            display: crate::model::reactor::DisplaySelector::Uuid(display),
+                        },
+                        None => LayoutCommand::SwitchToGrid(button.grid + 1),
+                    })
+                }))
+            }
+            // A dragged window dropped on a button is the drag's.
+            (&(Input::PointerUp(p) | Input::Click(p)), None)
+                if self.on_grid_row(p) && !self.drag.as_ref().is_some_and(|d| d.started) =>
+            {
+                Some(None)
+            }
+            _ => None,
+        }
+    }
+
     /// Follow focus changes without rebuilding the cards: re-read which cell is
     /// active and which window the system has focused, and move the outlines.
     /// Anything more than that waits for a full refresh.
@@ -546,7 +560,7 @@ impl OverviewSession {
             return;
         };
         let mut workspaces = reactor.query_workspaces(d.info.space);
-        let buttons = filter_workspaces(&mut workspaces, self.show_empty_workspaces);
+        filter_workspaces(&mut workspaces, self.show_empty_workspaces);
         let same_cards = workspaces.len() == d.workspaces.len()
             && workspaces.iter().zip(&d.workspaces).all(|(a, b)| {
                 a.index == b.index
@@ -557,7 +571,14 @@ impl OverviewSession {
             self.reload(reactor, None);
             return;
         }
-        d.set_grid_buttons(buttons);
+        let groups = grid_bar_groups(reactor, &d.info.display_uuid);
+        let bar_rows = d.grid_row.as_ref().map(|bar| bar.groups().len());
+        if bar_rows.is_some_and(|rows| rows != groups.len()) {
+            // Another display came or went: the cells move under the buttons.
+            self.reload(reactor, None);
+            return;
+        }
+        d.set_grid_bar(groups);
         let active_was = d.workspaces.iter().position(|ws| ws.is_active);
         for (ws, fresh) in d.workspaces.iter_mut().zip(&workspaces) {
             ws.is_active = fresh.is_active;
@@ -792,16 +813,17 @@ mod tests {
     }
 
     #[test]
-    fn grid_row_lists_grids_in_use_and_the_one_on_screen() {
+    fn the_bar_lists_each_displays_grids_and_one_free_grid() {
         let ws = |index: usize, windows: Vec<RuntimeWindowData>, active: bool| RuntimeWorkspaceData {
             grid_cell: Some(((index % 9) / 3, index % 3)),
             grid: Some(index / 9),
             is_active: active,
+            window_count: windows.len(),
             ..workspace(index, windows)
         };
         let tile = |id| window(id, rect(0.0, 0.0, 100.0, 100.0), false);
-        // Windows in grids 1 and 4, two of them in grid 4; grid 3 is on screen, empty.
-        let mut workspaces: Vec<_> = (0..45)
+        // Here: windows in grids 1 and 4; grid 3 is on screen, empty.
+        let here: Vec<_> = (0..45)
             .map(|index| match index {
                 4 => ws(index, vec![tile(1)], false),
                 27 | 30 => ws(index, vec![tile(index as u32)], false),
@@ -809,39 +831,32 @@ mod tests {
                 _ => ws(index, Vec::new(), false),
             })
             .collect();
-        let buttons = keep_grid_on_screen(&mut workspaces);
+        // There: grid 2 on screen.
+        let there: Vec<_> = (0..45).map(|index| ws(index, Vec::new(), index == 13)).collect();
+        let displays = [
+            ("a".to_owned(), "Studio".to_owned(), here.clone()),
+            ("b".to_owned(), "Built-in".to_owned(), there),
+        ];
+        let groups = bar_groups(&displays, "a");
+        let button = |grid, shown, new| BarButton { grid, shown, new };
+        assert_eq!(groups[0].name, "Studio");
         assert_eq!(
-            buttons,
+            groups[0].buttons,
             [
-                GridButton { grid: 0, on_screen: false, new: false },
-                GridButton { grid: 2, on_screen: true, new: false },
-                GridButton { grid: 3, on_screen: false, new: false },
-                GridButton { grid: 1, on_screen: false, new: true },
+                button(0, Shown::No, false),
+                button(2, Shown::Here, false),
+                button(3, Shown::No, false),
+                button(4, Shown::No, true),
             ],
-            "grid 2 is the first not in use"
+            "+ for grid 5, the first on no display, on this display's row"
         );
+        assert_eq!(groups[1].buttons, [button(1, Shown::Elsewhere, false)]);
+        assert_eq!(bar_groups(&displays, "b")[1].buttons.last(), Some(&button(4, Shown::No, true)));
+
+        let mut workspaces = here;
+        keep_grid_on_screen(&mut workspaces);
         assert_eq!(workspaces.len(), 9, "only the grid on screen");
         assert!(workspaces.iter().all(|ws| ws.grid == Some(2)));
-
-        let mut workspaces: Vec<_> = (0..45)
-            .map(|index| RuntimeWorkspaceData {
-                grid_elsewhere: index / 9 == 1,
-                ..ws(index, Vec::new(), index == 4)
-            })
-            .collect();
-        let buttons = keep_grid_on_screen(&mut workspaces);
-        assert_eq!(
-            buttons.last(),
-            Some(&GridButton { grid: 2, on_screen: false, new: true }),
-            "grid 2 is on another display"
-        );
-
-        let overview = CGSize::new(1600.0, 1000.0);
-        let (row, frames) = grid_button_frames(overview, 3);
-        assert!((row.mid().x - 800.0).abs() < 1e-9, "centered");
-        assert_eq!(frames.len(), 3);
-        assert!(frames[0].max().x < frames[1].origin.x);
-        assert!(frames.iter().all(|f| f.max().x <= row.size.width && f.max().y <= row.size.height));
     }
 
     #[test]

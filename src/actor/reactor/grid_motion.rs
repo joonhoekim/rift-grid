@@ -602,8 +602,6 @@ impl Reactor {
                     manager.hud = None;
                 }
             }
-            // The Overview's own; it never comes here.
-            Note::OverviewGone(_) => {}
             Note::Recapture(generation) => {
                 let send = self.grid_motion_send();
                 let manager = &self.grid_motion_manager;

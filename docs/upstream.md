@@ -17,16 +17,16 @@ New code lives in fork modules; upstream files only call into them.
 | `layout_engine/engine.rs` | Grid commands in `handle_command` and `handle_virtual_workspace_command`; the recent window list; the calls into `engine/departures.rs` (see below) |
 | `model/virtual_workspace.rs` | `grid_current`; the settings kept as `grid::effective_settings` (a workspace for every cell, named by grid and cell) in `new_with_config`, `plan_settings_names` and `apply_settings`; `remember_grid_cell` in `set_active_workspace`; `remap_grid_cells` in `remap_space`; app rules' `grid` through `rule_workspace` in `apply_app_rule_decision` |
 | `common/config/types.rs` | `grid_columns`, app rules' `grid`, `validate_grid`; grid fields in `MissionControlSettings`, whose `Default` is written out by hand |
-| `ui/mission_control.rs`, `actor/mission_control.rs` | The grid overview's two stages, gliding cards, and refresh on reactor broadcasts; in `sync_metal`, a grid card's preview frame (`card_image_frame`), the focused window's border (`preview_border`) and the canvas resized with its cell (`fit_canvas`); in the actor, a `GridZoom` event and one call that hands events to the zoomed overview (`actor/mission_control/grid_zoom.rs`) |
+| `ui/mission_control.rs`, `actor/mission_control.rs` | The grid overview's two stages, gliding cards, and refresh on reactor broadcasts; in `sync_metal`, a grid card's preview frame (`card_image_frame`), the focused window's border (`preview_border`) and the canvas resized with its cell (`fit_canvas`); the grid buttons' input first in `OverviewSession::input` (`grid_bar_input`) |
 | `ui/menu_bar.rs`, `actor/menu_bar.rs` | Grid maps and the grid entries of the Workspace menu; the grid fields in the settings preview's `Workspace` |
 | `actor/gesture.rs` | `ActionConfig::grid`; the grid's actions in `Settings` (first in `action_for`, and `consume` while they are on); `DeviceSession` keeps `settings` and `mode` in place of upstream's `alternate`, so a late finger can pick any action; a `Lifecycle::Grid` variant, and one call to `grid_swipe` for a grid action's swipe frames |
 | `sys/gesture.rs`, `actor/input.rs` | `Filter::vertical`: with a vertical grid swipe on, vertical Dock swipes (Mission Control, App Exposé) go through arbitration too |
 | `actor/input.rs` (gesture `configure`) | Gestures stay on while the Overview is open when the grid's are; `Control::set_overview` after `configure`, and `action_for` then gives only grid actions |
-| `actor/wm_controller.rs`, `actor/mission_control.rs` | `WmEvent::OverviewStep` passed on as `mission_control::Event::Step`, handled in `grid_zoom.rs` |
+| `actor/wm_controller.rs`, `actor/mission_control.rs` | `WmEvent::OverviewStep` passed on as `mission_control::Event::Step`, handled by `overview_step` |
 | `actor/reactor/gesture.rs` | `Lifecycle::Grid` goes to `grid_gestures.rs`; `gesture_space_active` is `pub(super)` |
 | `actor/wm_controller.rs` | The Overview closes on a space state update only when `grid_motion::screens_changed` says the displays or their Spaces changed |
 | `sys/mach.rs`, `sys/service.rs`, `common/config/types.rs`, `crates/rift-client/src/lib.rs`, `Cargo.toml`, `assets/Info.plist`, `rift.default.toml` | The fork's names (`crates/rift-protocol/src/names.rs`): the Mach service and launchd label, the binary looked up on `PATH`, the log paths, the config and data directories, the default layout folder, the `[[bin]]` names, the bundle id; clap's `name` in both binaries |
-| `Cargo.toml` | `objc2-screen-capture-kit`, which upstream dropped with its screenshot previews: the grid's slides and zoomed overview capture windows with it |
+| `Cargo.toml` | `objc2-screen-capture-kit`, which upstream dropped with its screenshot previews: the grid's slides capture windows with it |
 | `ui/settings/*` | A Window Borders category (also in `sidebar.rs`'s color match), the fork's Overview page in place of `interface::overview` (`screen_recording_status` made `pub(super)` for it), and their search entries; in `mod.rs`, one call that ends a field's editing on a click elsewhere or when the window goes to the back (`settings/editing.rs`), checked in `native_tests.rs` |
 
 ## Where merges conflict most
@@ -162,7 +162,7 @@ those hooks, and are useful upstream on their own. None has been proposed yet.
 - **A command to step the Overview's stages.** The reactor has no way to the
   Overview actor, so the fork added `WmEvent::OverviewStep`. A command for
   stepping out and in would serve keys, the CLI and gestures alike. The stages
-  themselves (the zoomed overview, Esc stepping) are the fork's, so this waits
+  themselves (Esc stepping) are the fork's, so this waits
   for the first item.
 
 ## Contributing back

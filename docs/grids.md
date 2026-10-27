@@ -36,8 +36,8 @@ N means one place whichever display the focus is on.
   grid that a display before it shows too is moved to the first grid on no
   display: the main display starts on grid 1, the next on grid 2.
 
-- **Handing a grid over**: in the zoomed overview, dragging a grid button onto
-  another display's group (or `move_grid_to_display`, `rift-grid-cli execute layout
+- **Handing a grid over**: in the overview, dragging a grid button onto
+  another display's row (or `move_grid_to_display`, `rift-grid-cli execute layout
   move-grid-to-display <N> --uuid <display>`) gives the grid to that display.
   Each cell goes as it is, its windows and layout, and the receiving display
   shows the grid at its current cell. If the giving display was showing it, it
@@ -106,13 +106,20 @@ shows it. Stepping through workspaces one by one is left out of that menu.
 ## Overview
 
 The overview shows the grid on screen and follows it as it changes: focus
-moves, windows that open or close, and grids that are switched to or filled. A row of grid buttons at the top lists
-the display's grids, those that have windows plus the one on screen, which is
-highlighted.
-Clicking a button, or pressing Alt+N while the overview is open, switches to that
-grid and the overview stays open on it. The last button, "+", is the first grid
-on no display yet. Dropping a window's tile on a button sends the window to that
-grid's current cell, as Alt+Ctrl+N does; the overview stays where it is.
+moves, windows that open or close, and grids that are switched to or filled.
+Its window previews are live.
+
+Under the menu bar, grid buttons list each display's grids, a row per display
+with its name: the grid shown (filled on this display, outlined on another)
+and those holding windows. This display's row ends in "+", the first grid on
+no display yet. The cells sit below the buttons.
+
+- Clicking a button, or pressing Alt+N while the overview is open, switches to
+  that grid and the overview stays open on it.
+- Dragging a button onto another display's row hands the grid to that display
+  (above); the overview stays open on the result.
+- Dropping a window's tile on a button sends the window to that grid's current
+  cell, as Alt+Ctrl+N does; the overview stays where it is.
 
 Stages: the overview opens on the active cell at `grid_zoom` with
 its neighbours around it; opening it again shows the whole grid, and a third time
@@ -126,28 +133,6 @@ from the edges; `"center"` centers the active cell every time.
 
 Each window's tile carries its app and title at its bottom left corner
 (`grid_labels`, on by default).
-
-`grid_style = "zoom"` shows the overview differently, on the display in use:
-the screen draws back to the same stages, each cell its wallpaper with captures
-of its windows, and comes in again to the cell chosen when it closes. Arrows and
-Tab move the focus as in the cards, and the overview follows it, along with
-windows that open or close and grids switched to. Pointing at a cell selects it;
-Return, a click or the overview key in the last stage goes to it. It moves with
-the slide's `[settings.ui.grid_motion]` duration and easing, and needs Screen
-Recording access; without it, or outside a grid, the cards show instead. While
-it is open, its windows are captured again every `live_preview_interval_ms`
-(0 captures each once); the cards' previews are live without it.
-`"cards"` (default) is the overview above.
-
-The zoomed overview has a row of grid buttons at the top, a group per display
-with a line between groups: the overview's display first, then each other
-display. A group lists the grids on its display: the one shown (filled on this
-display, outlined on another) and those holding windows; the first group ends
-in "+", the first grid on no display. Clicking a button shows that grid on its
-display; the overview stays open, following it when it is this display's.
-Dragging a button onto another group hands the grid to that display (above),
-and the overview stays open on the result. Alt+N while the overview is open
-shows the grid on its display without moving the focus there.
 
 The overview closes when a display comes or goes, moves, or shows another
 Space; other display updates, such as windows moving between displays, leave it
@@ -177,9 +162,9 @@ open.
 - `hud`: a small map of the grid, its number beside it, for `hud_ms` (700)
   after the last move; the lit cell glides from the cell left to the cell
   arrived at.
-- `full_resolution`: capture windows for the slide and the zoomed overview at
-  the display's resolution rather than one pixel a point (default). Twice as
-  sharp on a Retina display, for four times the pixels to capture and hold.
+- `full_resolution`: capture windows for the slide at the display's
+  resolution rather than one pixel a point (default). Twice as sharp on a
+  Retina display, for four times the pixels to capture and hold.
 
 A move made while a slide is still playing carries the slide on from where it
 has got to.
