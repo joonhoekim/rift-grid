@@ -107,7 +107,10 @@ shows it. Stepping through workspaces one by one is left out of that menu.
 
 The overview shows the grid on screen and follows it as it changes: focus
 moves, windows that open or close, and grids that are switched to or filled.
-Its window previews are live.
+Its window previews are live. They are captured at most 1024×768 but for the
+selected window; `[settings.ui.mission_control] full_resolution = true` captures
+each at the size it shows at, at the display's resolution, and raises cgs's
+capture memory limits for it (`cgs/`, below).
 
 Under the menu bar, grid buttons list each display's grids, a row per display
 with its name: the grid shown (filled on this display, outlined on another)

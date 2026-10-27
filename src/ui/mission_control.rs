@@ -1017,6 +1017,7 @@ impl OverviewSession {
         settings: &MissionControlSettings,
         cache: &mut Option<PreviewRenderers>,
     ) -> Option<Self> {
+        set_capture_limits(settings);
         let _transaction = LayerTransaction::disabled().flush_on_commit();
         let mut displays = Vec::new();
         let mut active = 0;
@@ -2013,7 +2014,7 @@ impl OverviewSession {
                                     (p.frame.size.height * display.scale).ceil().max(1.) as usize,
                                 )
                             } else {
-                                capture_size(p.frame.size, display.scale)
+                                card_capture_size(p.frame.size, display.scale, display.look)
                             };
                             p.resolution = cgs::CaptureResolution::Thumbnail { width, height };
                             display.metal_updates.push(preview_source(p));
@@ -2075,7 +2076,7 @@ impl OverviewSession {
                             (frame.size.height * display.scale).ceil().max(1.) as usize,
                         )
                     } else {
-                        capture_size(frame.size, display.scale)
+                        card_capture_size(frame.size, display.scale, display.look)
                     };
                     p.resolution = cgs::CaptureResolution::Thumbnail { width, height };
                     if !card_visible(display.bounds.size, ws.frame, w.frame) {

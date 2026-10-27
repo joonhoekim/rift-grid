@@ -1140,6 +1140,17 @@ pub struct MissionControlSettings {
     /// Kept so that configs which set it still load.
     #[setting(label = "Live preview interval", unit = "ms")]
     pub live_preview_interval_ms: f64,
+    #[serde(default)]
+    /// Capture every preview at the size it shows at, at the display's
+    /// resolution, rather than at most 1024×768 for all but the selected
+    /// window: sharp previews, for more memory and capture work while the
+    /// Overview is open (rift-grid only).
+    #[setting(
+        label = "Full-resolution previews",
+        enabled_by = "window_previews",
+        aliases = "quality sharp retina resolution blurry soft previews capture"
+    )]
+    pub full_resolution: bool,
     #[serde(default = "default_mission_control_grid_gap")]
     /// Space between the cells of a workspace grid in Overview, as a fraction of the
     /// display's shorter side, so it looks the same at any size and scale.
@@ -1213,6 +1224,7 @@ impl Default for MissionControlSettings {
             fade_enabled: false,
             fade_duration_ms: 0.0,
             live_preview_interval_ms: 0.0,
+            full_resolution: false,
             grid_gap: default_mission_control_grid_gap(),
             grid_labels: true,
             grid_fit: false,

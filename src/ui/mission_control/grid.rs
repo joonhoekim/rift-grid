@@ -118,6 +118,27 @@ pub(super) fn grid_bar_groups(reactor: &ReactorHandle, here: &str) -> Vec<BarGro
     bar_groups(&displays, here)
 }
 
+/// The size to capture a card's preview at: at most 1024×768, or with full
+/// resolution the size it shows at on the display.
+pub(super) fn card_capture_size(size: CGSize, scale: f64, look: GridLook) -> (usize, usize) {
+    if !look.full {
+        return capture_size(size, scale);
+    }
+    ((size.width * scale).ceil().max(1.0) as usize, (size.height * scale).ceil().max(1.0) as usize)
+}
+
+/// cgs's capture limits for the Overview. Full-resolution previews need far
+/// more than it allows by default: a window half a 5K display wide is past its
+/// 256 MB for one stream.
+pub(super) fn set_capture_limits(settings: &MissionControlSettings) {
+    const MB: usize = 1024 * 1024;
+    if settings.full_resolution {
+        cgs::set_capture_limits(4096 * MB, 2048 * MB, 768 * MB);
+    } else {
+        cgs::set_capture_limits(512 * MB, 256 * MB, 256 * MB);
+    }
+}
+
 /// Rows and columns when the workspaces form a grid.
 pub(super) fn grid_shape(workspaces: &[RuntimeWorkspaceData]) -> Option<(usize, usize)> {
     workspaces
@@ -151,6 +172,8 @@ pub(super) struct GridLook {
     /// The whole grid is the only stage.
     fit: bool,
     follow: GridFollow,
+    /// Previews at the size they show at, full resolution.
+    full: bool,
 }
 
 impl GridLook {
@@ -166,6 +189,7 @@ impl GridLook {
             },
             fit: settings.grid_fit,
             follow: settings.grid_follow,
+            full: settings.full_resolution,
         }
     }
 
@@ -759,6 +783,7 @@ mod tests {
             stage: GridStage::Whole,
             fit: false,
             follow: GridFollow::Center,
+            full: false,
         };
         let gap = look.gap_px(display.size);
         assert_eq!(gap, 40.0, "a fraction of the shorter side");
@@ -869,6 +894,7 @@ mod tests {
             stage: GridStage::Cell,
             fit: false,
             follow: GridFollow::Reveal,
+            full: false,
         };
         let camera = |camera, active| follow_camera(camera, active, display, display, look);
         // Opening: on the active cell.
@@ -948,6 +974,7 @@ mod tests {
             stage: GridStage::Cell,
             fit: false,
             follow: GridFollow::Center,
+            full: false,
         };
         let frames = |workspaces: &[RuntimeWorkspaceData], look| {
             project_grid(display, overview, workspaces, grid_shape(workspaces).unwrap(), look)

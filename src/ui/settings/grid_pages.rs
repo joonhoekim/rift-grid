@@ -16,7 +16,7 @@ pub(super) fn overview(ui: Ui, model: &Rc<Model>) -> Page {
     f.tooltips = true;
     let visibility = f.fields(
         Section::new(&ui, "Workspaces"),
-        &["enabled", "show_empty_workspaces", "window_previews"],
+        &["enabled", "show_empty_workspaces", "window_previews", "full_resolution"],
         |s| &s.settings.ui.mission_control,
         |s| &mut s.settings.ui.mission_control,
     );
