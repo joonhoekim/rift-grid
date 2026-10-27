@@ -47,6 +47,13 @@ N means one place whichever display the focus is on.
 Two displays can show the same number only when both hold windows in it, as
 state from before this model may.
 
+When rift-grid restarts, windows go back to their cells and each display
+shows the cell it showed. rift-grid keeps both in `~/.rift-grid/cells.json`,
+written whenever they change, so a crash leaves it as current as a clean exit.
+Windows are known by their process and window number, which hold for the login
+session; after a reboot nothing matches and windows start in the shown cell.
+The arrangement inside a cell is not kept: its windows are tiled again.
+
 ## Moving
 
 | Key (seed config) | Command | What it does |

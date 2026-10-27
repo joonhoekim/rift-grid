@@ -228,6 +228,7 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
         eprintln!("Could not apply workspace settings to restored layout: {error}");
         process::exit(1);
     }
+    layout.load_cells();
     let (input_tx, input_rx) = rift_wm::actor::channel();
     let (menu_tx, menu_rx) = rift_wm::actor::channel();
     let (stack_line_tx, stack_line_rx) = rift_wm::actor::channel();

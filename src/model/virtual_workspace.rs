@@ -355,6 +355,10 @@ pub struct WorkspaceStore {
     /// Each grid's current cell, per display.
     #[serde(skip)]
     grid_current: HashMap<(SpaceId, usize), VirtualWorkspaceId>,
+    /// The workspace each Space showed when rift last ran, by its place, to
+    /// show again when the Space's workspaces are made (`engine/cells.rs`).
+    #[serde(skip)]
+    pub(crate) shown_before: HashMap<SpaceId, usize>,
     #[serde(skip)]
     pub layout_settings: LayoutSettings,
 }
@@ -677,6 +681,7 @@ impl WorkspaceStore {
             active_workspace_per_space: HashMap::default(),
             settings: config.clone(),
             grid_current: HashMap::default(),
+            shown_before: HashMap::default(),
             layout_settings: layout_settings.clone(),
         }
     }
@@ -932,7 +937,11 @@ impl WorkspaceStore {
             return;
         }
         let count = self.settings.default_workspace_count.clamp(1, MAX_WORKSPACES);
-        let selected = self.settings.default_workspace.min(count - 1);
+        let selected = self
+            .shown_before
+            .remove(&space)
+            .filter(|&index| index < count)
+            .unwrap_or(self.settings.default_workspace.min(count - 1));
         for index in 0..count {
             let id = self.append_default_workspace(space);
             if index == selected {

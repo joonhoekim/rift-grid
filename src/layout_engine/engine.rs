@@ -23,6 +23,7 @@ use crate::model::{
 };
 use crate::sys::screen::SpaceId;
 
+mod cells;
 mod departures;
 mod grid;
 mod persistence;
@@ -1599,6 +1600,7 @@ impl LayoutEngine {
 
         // Minimizing clears the assignment; a returning window goes back to the
         // workspace it left.
+        self.ready_remembered_cell(wid, space);
         let assigned = self.workspaces().workspace_for_window(&window_store, space, wid).or_else(|| {
             self.departed_workspace(wid, space).filter(|&workspace| {
                 self.workspaces.assign_window_to_workspace(window_store, space, wid, workspace)
@@ -3456,6 +3458,7 @@ impl LayoutEngine {
         };
         // A window returning from minimized, hidden or fullscreen goes back to
         // the workspace it left, like a persistence match below.
+        self.ready_remembered_cell(window_id, space);
         let returning = self.departed_workspace(window_id, space).is_some_and(|workspace| {
             self.workspaces
                 .assign_window_to_workspace(window_store, space, window_id, workspace)

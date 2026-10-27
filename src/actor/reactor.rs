@@ -1335,6 +1335,7 @@ impl Reactor {
         self.retire_presentations();
         self.drag_manager.sync_motion_gate();
         self.update_borders(visibility_changed);
+        self.layout_manager.layout_engine.save_cells(&self.state.windows);
     }
 
     fn dispatch_workflow(&mut self, mut event: Event) -> anyhow::Result<EventOutcome> {

@@ -30,6 +30,8 @@ pub(super) struct Departures {
     /// left.
     snapshots: HashMap<VirtualWorkspaceId, LayoutSystemKind>,
     sequence: u64,
+    /// The cells windows were in when rift last ran (`cells.rs`).
+    pub(super) cells: super::cells::Cells,
 }
 
 #[derive(Debug)]
@@ -115,8 +117,10 @@ impl LayoutEngine {
         wid: WindowId,
         space: SpaceId,
     ) -> Option<VirtualWorkspaceId> {
-        let departure = self.departures.windows.get(&wid)?;
-        (departure.space == space).then_some(departure.workspace)
+        match self.departures.windows.get(&wid) {
+            Some(departure) => (departure.space == space).then_some(departure.workspace),
+            None => self.remembered_cell(wid, space),
+        }
     }
 
     /// Forget `wid` once it is placed on the space it left. While in native
@@ -128,6 +132,7 @@ impl LayoutEngine {
     }
 
     fn forget_departure(&mut self, wid: WindowId) {
+        self.departures.cells.forget(wid);
         if let Some(departure) = self.departures.windows.remove(&wid) {
             self.drop_unused_snapshot(departure.workspace);
         }
