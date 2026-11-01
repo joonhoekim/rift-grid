@@ -222,6 +222,12 @@ cargo build --release --bin rift-grid --bin rift-grid-cli
 rift-grid service restart   # or: launchctl kickstart -k gui/$(id -u)/org.nixos.rift-grid
 ```
 
+While working on the source, `scripts/install-dev.sh` does the build, the signed
+install and the restart in one step, from the checkout it lives in. The
+certificate is `<user> local codesign` unless `MAC_SIGN_ID` names another. An
+installer that rebuilds only when the source commit changed should not skip the
+next run: the script removes `~/.local/bin/.rift-grid.commit`.
+
 Unsigned builds need both permissions granted again after each update: remove
 the old `rift-grid` entry in each list with the minus button, add the new binary,
 and restart it.
