@@ -37,6 +37,7 @@ What subline set out to do, and this fork does on rift:
 | Menu bar 3x3 maps, one per grid in use | `ui/menu_bar/grid_map.rs` | `[settings.ui.menu_bar] grid_maps` |
 | Window borders: sliding focused border, glow, hidden under the windows above | `ui/borders.rs`, `actor/reactor/borders.rs` | `[settings.ui.borders]`, `common/config/borders.rs` |
 | Settings app pages | `ui/settings/grid_pages.rs` | — |
+| Drag and drop as in VS Code's editor groups: the tile under the pointer, five zones, a preview of where the window lands; replaces upstream's targeting (see [docs/upstream.md](docs/upstream.md)) | `actor/drag/dock.rs` | `[settings.drag_drop] drop_zone_fraction` |
 
 The fork's binaries, Mach service, launchd label, bundle id and directories have
 names of their own (`rift-grid`, `rift-grid-cli`, `io.github.joonhoekim.rift-grid`,

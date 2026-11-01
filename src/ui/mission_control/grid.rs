@@ -325,7 +325,6 @@ fn project_windows(
     let scene = crate::actor::drag::DragScene {
         action_override: (ws.layout_mode == "stack")
             .then_some(crate::layout_engine::WindowDropAction::Swap),
-        source_neighbors: [false; 4],
         targets: windows
             .iter()
             .rev()

@@ -287,7 +287,6 @@ fn project(
             let scene = crate::actor::drag::DragScene {
                 action_override: (ws.layout_mode == "stack")
                     .then_some(crate::layout_engine::WindowDropAction::Swap),
-                source_neighbors: [false; 4],
                 targets: windows
                     .iter()
                     .rev()
@@ -1345,6 +1344,7 @@ impl OverviewSession {
         set_preview_border(&ghost.image, 2.5);
         let indicator = layer(CGRect::ZERO, d.scale);
         indicator.setBackgroundColor(Some(&color(0.35, 0.65, 1.0, 0.8)));
+        indicator.setBorderColor(Some(&color(0.35, 0.65, 1.0, 0.8)));
         indicator.setCornerRadius(2.0);
         self.drag = Some(OverviewDrag {
             window: data.id,
@@ -1442,6 +1442,8 @@ impl OverviewSession {
                 (backdrop.size.width - 32.0).max(1.0),
                 2.0,
             );
+            // A swap outlines the whole tile; anything else is a filled bar.
+            let mut outline = false;
             if drag.floating {
                 intent.frame = Some(floating_drop_frame(
                     d.info.frame,
@@ -1459,7 +1461,13 @@ impl OverviewSession {
                     2.0,
                 );
             } else if let Some(target) =
-                crate::actor::drag::hit_test_projected(&ws.scene, drag.window, p)
+                crate::actor::drag::hit_test_projected(&ws.scene, drag.window, p).filter(|t| {
+                    // Swapping with a window of another cell would leave it in this
+                    // cell, not send it back; the middle of a tile there just moves
+                    // the window into the cell, as its empty space does.
+                    t.action != crate::layout_engine::WindowDropAction::Swap
+                        || ws.scene.targets.iter().any(|w| w.window == drag.window)
+                })
             {
                 let action = target.action;
                 intent.target = Some((target.window, action));
@@ -1478,6 +1486,7 @@ impl OverviewSession {
                     crate::layout_engine::WindowDropAction::Insert(
                         crate::layout_engine::Direction::Up,
                     ) => indicator.size.height = 4.0,
+                    crate::layout_engine::WindowDropAction::Swap => outline = true,
                     _ => {
                         indicator.origin.y += indicator.size.height - 4.0;
                         indicator.size.height = 4.0;
@@ -1486,6 +1495,10 @@ impl OverviewSession {
             }
             drag.intent = Some(intent);
             drag.indicator.setFrame(indicator);
+            drag.indicator.setBackgroundColor(
+                (!outline).then(|| color(0.35, 0.65, 1.0, 0.8)).as_deref(),
+            );
+            drag.indicator.setBorderWidth(if outline { 3.0 } else { 0.0 });
             drag.indicator.setHidden(false);
         }
     }

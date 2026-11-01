@@ -35,26 +35,6 @@ pub use rift_protocol::LayoutCommand;
 const SMART_FLOATING_WIDTH_RATIO: f64 = 0.8;
 const SMART_FLOATING_HEIGHT_RATIO: f64 = 0.93;
 
-#[derive(Clone, Copy)]
-pub(crate) struct DropPreview {
-    pub frame: CGRect,
-    pub same_slot: bool,
-}
-
-impl DropPreview {
-    pub(crate) fn action(
-        self,
-        action: crate::layout_engine::WindowDropAction,
-        center: crate::common::config::MouseDropAction,
-    ) -> crate::layout_engine::WindowDropAction {
-        if self.same_slot && matches!(action, crate::layout_engine::WindowDropAction::Insert(_)) {
-            center.into()
-        } else {
-            action
-        }
-    }
-}
-
 fn interval_gap(a_min: f64, a_max: f64, b_min: f64, b_max: f64) -> f64 {
     (b_min - a_max).max(a_min - b_max).max(0.0)
 }
@@ -313,12 +293,9 @@ impl LayoutEngine {
                 if different {
                     tree.add_window_after_selection(layout, drop.window);
                 }
-                let before = tree.window_slot(layout, drop.window);
-                if !tree.apply_window_drop(layout, drop.window, target, action)
-                    || (!different
-                        && before.is_some()
-                        && before == tree.window_slot(layout, drop.window))
-                {
+                // A drop that keeps the window's slot can still change the layout
+                // (an insert re-splits evenly), as a drag on the screen does.
+                if !tree.apply_window_drop(layout, drop.window, target, action) {
                     return false;
                 }
                 tree.select_window(layout, drop.window);
@@ -395,27 +372,24 @@ impl LayoutEngine {
         space: SpaceId,
         source: WindowId,
         target: WindowId,
-        target_frame: CGRect,
         action: crate::layout_engine::WindowDropAction,
         screen: CGRect,
         display_uuid: Option<&str>,
         stack_line: &crate::common::config::StackLineSettings,
-    ) -> Option<DropPreview> {
-        if action == crate::layout_engine::WindowDropAction::Swap {
-            return (source != target).then_some(DropPreview {
-                frame: target_frame,
-                same_slot: false,
-            });
+    ) -> Option<CGRect> {
+        // Every action, Swap included, is run on a copy of the layout: a swap can
+        // move more than the two windows (the scrolling layout scrolls to it).
+        if source == target {
+            return None;
         }
         let Some((workspace, layout)) = self.workspaces.active_layout_for_space(space) else {
             return None;
         };
         let gaps = self.layout_settings.gaps.effective_for_display(display_uuid);
         let mut system = self.workspaces[workspace].layout_system.preview_clone()?;
-        let before = system.window_slot(layout, source)?;
         system.apply_window_drop(layout, source, target, action).then_some(())?;
         system.prepare_layout(layout, screen, &self.window_layout_constraints, &gaps);
-        let frame = system
+        system
             .calculate_layout(
                 layout,
                 screen,
@@ -425,30 +399,7 @@ impl LayoutEngine {
                 stack_line.reserve(),
             )
             .into_iter()
-            .find_map(|(window, frame)| (window == source).then_some(frame))?;
-        Some(DropPreview {
-            frame,
-            same_slot: system.window_slot(layout, source)? == before,
-        })
-    }
-
-    pub(crate) fn source_move_neighbors(&self, space: SpaceId, source: WindowId) -> [bool; 4] {
-        let Some((workspace, layout)) = self.workspaces.active_layout_for_space(space) else {
-            return [false; 4];
-        };
-        let baseline = &self.workspaces[workspace].layout_system;
-        let directions = [
-            Direction::Left,
-            Direction::Right,
-            Direction::Up,
-            Direction::Down,
-        ];
-        directions.map(|direction| {
-            let Some(mut system) = baseline.preview_clone() else {
-                return false;
-            };
-            system.select_window(layout, source) && system.move_selection(layout, direction)
-        })
+            .find_map(|(window, frame)| (window == source).then_some(frame))
     }
 
     /// Resolve an optional workspace index and snapshot its layout for read-only consumers.
@@ -6317,10 +6268,9 @@ mod tests {
             crate::layout_engine::WindowDropAction::Insert(Direction::Left),
         ));
         assert!(engine.relocate_window_with_drop(&mut store, &drop));
-        assert!(
-            !engine.relocate_window_with_drop(&mut store, &drop),
-            "same position is a no-op"
-        );
+        // Dropping again where it already is is taken, as a drag on the screen
+        // takes it: keeping the slot does not mean nothing changes.
+        assert!(engine.relocate_window_with_drop(&mut store, &drop));
     }
 
     #[test]

@@ -249,31 +249,3 @@ fn drop_slot_identity_uses_topology_in_traditional_and_bsp() {
     let new_frame = calculated_source(&same, layout, w(2));
     assert!(new_frame.size.width > resized_frame.size.width * 2.0);
 }
-
-#[test]
-fn same_slot_edges_use_the_configured_center_action() {
-    use crate::common::config::MouseDropAction;
-    use crate::layout_engine::engine::DropPreview;
-
-    let same_slot = DropPreview {
-        frame: screen(),
-        same_slot: true,
-    };
-    let insert = WindowDropAction::Insert(Direction::Right);
-    assert_eq!(
-        same_slot.action(insert, MouseDropAction::Swap),
-        WindowDropAction::Swap
-    );
-    assert_eq!(
-        same_slot.action(insert, MouseDropAction::Stack),
-        WindowDropAction::Stack
-    );
-    assert_eq!(
-        DropPreview {
-            frame: screen(),
-            same_slot: false
-        }
-        .action(insert, MouseDropAction::Swap),
-        insert
-    );
-}

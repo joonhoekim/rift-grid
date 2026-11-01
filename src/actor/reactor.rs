@@ -4373,41 +4373,24 @@ impl Reactor {
         interaction_workflow::build_drag_scene(&self.state, &self.layout_manager, source, space)
     }
 
+    /// Ask the layout where the window would land for the zone under the pointer.
     fn resolve_drag_preview(&mut self) {
         let Some(source) = self.drag_manager.actor.source() else {
             return;
         };
-        while let Some(mut intent) = self.drag_manager.actor.intent() {
-            if intent.window == source.window
-                && !matches!(intent.action, crate::layout_engine::WindowDropAction::Move(_))
-            {
-                self.drag_manager.actor.set_preview(intent, Some(source.origin_frame));
-                break;
-            }
-            let preview = loop {
-                let preview = self.space_state.screen_by_space(intent.space).and_then(|screen| {
-                    self.layout_manager.layout_engine.drop_preview_frame(
-                        intent.space,
-                        source.window,
-                        intent.window,
-                        intent.frame,
-                        intent.action,
-                        screen.frame,
-                        screen.display_uuid_opt(),
-                        &self.config.settings.ui.stack_line,
-                    )
-                });
-                let Some(result) = preview else { break None };
-                let action =
-                    result.action(intent.action, self.config.settings.drag_drop.drop_action);
-                if action == intent.action {
-                    break Some(result);
-                }
-                intent.action = action;
-            };
-            if !self.drag_manager.actor.set_preview(intent, preview.map(|result| result.frame)) {
-                break;
-            }
+        if let Some(intent) = self.drag_manager.actor.intent() {
+            let preview = self.space_state.screen_by_space(intent.space).and_then(|screen| {
+                self.layout_manager.layout_engine.drop_preview_frame(
+                    intent.space,
+                    source.window,
+                    intent.window,
+                    intent.action,
+                    screen.frame,
+                    screen.display_uuid_opt(),
+                    &self.config.settings.ui.stack_line,
+                )
+            });
+            self.drag_manager.actor.set_preview(intent, preview);
         }
         self.drag_manager.sync_preview();
     }
@@ -4427,7 +4410,8 @@ impl Reactor {
         {
             return;
         }
-        let Some(space) = source.current_space else { return };
+        // Targets exist only in the space the drag started in (`places_tile`).
+        let Some(space) = source.origin_space else { return };
         let scene = self.drag_scene(source.window, space);
         self.drag_manager.actor.replace_scene(scene);
         self.resolve_drag_preview();

@@ -60,6 +60,43 @@ These could shrink the fork's footprint in upstream files. None is a defect.
 - `reactor.rs` has seven separate hook calls. One `Event::Fork` variant with a
   hook before and after handling would make it two.
 
+## Drag and drop: replaced rather than hooked
+
+Here the fork does depart from the rule above. Upstream's targeting for dragging
+a tile into place had grown layers (stickiness at zone edges, the nearest tile
+across gaps, keyboard-style moves off the dragged tile's own edges, retrying the
+next candidate when the layout refused one, turning an insert that kept its slot
+into the center action), and the fork replaced it with the model of VS Code's
+editor groups, in every layout:
+
+- Only the tile under the pointer is a target, in one of five zones
+  (`classify_zone`): an edge inserts on that side, the middle swaps (always;
+  `drag_drop.drop_action` is still parsed but nothing reads it). A tile owns its
+  left and top edges only. Over the dragged window's own tile there is no
+  target, only the home preview. The targeting is `actor/drag/dock.rs`.
+- The preview is where the window will land: `drop_preview_frame` runs every
+  action, Swap included, on a copy of the layout. A refused drop shows nothing
+  and is not asked again while the pointer stays in that zone
+  (`TargetState::Rejected`).
+- The Overview uses the same targeting (`hit_test_projected`). It swaps only
+  within a cell, outlining the tile; the middle of a tile in another cell moves
+  the window into that cell, as the cell's empty space does. A drop that keeps
+  the window's slot is taken, as on the screen.
+
+Upstream's code for all this is deleted, not bypassed, in `actor/drag.rs`,
+`model/drag.rs`, `actor/reactor.rs` (`resolve_drag_preview`,
+`refresh_active_drag_scene`, which builds the scene for the space the drag began
+in), `layout_engine/engine.rs` (`DropPreview`, `source_move_neighbors`, the
+Overview's same-slot check) and `ui/mission_control.rs` (`move_drag`). When a
+merge conflicts there, keep the fork's side and carry over only what upstream
+fixed. `WindowDropAction::Move` is no longer produced by a drag; the layouts
+still handle it.
+
+Left as upstream has them: in the scrolling layout a swap carries each window's
+height weight into the other column, so after a vertical resize a window can
+come out 0 px tall (the preview now shows it); master_stack takes inserts that
+its next normalization undoes.
+
 ## Upstream behavior that meets the grid
 
 - `next_workspace`/`prev_workspace`, and the trackpad swipes that use them, walk
