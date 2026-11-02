@@ -11,6 +11,10 @@
 //! the login session: after a reboot nothing matches, and windows go where a
 //! new window would, as before. A remembered cell is used as a departure is
 //! (`departures.rs`), for a window that comes with no assignment.
+//!
+//! Each cell's layouts are kept too. When the first of its windows comes back,
+//! they are put back with all its windows departed, so that each returns to
+//! its place and size whatever order the apps are found in.
 
 use std::path::PathBuf;
 
@@ -19,6 +23,9 @@ use serde::{Deserialize, Serialize};
 use super::LayoutEngine;
 use crate::actor::app::WindowId;
 use crate::common::collections::HashMap;
+use crate::common::config::LayoutMode;
+use crate::layout_engine::LayoutSystemKind;
+use crate::layout_engine::workspaces::WorkspaceLayoutState;
 use crate::model::WindowStore;
 use crate::model::virtual_workspace::VirtualWorkspaceId;
 use crate::sys::screen::SpaceId;
@@ -30,6 +37,33 @@ struct Saved {
     windows: Vec<Entry>,
     #[serde(default)]
     shown: Vec<Shown>,
+    #[serde(default)]
+    layouts: Vec<CellLayout>,
+}
+
+/// A cell's layouts: a `Layout` as JSON text, so that comparing what is
+/// saved with what is there costs a string comparison.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct CellLayout {
+    space: u64,
+    index: usize,
+    layout: String,
+}
+
+/// A workspace's layouts: its layout system and which of its layouts is
+/// active, in the mode they were made for.
+#[derive(Serialize)]
+struct LayoutRef<'a> {
+    mode: LayoutMode,
+    system: &'a LayoutSystemKind,
+    state: &'a WorkspaceLayoutState,
+}
+
+#[derive(Deserialize)]
+struct Layout {
+    mode: LayoutMode,
+    system: LayoutSystemKind,
+    state: WorkspaceLayoutState,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -51,6 +85,8 @@ struct Entry {
 pub(super) struct Cells {
     /// Windows not seen yet since rift started, and where they were.
     remembered: HashMap<WindowId, (SpaceId, usize)>,
+    /// Cells' layouts not put back yet, by Space and place.
+    layouts: HashMap<(SpaceId, usize), String>,
     /// What the file holds.
     saved: Saved,
 }
@@ -82,6 +118,11 @@ impl LayoutEngine {
             .windows
             .iter()
             .filter_map(|e| Some((window_id(e.pid, e.window)?, (SpaceId::new(e.space), e.index))))
+            .collect();
+        cells.layouts = saved
+            .layouts
+            .iter()
+            .map(|cell| ((SpaceId::new(cell.space), cell.index), cell.layout.clone()))
             .collect();
         cells.saved = saved;
     }
@@ -140,7 +181,39 @@ impl LayoutEngine {
             .collect();
         shown.sort_unstable();
         shown.dedup_by_key(|s| s.space);
-        let saved = Saved { windows: entries, shown };
+        // The layouts of cells holding windows, and those not put back yet.
+        let mut occupied: Vec<(SpaceId, usize)> = assigned.values().copied().collect();
+        occupied.sort_unstable();
+        occupied.dedup();
+        let mut layouts: Vec<CellLayout> = occupied
+            .iter()
+            .filter_map(|&(space, index)| {
+                let workspace = &workspaces[*workspaces.workspace_ids(space).get(index)?];
+                if matches!(workspace.layout_system, LayoutSystemKind::Floating(_)) {
+                    return None;
+                }
+                let layout = serde_json::to_string(&LayoutRef {
+                    mode: workspace.layout_mode,
+                    system: &workspace.layout_system,
+                    state: &workspace.layout_state,
+                })
+                .ok()?;
+                Some(CellLayout { space: space.get(), index, layout })
+            })
+            .collect();
+        layouts.extend(
+            cells
+                .layouts
+                .iter()
+                .filter(|(cell, _)| occupied.binary_search(cell).is_err())
+                .map(|(&(space, index), layout)| CellLayout {
+                    space: space.get(),
+                    index,
+                    layout: layout.clone(),
+                }),
+        );
+        layouts.sort_unstable_by_key(|cell| (cell.space, cell.index));
+        let saved = Saved { windows: entries, shown, layouts };
         if saved == cells.saved {
             return None;
         }
@@ -153,6 +226,50 @@ impl LayoutEngine {
     pub(super) fn ready_remembered_cell(&mut self, wid: WindowId, space: SpaceId) {
         if self.departures.cells.remembered.get(&wid).is_some_and(|&(was, _)| was == space) {
             self.workspaces.ensure_space_initialized(space);
+            self.put_back_layouts(space);
+        }
+    }
+
+    /// Put back the kept layouts of `space`'s cells, with their remembered
+    /// windows departed (`install_departed_layouts`), once its workspaces are
+    /// made: when the Space is exposed, before any window comes, or when a
+    /// window remembered there comes first. A layout made for another mode
+    /// than its cell's, or that does not read, is dropped.
+    pub(super) fn put_back_layouts(&mut self, space: SpaceId) {
+        let cells: Vec<usize> = self
+            .departures
+            .cells
+            .layouts
+            .keys()
+            .filter(|(was, _)| *was == space)
+            .map(|&(_, index)| index)
+            .collect();
+        for index in cells {
+            let Some(layout) = self.departures.cells.layouts.remove(&(space, index)) else {
+                continue;
+            };
+            let Some(&workspace) = self.workspaces.workspace_ids(space).get(index) else {
+                continue;
+            };
+            let layout = match serde_json::from_str::<Layout>(&layout) {
+                Ok(layout) => layout,
+                Err(error) => {
+                    tracing::warn!(%error, ?space, index, "Unreadable cell layout; tiling anew");
+                    continue;
+                }
+            };
+            if self.workspaces[workspace].layout_mode != layout.mode {
+                continue;
+            }
+            let away: Vec<WindowId> = self
+                .departures
+                .cells
+                .remembered
+                .iter()
+                .filter(|&(_, &cell)| cell == (space, index))
+                .map(|(&wid, _)| wid)
+                .collect();
+            self.install_departed_layouts(workspace, layout.system, layout.state, &away);
         }
     }
 
@@ -182,6 +299,7 @@ mod tests {
     use objc2_core_foundation::CGSize;
 
     use super::*;
+    use crate::layout_engine::LayoutSystem;
     use crate::common::config::{LayoutSettings, VirtualWorkspaceSettings};
     use crate::layout_engine::LayoutEvent;
     use crate::layout_engine::engine::WindowLayoutInfo;
@@ -253,11 +371,117 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    const SCREEN: objc2_core_foundation::CGRect = objc2_core_foundation::CGRect {
+        origin: objc2_core_foundation::CGPoint { x: 0.0, y: 0.0 },
+        size: CGSize { width: 1200.0, height: 800.0 },
+    };
+
+    fn bsp_engine(space: SpaceId) -> (LayoutEngine, WindowStore) {
+        let settings = VirtualWorkspaceSettings { grid_columns: 3, ..Default::default() };
+        let layout = LayoutSettings { mode: crate::common::config::LayoutMode::Bsp, ..Default::default() };
+        let mut engine = LayoutEngine::new(&settings, &layout, None);
+        let mut store = WindowStore::default();
+        let _ = engine.handle_event(&mut store, LayoutEvent::SpaceExposed(space, SCREEN.size));
+        (engine, store)
+    }
+
+    fn frames(engine: &mut LayoutEngine, space: SpaceId) -> Vec<(WindowId, objc2_core_foundation::CGRect)> {
+        let gaps = LayoutSettings::default().gaps;
+        let mut frames = engine.calculate_layout(space, SCREEN, &gaps, Default::default());
+        frames.sort_by_key(|(window, _)| (window.pid, window.idx));
+        frames
+    }
+
+    /// A rift restarted by an install tiled each cell's windows again in the
+    /// order it found them, at even splits, though they came back to the
+    /// right cells.
+    #[test]
+    fn a_restarted_rift_arranges_a_cell_as_it_was() {
+        let space = SpaceId::new(7);
+        let (a, b, c) = (WindowId::new(10, 1), WindowId::new(10, 2), WindowId::new(11, 3));
+        let path = std::env::temp_dir().join(format!("rift-grid-cells-l-{}.json", std::process::id()));
+
+        let (mut before, mut store) = bsp_engine(space);
+        observe(&mut before, &mut store, space, &[a, b, c]);
+        let _ = before.handle_event(&mut store, LayoutEvent::WindowFocused(space, a));
+        let _ = before.handle_command(
+            &mut store,
+            Some(space),
+            &[space],
+            &HashMap::default(),
+            crate::layout_engine::LayoutCommand::ResizeWindowBy { amount: 0.2 },
+        );
+        let arranged = frames(&mut before, space);
+        write_atomically(&path, &before.cells_changed(&store).unwrap()).unwrap();
+
+        // The apps are found in another order, each app's windows together.
+        let (mut after, mut store) = bsp_engine(space);
+        after.load_cells_from(&path);
+        observe(&mut after, &mut store, space, &[c]);
+        observe(&mut after, &mut store, space, &[b, a]);
+        assert_eq!(frames(&mut after, space), arranged);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A window rift does not remember (its app was not attached when the
+    /// file was written) comes into a cell first. The kept layouts no longer
+    /// match, so the remembered windows go in as departures do when their
+    /// workspace changed: after the nearest old neighbor already back, which
+    /// keeps the last two in their order here, though not the first.
+    #[test]
+    fn a_window_it_does_not_remember_coming_first_falls_back_to_neighbors() {
+        let space = SpaceId::new(7);
+        let (a, b, c) = (WindowId::new(10, 1), WindowId::new(10, 2), WindowId::new(11, 3));
+        let stranger = WindowId::new(12, 4);
+        let path = std::env::temp_dir().join(format!("rift-grid-cells-s-{}.json", std::process::id()));
+
+        let (mut before, mut store) = bsp_engine(space);
+        observe(&mut before, &mut store, space, &[a, b, c]);
+        let order = |engine: &LayoutEngine| {
+            let (workspace, layout) = engine.workspaces.active_layout_for_space(space).unwrap();
+            engine.workspaces[workspace].layout_system.all_windows_in_layout(layout)
+        };
+        let arranged = order(&before);
+        write_atomically(&path, &before.cells_changed(&store).unwrap()).unwrap();
+
+        let (mut after, mut store) = bsp_engine(space);
+        after.load_cells_from(&path);
+        let _ = after.handle_event(&mut store, LayoutEvent::SpaceExposed(space, SCREEN.size));
+        observe(&mut after, &mut store, space, &[stranger]);
+        observe(&mut after, &mut store, space, &[c]);
+        observe(&mut after, &mut store, space, &[b, a]);
+        assert_eq!(arranged, vec![a, c, b]);
+        let kept: Vec<_> = order(&after).into_iter().filter(|&w| w != stranger).collect();
+        let position = |w| kept.iter().position(|&k| k == w).unwrap();
+        assert!(position(a) < position(b), "a, back after c, stays before b");
+        assert!(order(&after).contains(&stranger) && kept.len() == 3, "all tiled");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The layouts are put back only into the mode they were made in.
+    #[test]
+    fn a_layout_from_another_mode_is_not_put_back() {
+        let space = SpaceId::new(7);
+        let (a, b) = (WindowId::new(10, 1), WindowId::new(10, 2));
+        let path = std::env::temp_dir().join(format!("rift-grid-cells-m-{}.json", std::process::id()));
+        let (mut before, mut store) = bsp_engine(space);
+        observe(&mut before, &mut store, space, &[a, b]);
+        write_atomically(&path, &before.cells_changed(&store).unwrap()).unwrap();
+
+        // Restarted with another default mode.
+        let (mut after, mut store) = engine(space);
+        after.load_cells_from(&path);
+        let _ = after.handle_event(&mut store, LayoutEvent::SpaceExposed(space, SCREEN.size));
+        observe(&mut after, &mut store, space, &[b, a]);
+        assert_eq!(frames(&mut after, space).len(), 2, "both tiled anew");
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn a_window_seen_before_its_space_is_shown_goes_back_too() {
         let path = std::env::temp_dir().join(format!("rift-grid-cells-u-{}.json", std::process::id()));
         let a = WindowId::new(10, 1);
-        let saved = Saved { windows: vec![Entry { pid: 10, window: 1, space: 9, index: 12 }], shown: Vec::new() };
+        let saved = Saved { windows: vec![Entry { pid: 10, window: 1, space: 9, index: 12 }], shown: Vec::new(), layouts: Vec::new() };
         write_atomically(&path, &saved).unwrap();
         let settings = VirtualWorkspaceSettings { grid_columns: 3, ..Default::default() };
         let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default(), None);
@@ -276,6 +500,7 @@ mod tests {
         let saved = Saved {
             windows: vec![Entry { pid: 10, window: 1, space: 7, index: 5 }],
             shown: vec![Shown { space: 7, index: 13 }],
+            layouts: Vec::new(),
         };
         write_atomically(&path, &saved).unwrap();
         let settings = VirtualWorkspaceSettings { grid_columns: 3, ..Default::default() };

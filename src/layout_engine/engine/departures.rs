@@ -19,6 +19,7 @@ use super::LayoutEngine;
 use crate::actor::app::{WindowId, pid_t};
 use crate::common::collections::{HashMap, HashSet};
 use crate::layout_engine::{LayoutId, LayoutSystem, LayoutSystemKind};
+use crate::layout_engine::workspaces::WorkspaceLayoutState;
 use crate::model::WindowStore;
 use crate::model::virtual_workspace::{VirtualWorkspace, VirtualWorkspaceId};
 use crate::sys::screen::SpaceId;
@@ -97,6 +98,52 @@ impl LayoutEngine {
             sequence: self.departures.sequence,
             rebalanced,
         });
+    }
+
+    /// Make `system` and `state` `workspace_id`'s layouts again, with the
+    /// windows of `away` departed from them as if each had left in turn: each
+    /// goes back to its place, at its size, as it returns. For a cell's layouts
+    /// kept across a restart (`cells.rs`). A workspace that already tiles
+    /// windows keeps its own.
+    pub(super) fn install_departed_layouts(
+        &mut self,
+        workspace_id: VirtualWorkspaceId,
+        system: LayoutSystemKind,
+        state: WorkspaceLayoutState,
+        away: &[WindowId],
+    ) -> bool {
+        let workspace = &mut self.workspaces[workspace_id];
+        if !windows_in(workspace, &workspace.layout_system).is_empty() {
+            return false;
+        }
+        let Some(snapshot) = system.preview_clone() else {
+            return false;
+        };
+        workspace.layout_system = system;
+        workspace.layout_state = state;
+        let held = windows_in(workspace, &snapshot);
+        let order = workspace
+            .active_layout()
+            .map(|layout| snapshot.all_windows_in_layout(layout))
+            .unwrap_or_default();
+        for &wid in away.iter().filter(|&wid| held.contains(wid)) {
+            self.departures.sequence += 1;
+            self.departures.windows.insert(wid, Departure {
+                space: workspace.space,
+                workspace: workspace_id,
+                order: order.clone(),
+                sequence: self.departures.sequence,
+                rebalanced: false,
+            });
+        }
+        let reduced = reduced_to(workspace, &snapshot, &HashSet::default(), &self.departures.windows);
+        let Some(reduced) = reduced else {
+            return false;
+        };
+        workspace.layout_system = reduced;
+        self.departures.snapshots.insert(workspace_id, snapshot);
+        self.drop_unused_snapshot(workspace_id);
+        true
     }
 
     /// The space and workspace whose layouts contain `wid`.

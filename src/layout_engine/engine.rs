@@ -1895,6 +1895,8 @@ impl LayoutEngine {
             LayoutEvent::SpaceExposed(space, size) => {
                 self.debug_tree(space);
 
+                self.workspaces.ensure_space_initialized(space);
+                self.put_back_layouts(space);
                 self.ensure_workspace_layouts(space, size);
             }
             #[cfg(test)]
