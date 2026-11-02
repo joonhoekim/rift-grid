@@ -123,7 +123,15 @@ its next normalization undoes.
   time, as grids are under `grid_displays.rs`. The grid has not been tried with
   it; it is meant for `per_display`, the default.
 - `named_pin_reload_moves_immediately_without_growing_catalog` fails on
-  upstream `3114cc5` as well, on this Mac.
+  upstream (`3114cc5`, `adca720`) on a Mac with windows open, and passes on
+  upstream's CI. With no override, `try_space_window_list_for_connection` asks
+  the real WindowServer, and the tests' Space 1 is a real desktop: its window
+  list holds the machine's windows and not the test's, so the test's window is
+  marked hidden after its first move and `can_place_window` refuses the second.
+  Neither the toolchain (1.96, nightly 1.101), nextest's one process per test,
+  nor the cursor changes it. The fork makes the function never ask the
+  WindowServer in tests (an empty list unless a test sets one), in a commit of
+  its own (`cba2ab5`) to send upstream as is; that also covers the case below.
 - Upstream is formatted with nightly rustfmt (`rustfmt.toml` sets unstable
   options). Stable `cargo fmt` rewrites much of upstream, so format the fork's
   own files only, with nightly when available.
@@ -159,8 +167,9 @@ its next normalization undoes.
 
 ## App lifecycle fixes to send
 
-Two fixes of upstream code, each its own commit so a pull request can take it
-as is. Both were reproduced before the fix and checked live after it.
+Fixes of upstream code, each its own commit so a pull request can take it
+as is. Each was reproduced before the fix; the first two were also checked
+live after it.
 
 - `c165ce1` *drop apps that quit, whose pid Carbon can no longer read*:
   `kEventAppTerminated` arrives after `GetProcessPID` stops resolving the
@@ -171,6 +180,16 @@ as is. Both were reproduced before the fix and checked live after it.
   sets its policy, and when both discoveries read Prohibited its windows are
   never managed. Reproduced with a small app that shows a window and turns
   Regular three seconds later.
+- `66eb1af` *attach again a running app whose actor gave up*: an app busy when its
+  actor starts (seen with Chrome and Brave as rift restarted) refuses AX
+  requests for the two seconds `init` waits, the actor exits, and only
+  activating the app attaches it again. Its windows stay where the last rift
+  parked them, so nothing shows it to activate. `AppLifecycle::sync` now
+  matches actors to the running apps in both directions (the existing check
+  for quit apps is its other half), run on app activation and deactivation and
+  on space state updates, and after a failure with a retry that doubles from 2
+  seconds to 5 minutes. With tests in `wm_controller.rs`
+  (`app_lifecycle_tests`) that do not build without the fix.
 
 ## Display move fixes to send
 
