@@ -113,6 +113,8 @@ pub enum WmCmd {
 
     ShowMissionControlAll,
     ShowMissionControlCurrent,
+    /// Open Overview on the whole grid at once; again closes it.
+    ToggleMissionControlWhole,
     DismissMissionControl,
     CloseWindow,
 }
@@ -548,6 +550,11 @@ impl WmController {
             Command(Wm(ShowMissionControlAll | ShowMissionControlCurrent)) => {
                 if let Some(tx) = &self.mission_control_tx {
                     let _ = tx.try_send(mission_control::Event::ShowAll);
+                }
+            }
+            Command(Wm(ToggleMissionControlWhole)) => {
+                if let Some(tx) = &self.mission_control_tx {
+                    let _ = tx.try_send(mission_control::Event::ToggleWhole);
                 }
             }
             Command(Wm(DismissMissionControl)) => {

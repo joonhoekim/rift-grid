@@ -868,3 +868,18 @@ fn workspace_names_reject_explicit_and_generated_collisions() {
         );
     }
 }
+
+#[test]
+fn parse_whole_grid_overview_toggle() {
+    use crate::actor::wm_controller::WmCmd;
+    let config = Config::parse(
+        r#"
+            [settings]
+            [keys]
+            "Alt + Tab" = "toggle_mission_control_whole"
+        "#,
+    )
+    .unwrap();
+    assert!(config.binding_mode_specs[0].1.iter().any(|(spec, command)| spec == "Alt + Tab"
+        && *command == WmCommand::Wm(WmCmd::ToggleMissionControlWhole)));
+}

@@ -14,6 +14,8 @@ use crate::ui::mission_control::{OverviewAction, OverviewSession, PreviewRendere
 pub enum Event {
     PumpPreviews,
     ShowAll,
+    /// Open on the whole grid, or close an open Overview whatever its stage.
+    ToggleWhole,
     Dismiss,
     RefreshCurrentWorkspace,
     Configure(MissionControlSettings),
@@ -214,6 +216,34 @@ impl MissionControlActor {
         }
     }
 
+    /// Open Overview; `whole` starts a grid overview on the whole grid, as `grid_fit` does.
+    fn open(&mut self, whole: bool) {
+        if !self.settings.enabled {
+            return;
+        }
+        if self.settings.window_previews && !CGPreflightScreenCaptureAccess() {
+            CGRequestScreenCaptureAccess();
+            return;
+        }
+        if self.settings.window_previews {
+            let _ = cgs::PreviewCompositor::prepare();
+        }
+        let mut settings = self.settings.clone();
+        settings.grid_fit |= whole;
+        self.session = OverviewSession::new(&self.reactor, self.mtm, &settings, &mut self.cache);
+        if let Some(session) = &mut self.session {
+            session.start_previews(
+                self.settings.window_previews,
+                self.tx.clone(),
+                self.cache.as_mut(),
+            );
+        }
+        self.input_tx.send(super::input::Request::SetMissionControlActive(
+            self.session.is_some(),
+        ));
+        crate::ui::grid_motion::set_overview_open(self.session.is_some());
+    }
+
     fn close(&mut self) {
         if let Some(mut session) = self.session.take() {
             session.retain_previews(&mut self.cache);
@@ -237,31 +267,15 @@ impl MissionControlActor {
                     if !session.step_back() {
                         self.close();
                     }
-                } else if self.settings.enabled {
-                    if self.settings.window_previews && !CGPreflightScreenCaptureAccess() {
-                        CGRequestScreenCaptureAccess();
-                        return;
-                    }
-                    if self.settings.window_previews {
-                        let _ = cgs::PreviewCompositor::prepare();
-                    }
-                    self.session = OverviewSession::new(
-                        &self.reactor,
-                        self.mtm,
-                        &self.settings,
-                        &mut self.cache,
-                    );
-                    if let Some(session) = &mut self.session {
-                        session.start_previews(
-                            self.settings.window_previews,
-                            self.tx.clone(),
-                            self.cache.as_mut(),
-                        );
-                    }
-                    self.input_tx.send(super::input::Request::SetMissionControlActive(
-                        self.session.is_some(),
-                    ));
-                    crate::ui::grid_motion::set_overview_open(self.session.is_some());
+                } else {
+                    self.open(false);
+                }
+            }
+            Event::ToggleWhole => {
+                if self.session.is_some() {
+                    self.close();
+                } else {
+                    self.open(true);
                 }
             }
             Event::Dismiss => self.close(),

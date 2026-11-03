@@ -121,6 +121,10 @@ fn actions() -> &'static [(&'static str, WmCommand)] {
                     WmCommand::Wm(WmCmd::ShowMissionControlAll),
                 ),
                 (
+                    "Overview · Whole grid",
+                    WmCommand::Wm(WmCmd::ToggleMissionControlWhole),
+                ),
+                (
                     "Overview · Current workspace",
                     WmCommand::Wm(WmCmd::ShowMissionControlCurrent),
                 ),
