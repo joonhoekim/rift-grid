@@ -80,7 +80,7 @@ struct Pending {
     wallpaper: bool,
 }
 
-/// The active cell of a display, and its windows, before a command.
+/// The current cell of a display, and its windows, before a command.
 pub(super) struct Before {
     space: SpaceId,
     workspace: VirtualWorkspaceId,
@@ -119,7 +119,7 @@ impl Reactor {
         self.send_later(after, Event::GridMotion(note));
     }
 
-    /// Note the active cell before a command that may move to another one.
+    /// Note the current cell before a command that may move to another one.
     pub(super) fn grid_motion_before(&mut self, event: &Event) -> Option<Before> {
         crate::ui::grid_motion::set_motion(&self.config.settings.ui.grid_motion);
         self.grid_motion_prefetch();

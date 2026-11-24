@@ -137,15 +137,15 @@ no display yet. The cells sit below the buttons.
 - Dropping a window's tile on a button sends the window to that grid's current
   cell, as Alt+Ctrl+N does; the overview stays where it is.
 
-Stages: the overview opens on the active cell at `grid_zoom` with
+Stages: the overview opens on the current cell at `grid_zoom` with
 its neighbours around it; opening it again shows the whole grid, and a third time
 closes it. Esc steps back out a stage at a time: from the whole grid to the cell
 stage, from there out of the overview. `grid_fit = true` makes the whole grid the
 only stage.
 
-When the active cell changes in the first stage, the camera moves as
-`[settings.ui.mission_control] grid_follow` says: `"reveal"` (default) moves only as far as it takes to show the active cell whole, a gap
-from the edges; `"center"` centers the active cell every time.
+When the current cell changes in the first stage, the camera moves as
+`[settings.ui.mission_control] grid_follow` says: `"reveal"` (default) moves only as far as it takes to show the current cell whole, a gap
+from the edges; `"center"` centers the current cell every time.
 
 Each window's tile carries a row across its top (`grid_labels`, on by
 default): the app's icon, the window's title, and a close button at the end,

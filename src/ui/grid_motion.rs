@@ -1,6 +1,6 @@
 //! Moves between grid cells and grids, shown: the screen slides to the cell moved
 //! to, or fades to another grid, and a small map of the grid shows where the
-//! active cell went. The slide plays on an overlay over the display while rift
+//! current cell went. The slide plays on an overlay over the display while rift
 //! moves the windows under it: the cell left is a capture of the display taken
 //! before they move, the cell arrived at is the wallpaper with a capture of each
 //! of its windows where the layout puts them.
@@ -850,7 +850,7 @@ pub struct HudView {
     pub grid: usize,
     pub rows: usize,
     pub columns: usize,
-    /// The active cell, row and column.
+    /// The current cell, row and column.
     pub cell: (usize, usize),
     /// Which cells have windows, row by row.
     pub occupied: Vec<bool>,

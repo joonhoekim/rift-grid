@@ -57,7 +57,7 @@ pub struct GridMotionSettings {
     #[setting(label = "Zoom in time", unit = "%", scale = 100.0, enabled_by = "pan")]
     pub zoom_in_time: f64,
     #[serde(default = "yes")]
-    /// Show a small map of the grid for a moment, its active cell moving to the
+    /// Show a small map of the grid for a moment, its current cell moving to the
     /// cell moved to.
     #[setting(label = "Grid map", aliases = "hud indicator minimap overlay osd")]
     pub hud: bool,

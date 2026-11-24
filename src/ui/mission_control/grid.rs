@@ -1,5 +1,5 @@
 //! The grid overview: every workspace a cell at its row and column, in two stages
-//! (the active cell and its neighbours, then the whole grid), following the real
+//! (the current cell and its neighbours, then the whole grid), following the real
 //! focus. The cells are laid out in the overview's world; the stages are cameras.
 
 use super::*;
@@ -28,7 +28,7 @@ pub(super) fn label(
     text(parent, value, frame, scale, 12.0)
 }
 
-/// The selection a grid overview shows: the active cell, and the window the
+/// The selection a grid overview shows: the current cell, and the window the
 /// system reports focused when it is in that cell. Right after rift moves the
 /// focus (`rift_moved`) the system has not caught up, so the layout's focus
 /// stands in for it.
@@ -199,7 +199,7 @@ pub(super) fn grid_shape(workspaces: &[RuntimeWorkspaceData]) -> Option<(usize, 
 /// How far a grid overview has stepped back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum GridStage {
-    /// The active cell at the grid zoom, its neighbours around it.
+    /// The current cell at the grid zoom, its neighbours around it.
     Cell,
     /// The whole grid.
     Whole,
@@ -247,8 +247,8 @@ impl GridLook {
     fn gap_world(self, display: CGSize) -> f64 { self.gap_px(display) / self.zoom }
 }
 
-/// Where the first stage's camera goes when the active cell is `active`: on it when
-/// it centers or has no place yet, otherwise it stays unless the active cell would
+/// Where the first stage's camera goes when the current cell is `active`: on it when
+/// it centers or has no place yet, otherwise it stays unless the current cell would
 /// not show whole, a margin from the edges, and then moves only that far. A cell
 /// too large to show whole with its margins is centered.
 pub(super) fn follow_camera(
@@ -267,7 +267,7 @@ pub(super) fn follow_camera(
     let margin = gap.max(8.0);
     let width = display.width * look.zoom;
     let height = width * display.height / display.width;
-    // Along one axis: the camera, the active cell, a cell's size and the view's.
+    // Along one axis: the camera, the current cell, a cell's size and the view's.
     let axis = |camera: f64, cell: f64, size: f64, view: f64| {
         let stride = size + gap;
         let room = view / 2.0 - size / 2.0 - margin;
@@ -390,8 +390,8 @@ impl GridState {
     }
 }
 
-/// The active cell, or the middle one when no cell is active.
-fn active_cell(workspaces: &[RuntimeWorkspaceData], shape: (usize, usize)) -> (usize, usize) {
+/// The current cell, or the middle one when no cell is current.
+fn current_cell(workspaces: &[RuntimeWorkspaceData], shape: (usize, usize)) -> (usize, usize) {
     workspaces
         .iter()
         .find(|ws| ws.is_active)
@@ -502,7 +502,7 @@ impl DisplayOverview {
         let look = self.grid.look;
         let camera = follow_camera(
             self.grid.camera.get(),
-            active_cell(&self.workspaces, shape),
+            current_cell(&self.workspaces, shape),
             area.size,
             self.info.frame.size,
             look,
@@ -526,7 +526,7 @@ impl DisplayOverview {
     }
 
     /// Follow the focus: select it, and move the camera when the stage's camera
-    /// moved (another active cell, or the grid buttons took more or less room),
+    /// moved (another current cell, or the grid buttons took more or less room),
     /// over `duration` once the overview is in.
     pub(super) fn follow_grid(&mut self, rift_moved: bool, duration: Option<f64>) {
         self.grid_select(rift_moved);
@@ -921,13 +921,13 @@ impl OverviewSession {
         }
     }
 
-    /// Step a grid overview back from the active cell to the whole grid. False when
+    /// Step a grid overview back from the current cell to the whole grid. False when
     /// there is no further stage, and opening Overview again closes it.
     pub(crate) fn step_back(&mut self) -> bool {
         self.set_stage(GridStage::Cell, GridStage::Whole, |_| true)
     }
 
-    /// Esc: step a grid overview in from the whole grid to the active cell. False
+    /// Esc: step a grid overview in from the whole grid to the current cell. False
     /// when it is already there, or the whole grid is its only stage, and Esc
     /// closes it.
     pub(crate) fn step_in(&mut self) -> bool {
@@ -1046,7 +1046,7 @@ mod tests {
     }
 
     #[test]
-    fn the_first_stage_shows_the_active_cell_at_the_grid_zoom() {
+    fn the_first_stage_shows_the_current_cell_at_the_grid_zoom() {
         let display = CGSize::new(1600.0, 1000.0);
         let area = rect(0.0, 0.0, 1600.0, 1000.0);
         let cell = look(GridStage::Cell, 0.5, GridFollow::Center);
@@ -1146,11 +1146,11 @@ mod tests {
     }
 
     #[test]
-    fn reveal_moves_the_camera_only_to_show_the_active_cell() {
+    fn reveal_moves_the_camera_only_to_show_the_current_cell() {
         let display = CGSize::new(1600.0, 1000.0);
         let look = look(GridStage::Cell, 0.5, GridFollow::Reveal);
         let camera = |camera, active| follow_camera(camera, active, display, display, look);
-        // Opening: on the active cell.
+        // Opening: on the current cell.
         assert_eq!(camera(None, (1, 1)), (1.0, 1.0));
         // A cell is 800x500 with a 40 gap; the view has room for a neighbour's
         // whole cell only if it fits within 1600/2 - 400 - 40 = 360 of the center.
@@ -1162,9 +1162,9 @@ mod tests {
         // 360 of room, so the camera moves 120 back, not all the way.
         let (_, back) = camera(Some((row, column)), (1, 1));
         assert!((back - (column - 120.0 / 840.0)).abs() < 1e-9);
-        // An active cell already on show leaves the camera where it is.
+        // A current cell already on show leaves the camera where it is.
         assert_eq!(camera(Some((1.2, 1.3)), (1, 1)), (1.2, 1.3));
-        // Centering puts the camera on the active cell every time.
+        // Centering puts the camera on the current cell every time.
         let center = GridLook {
             follow: GridFollow::Center,
             ..look
@@ -1182,7 +1182,7 @@ mod tests {
     }
 
     #[test]
-    fn grid_selection_follows_the_system_focus_in_the_active_cell() {
+    fn grid_selection_follows_the_system_focus_in_the_current_cell() {
         let tile = |id, focused| {
             let mut w = window(id, rect(0.0, 0.0, 100.0, 100.0), false);
             w.is_focused = focused;
@@ -1203,7 +1203,7 @@ mod tests {
         let id = |n| Some(WindowId::new(123, n));
         let select = |ws: &[RuntimeWorkspaceData]| grid_focus_selection(ws, false).unwrap();
 
-        // The system's focus wins over the layout's within the active cell.
+        // The system's focus wins over the layout's within the current cell.
         let ws = cells(1, [vec![], vec![tile(1, false), tile(2, true)]], id(1));
         assert_eq!(select(&ws), Selection { workspace: 1, window: id(2) });
         // Until the system catches up with a move into another cell, the layout's
@@ -1216,7 +1216,7 @@ mod tests {
             workspace: 1,
             window: id(1)
         });
-        // An empty active cell has no focused window.
+        // An empty current cell has no focused window.
         let ws = cells(1, [vec![tile(3, true)], vec![]], None);
         assert_eq!(select(&ws), Selection { workspace: 1, window: None });
     }

@@ -3,7 +3,7 @@
 //!
 //! Without it, rift starts with no assignments: windows parked in other cells
 //! are put back on screen when rift exits, and the next rift takes every window
-//! it sees into its display's active cell. The file is written whenever an
+//! it sees into its display's current cell. The file is written whenever an
 //! assignment changes, so a crash leaves it as current as a clean exit does.
 //!
 //! A window is known by its process and window number, and a cell by its macOS
@@ -114,7 +114,7 @@ impl LayoutEngine {
             return;
         };
         let Ok(saved) = serde_json::from_str::<Saved>(&text) else {
-            tracing::warn!(?path, "Unreadable cells file; windows start in the active cell");
+            tracing::warn!(?path, "Unreadable cells file; windows start in the current cell");
             return;
         };
         self.workspaces.shown_before =

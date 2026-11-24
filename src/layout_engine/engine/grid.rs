@@ -202,7 +202,7 @@ impl LayoutEngine {
         ))
     }
 
-    /// Focus the tile beside the focused one in the active cell, or past the cell's
+    /// Focus the tile beside the focused one in the current cell, or past the cell's
     /// edge, the tile on the near side of the next cell level with the one left.
     fn grid_focus(
         &mut self,
@@ -270,7 +270,7 @@ impl LayoutEngine {
         }
     }
 
-    /// Swap with the neighboring tile in the active cell, or past the cell's edge,
+    /// Swap with the neighboring tile in the current cell, or past the cell's edge,
     /// carry the window into the neighboring cell and follow it.
     fn grid_move(
         &mut self,

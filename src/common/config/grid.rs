@@ -54,15 +54,15 @@ pub enum GridStyle {
     Zoom,
 }
 
-/// How a grid Overview's first stage moves when the active cell changes.
+/// How a grid Overview's first stage moves when the current cell changes.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy, Default, ConfigEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum GridFollow {
-    /// Only as far as it takes to show the active cell whole.
+    /// Only as far as it takes to show the current cell whole.
     #[default]
     #[setting(label = "Just enough to show it")]
     Reveal,
-    /// Center the active cell every time.
+    /// Center the current cell every time.
     #[setting(label = "Center it")]
     Center,
 }
