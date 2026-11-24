@@ -156,6 +156,12 @@ its next normalization undoes.
   the first after a build) with `Cannot form weak reference to instance of
   class SLSWindowManagementFallbackBridge`, inside SkyLight. Run them again.
 
+- The Overview waits for a capture of a window on screen before it zooms out,
+  up to two seconds. On an empty workspace no window is on screen, so it
+  waited the full two seconds and looked as if it did not open. The fork
+  takes no window on screen as ready (`ui/mission_control.rs`, the opening's
+  `ready`); a fix to send upstream as is.
+
 - Settings text fields save when editing ends, which AppKit does on Return or
   Tab only: a value typed and left there is saved when the page changes or
   the window closes. The fork's `settings/editing.rs` also ends it on a click
