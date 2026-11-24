@@ -208,7 +208,6 @@ enabled = true
 # Mission Control, and rift can only reach it with this enabled.
 enabled = true
 # Recapture visible previews while the overview is open (grid PoC).
-live_preview_interval_ms = 500
 
 [settings.gestures]
 # Three-finger horizontal swipe to change workspace. `consume_dock_swipe` stops

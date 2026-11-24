@@ -36,6 +36,18 @@ const GRID_MAP_SPACING: f64 = 5.0;
 /// Between a grid's number and its map.
 const GRID_LABEL_SPACING: f64 = 3.0;
 
+/// `[settings.grid] menu_bar_maps`, noted by the menu bar actor, which is given
+/// the whole config; the drawing code is given the menu bar's section only.
+static MAPS: std::sync::Mutex<GridMaps> = std::sync::Mutex::new(GridMaps::All);
+
+pub(crate) fn set_maps(maps: GridMaps) {
+    if let Ok(mut current) = MAPS.lock() {
+        *current = maps;
+    }
+}
+
+fn maps() -> GridMaps { MAPS.lock().map_or(GridMaps::All, |maps| *maps) }
+
 fn grid_map_alpha(workspace: &Workspace) -> f64 {
     if workspace.is_active {
         GRID_MAP_ACTIVE_ALPHA
@@ -59,10 +71,10 @@ fn in_use(display: &DisplayWorkspaces, grid: Option<usize>) -> bool {
 pub(super) fn shown(
     display: &DisplayWorkspaces,
     workspace: &Workspace,
-    settings: &MenuBarSettings,
+    _settings: &MenuBarSettings,
 ) -> bool {
     workspace.grid == active_grid(display)
-        || (settings.grid_maps == GridMaps::All && in_use(display, workspace.grid))
+        || (maps() == GridMaps::All && in_use(display, workspace.grid))
 }
 
 /// The number before a cell's map: every map's, or a lone
@@ -78,7 +90,7 @@ pub(super) fn label(
         .workspaces
         .iter()
         .any(|w| w.grid != active && w.window_count > 0);
-    let numbered = match settings.grid_maps {
+    let numbered = match maps() {
         GridMaps::All => workspace.grid,
         GridMaps::Active => active.filter(|_| others),
     };
@@ -395,8 +407,9 @@ mod tests {
         assert_eq!(cells[10].1, GRID_MAP_OCCUPIED_ALPHA * GRID_MAP_DIMMED);
 
         // Only the grid on screen, after its number since grid 2 is in use.
-        let lone = MenuBarSettings { grid_maps: GridMaps::Active, ..settings.clone() };
-        let inputs = render_inputs(&displays, &lone);
+        set_maps(GridMaps::Active);
+        let inputs = render_inputs(&displays, &settings);
+        set_maps(GridMaps::All);
         assert_eq!(inputs.len(), 9);
         assert!(inputs.iter().all(|input| input.grid == Some(0) && input.label == "1"));
 

@@ -31,10 +31,10 @@ What subline set out to do, and this fork does on rift:
 | --- | --- | --- |
 | Grids of cells (see [docs/grids.md](docs/grids.md)): `grid`, `send_to_grid`, `focus`, `move_tile`, `go_to_cell`, `go_to_center_cell`, `focus_recent_window`, `overview_whole`, app rules' `grid` | `layout_engine/engine/grid.rs`, `model/virtual_workspace/grid.rs`; topology in `common/grid_nav.rs` | `[virtual_workspaces] grid_columns` |
 | Grids belong to displays: a grid is on one display at a time, Alt+N goes there, each display comes up on a grid of its own, and `move_grid_to_display` hands one over (the overview's grid buttons, a row per display) | `actor/reactor/grid_displays.rs`, `ui/mission_control/grid_bar.rs` | — |
-| Grid overview: two stages, follows the real focus, live previews, a label row on each tile | `ui/mission_control/grid.rs` | `[settings.ui.mission_control] grid_*` |
-| Moves shown: the screen slides to the cell moved to, fades to another grid, and a small grid map lights the cell arrived at | `ui/grid_motion.rs`, `actor/reactor/grid_motion.rs` | `[settings.ui.grid_motion]` |
-| Trackpad swipes: three fingers to the neighboring cell any way, four fingers left and right through the display's grids and up for the Overview; taken before macOS and upstream's swipes | `actor/gesture/grid.rs`, `actor/reactor/grid_gestures.rs` | `[settings.grid_gestures]`, `common/config/grid_gestures.rs` |
-| Menu bar 3x3 maps, one per grid in use | `ui/menu_bar/grid_map.rs` | `[settings.ui.menu_bar] grid_maps` |
+| Grid overview: two stages, follows the real focus, live previews, a label row on each tile | `ui/mission_control/grid.rs` | `[settings.grid.overview]` |
+| Moves shown: the screen slides to the cell moved to, fades to another grid, and a small grid map lights the cell arrived at | `ui/grid_motion.rs`, `actor/reactor/grid_motion.rs` | `[settings.grid.motion]` |
+| Trackpad swipes: three fingers to the neighboring cell any way, four fingers left and right through the display's grids and up for the Overview; taken before macOS and upstream's swipes | `actor/gesture/grid.rs`, `actor/reactor/grid_gestures.rs` | `[settings.grid.gestures]`, `common/config/grid_gestures.rs` |
+| Menu bar 3x3 maps, one per grid in use | `ui/menu_bar/grid_map.rs` | `[settings.grid] menu_bar_maps` |
 | Window borders: sliding focused border, glow, hidden under the windows above | `ui/borders.rs`, `actor/reactor/borders.rs` | `[settings.ui.borders]`, `common/config/borders.rs` |
 | Settings app pages | `ui/settings/grid_pages.rs` | — |
 | Drag and drop as in VS Code's editor groups: the tile under the pointer, five zones, a preview of where the window lands; replaces upstream's targeting (see [docs/upstream.md](docs/upstream.md)) | `actor/drag/dock.rs` | `[settings.drag_drop] drop_zone_fraction` |

@@ -40,30 +40,29 @@ fn grid_settings_are_in_the_settings_app() {
     let columns = VirtualWorkspaceSettings::field("grid_columns").unwrap();
     assert_eq!(columns.title, "Grid columns");
     assert!(matches!(columns.kind, FieldKind::Number { integer: true }));
-    for (key, unit, scale) in [
-        ("grid_gap", "%", 100.0),
-        ("grid_zoom", "%", 100.0),
-    ] {
-        let field = MissionControlSettings::field(key).unwrap();
+    use crate::common::config::GridOverviewSettings;
+    for (key, unit, scale) in [("gap", "%", 100.0), ("zoom", "%", 100.0)] {
+        let field = GridOverviewSettings::field(key).unwrap();
         assert!(matches!(field.kind, FieldKind::Number { integer: false }), "{key}");
         assert_eq!((field.unit, field.scale), (unit, scale), "{key}");
     }
-    for key in ["grid_labels", "grid_fit"] {
-        let field = MissionControlSettings::field(key).unwrap();
+    for key in ["labels", "fit", "full_resolution"] {
+        let field = GridOverviewSettings::field(key).unwrap();
         assert!(matches!(field.kind, FieldKind::Bool), "{key}");
     }
-    let follow = MissionControlSettings::field("grid_follow").unwrap();
+    let follow = GridOverviewSettings::field("follow").unwrap();
     let FieldKind::Choice(choices) = follow.kind else {
-        panic!("grid_follow is a choice")
+        panic!("follow is a choice")
     };
     assert_eq!(choices.len(), 2);
-    let parsed: MissionControlSettings = toml::from_str("grid_follow = \"center\"").unwrap();
-    assert_eq!(parsed.grid_follow, crate::common::config::GridFollow::Center);
-    assert_eq!(MissionControlSettings::default().grid_follow, Default::default());
-    let mut settings = MissionControlSettings::default();
-    let write = MissionControlSettings::field("grid_gap").unwrap().write.unwrap();
+    let parsed = Config::parse("[settings.grid.overview]\nfollow = \"center\"\n[keys]\n").unwrap();
+    assert_eq!(parsed.settings.grid.overview.follow, crate::common::config::GridFollow::Center);
+    let empty: GridOverviewSettings = toml::from_str("").unwrap();
+    assert_eq!(empty, GridOverviewSettings::default());
+    let mut settings = GridOverviewSettings::default();
+    let write = GridOverviewSettings::field("gap").unwrap().write.unwrap();
     write(&mut settings, FieldValue::Number(0.06)).unwrap();
-    assert_eq!(settings.grid_gap, 0.06);
+    assert_eq!(settings.gap, 0.06);
 }
 
 #[test]

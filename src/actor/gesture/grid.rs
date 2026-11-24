@@ -1,4 +1,4 @@
-//! The workspace grid's swipes, `[settings.grid_gestures]`: one finger count goes
+//! The workspace grid's swipes, `[settings.grid.gestures]`: one finger count goes
 //! to the neighboring cell any way, another goes through the display's grids
 //! left and right, and up and down through the Overview's stages. They take
 //! their finger counts before upstream's swipes, and stay on while the Overview
@@ -57,7 +57,7 @@ pub(super) struct Actions {
 impl Actions {
     /// `tolerance` is upstream's, for the left-and-right grid swipe.
     pub(super) fn new(config: &Config, tolerance: f64) -> Self {
-        let settings = &config.settings.grid_gestures;
+        let settings = &config.settings.grid.gestures;
         let on = settings.enabled && config.virtual_workspaces.grid_columns > 0;
         let action = |fingers: usize, swipe| {
             (on && fingers > 0).then_some(ActionConfig {
@@ -269,7 +269,7 @@ mod tests {
         }
 
         let mut without_overview = config(3);
-        without_overview.settings.grid_gestures.overview = false;
+        without_overview.settings.grid.gestures.overview = false;
         assert!(
             !Settings::new(&without_overview)
                 .grid
@@ -357,7 +357,7 @@ mod tests {
         assert!(settings.action_for(LayoutMode::Traditional, 4).is_none());
 
         config.virtual_workspaces.grid_columns = 3;
-        config.settings.grid_gestures.enabled = false;
+        config.settings.grid.gestures.enabled = false;
         assert!(
             Settings::new(&config)
                 .action_for(LayoutMode::Traditional, 3)

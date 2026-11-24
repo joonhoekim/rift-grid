@@ -3,7 +3,31 @@
 //! focus. The cells are laid out in the overview's world; the stages are cameras.
 
 use super::*;
-use crate::common::config::{GRID_COUNT, GridFollow};
+use crate::common::config::{GRID_COUNT, GridFollow, GridOverviewSettings};
+
+/// `[settings.grid.overview]` as last noted by the reactor, which holds the
+/// config; upstream's Overview actor is given its own section only.
+static SETTINGS: std::sync::Mutex<Option<GridOverviewSettings>> = std::sync::Mutex::new(None);
+/// Whether the Overview being opened starts on the whole grid.
+static OPEN_WHOLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Note the grid Overview's settings, when they are new.
+pub fn set_settings(settings: &GridOverviewSettings) {
+    if let Ok(mut current) = SETTINGS.lock()
+        && current.as_ref() != Some(settings)
+    {
+        *current = Some(settings.clone());
+    }
+}
+
+fn settings() -> GridOverviewSettings {
+    SETTINGS.lock().ok().and_then(|settings| settings.clone()).unwrap_or_default()
+}
+
+/// Open the next Overview on the whole grid (`overview_whole`), or as set.
+pub(crate) fn open_whole(whole: bool) {
+    OPEN_WHOLE.store(whole, std::sync::atomic::Ordering::Relaxed);
+}
 
 #[path = "grid_bar.rs"]
 mod grid_bar;
@@ -175,9 +199,9 @@ fn label_close_button(caption: &CALayer, scale: f64) -> Retained<CALayer> {
 /// cgs's capture limits for the Overview. Full-resolution previews need far
 /// more than it allows by default: a window half a 5K display wide is past its
 /// 256 MB for one stream.
-pub(super) fn set_capture_limits(settings: &MissionControlSettings) {
+pub(super) fn set_capture_limits() {
     const MB: usize = 1024 * 1024;
-    if settings.full_resolution {
+    if settings().full_resolution {
         cgs::compositor::preview::set_capture_limits(4096 * MB, 2048 * MB, 768 * MB);
     } else {
         cgs::compositor::preview::set_capture_limits(512 * MB, 256 * MB, 256 * MB);
@@ -222,18 +246,19 @@ pub(super) struct GridLook {
 }
 
 impl GridLook {
-    pub(super) fn new(settings: &MissionControlSettings) -> Self {
+    pub(super) fn new() -> Self {
+        Self::from(&settings(), OPEN_WHOLE.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    fn from(settings: &GridOverviewSettings, whole: bool) -> Self {
+        let fit = settings.fit || whole;
         Self {
-            gap: settings.grid_gap.clamp(0.0, 0.1),
-            labels: settings.grid_labels,
-            zoom: settings.grid_zoom.clamp(0.2, 0.99),
-            stage: if settings.grid_fit {
-                GridStage::Whole
-            } else {
-                GridStage::Cell
-            },
-            fit: settings.grid_fit,
-            follow: settings.grid_follow,
+            gap: settings.gap.clamp(0.0, 0.1),
+            labels: settings.labels,
+            zoom: settings.zoom.clamp(0.2, 0.99),
+            stage: if fit { GridStage::Whole } else { GridStage::Cell },
+            fit,
+            follow: settings.follow,
             full: settings.full_resolution,
         }
     }
@@ -1038,10 +1063,10 @@ mod tests {
         filter_workspaces(&mut plain, false);
         assert_eq!(plain.len(), 1, "outside a grid empty workspaces go");
 
-        let empty: MissionControlSettings = toml::from_str("").unwrap();
+        let empty: GridOverviewSettings = toml::from_str("").unwrap();
         assert_eq!(
-            GridLook::new(&MissionControlSettings::default()),
-            GridLook::new(&empty)
+            GridLook::from(&GridOverviewSettings::default(), false),
+            GridLook::from(&empty, false)
         );
     }
 

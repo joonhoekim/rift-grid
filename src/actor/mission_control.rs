@@ -349,12 +349,11 @@ impl MissionControlActor {
             let _ = cgs::compositor::preview::PreviewCompositor::prepare();
         }
         self.backgrounds.sync(self.mtm, &self.tx);
-        let mut settings = self.settings.clone();
-        settings.grid_fit |= whole;
+        crate::ui::mission_control::open_whole(whole);
         self.session = OverviewSession::new(
             &self.reactor,
             self.mtm,
-            &settings,
+            &self.settings,
             self.shared,
             &mut self.backgrounds,
         );

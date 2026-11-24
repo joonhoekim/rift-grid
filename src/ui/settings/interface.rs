@@ -254,7 +254,6 @@ pub(super) fn overview(ui: Ui, model: &Rc<Model>) -> Page {
             "enabled",
             "show_empty_workspaces",
             "window_previews",
-            "full_resolution",
             "hide_toolbar",
         ],
         |s| &s.settings.ui.mission_control,

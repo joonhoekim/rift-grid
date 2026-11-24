@@ -10,17 +10,11 @@ use crate::common::config::*;
 /// The grid's sections of upstream's Overview page (`interface::overview`).
 pub(super) fn overview_sections(f: &mut FormBuilder) -> (Section, Section) {
     let ui = f.ui;
-    let grid = f.fields(
+    let grid = f.schema_rows(
         Section::new(&ui, "Grid").description("When workspaces form a grid."),
-        &[
-            "grid_fit",
-            "grid_zoom",
-            "grid_follow",
-            "grid_gap",
-            "grid_labels",
-        ],
-        |s| &s.settings.ui.mission_control,
-        |s| &mut s.settings.ui.mission_control,
+        "",
+        |s| &s.settings.grid.overview,
+        |s| &mut s.settings.grid.overview,
     );
     let motion = f.schema_rows(
         Section::new(&ui, "Grid Motion").description(
@@ -28,8 +22,8 @@ pub(super) fn overview_sections(f: &mut FormBuilder) -> (Section, Section) {
              small map of the grid shows where you went.",
         ),
         "",
-        |s| &s.settings.ui.grid_motion,
-        |s| &mut s.settings.ui.grid_motion,
+        |s| &s.settings.grid.motion,
+        |s| &mut s.settings.grid.motion,
     );
     (grid, motion)
 }
@@ -43,8 +37,8 @@ pub(super) fn swipes(f: &mut FormBuilder) -> Section {
              workspace swipes' own.",
         ),
         "",
-        |s| &s.settings.grid_gestures,
-        |s| &mut s.settings.grid_gestures,
+        |s| &s.settings.grid.gestures,
+        |s| &mut s.settings.grid.gestures,
     )
 }
 

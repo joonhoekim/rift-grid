@@ -32,6 +32,7 @@ use crate::sys::window_server::WindowServerId;
 
 mod grid;
 use grid::*;
+pub(crate) use grid::{open_whole, set_settings as set_grid_settings};
 
 const MIN_ZOOM: f64 = 0.08;
 const MAX_ZOOM: f64 = 2.0;
@@ -1748,7 +1749,7 @@ impl OverviewSession {
         shared: bool,
         backgrounds: &mut DesktopBackgrounds,
     ) -> Option<Self> {
-        set_capture_limits(settings);
+        set_capture_limits();
         let construction_start = Instant::now();
         let _tx = LayerTransaction::disabled();
         let mut displays = Vec::new();
@@ -1769,7 +1770,7 @@ impl OverviewSession {
             }
             let wallpaper = backgrounds.image(d.info.id.as_u32());
             let bar = grid_bar_groups(reactor, &d.info.display_uuid);
-            let look = GridLook::new(settings);
+            let look = GridLook::new();
             if let Some(view) = DisplayOverview::new(d.info, workspaces, mtm, wallpaper, look, bar)
             {
                 if d.is_active_context {
@@ -1803,7 +1804,7 @@ impl OverviewSession {
             wake: None,
             previews: false,
             show_empty: settings.show_empty_workspaces,
-            grid_look: GridLook::new(settings),
+            grid_look: GridLook::new(),
             rift_focus_at: None,
             hide_toolbar: settings.hide_toolbar,
             shared,

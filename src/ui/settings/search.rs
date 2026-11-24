@@ -369,6 +369,7 @@ fn catalog() -> &'static [Entry] {
         append::<DragDropSettings>(&mut out, "", Mouse, None, "Mouse & Trackpad › Drag & Drop");
         append::<MenuBarSettings>(&mut out, "", MenuBar, None, "Menu Bar");
         append::<MissionControlSettings>(&mut out, "", Overview, None, "Overview");
+        append::<GridOverviewSettings>(&mut out, "", Overview, None, "Overview › Grid");
         append::<GridMotionSettings>(&mut out, "", Overview, None, "Overview › Grid Motion");
         append::<BorderSettings>(&mut out, "", Borders, None, "Window Borders");
         out.extend(super::interface::OVERVIEW_SHORTCUTS.map(|(_, title)| Draft {

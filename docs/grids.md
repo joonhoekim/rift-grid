@@ -75,7 +75,7 @@ instead, as a window back from the Dock does when its cell changed meanwhile.
 
 Cells never lead into another grid: moving past the grid's edge stops.
 
-Trackpad swipes (`[settings.grid_gestures]`, on by default) do the same on the
+Trackpad swipes (`[settings.grid.gestures]`, on by default) do the same on the
 focused display, one step a swipe. The content follows the fingers, as in
 macOS and subline:
 
@@ -105,7 +105,7 @@ the display the window opens on, even when grid N is on another display.
 
 ## Menu bar
 
-`[settings.ui.menu_bar] grid_maps`:
+`[settings.grid] menu_bar_maps`:
 
 - `"all"` (default): a 3x3 map per grid, side by side, each after its number,
   for the grids that have windows plus the grid on screen. The grid on screen, number and map, is drawn at full strength.
@@ -121,7 +121,7 @@ shows it. Stepping through workspaces one by one is left out of that menu.
 The overview shows the grid on screen and follows it as it changes: focus
 moves, windows that open or close, and grids that are switched to or filled.
 Its window previews are live. They are captured at most 1024×768 but for the
-selected window; `[settings.ui.mission_control] full_resolution = true` captures
+selected window; `[settings.grid.overview] full_resolution = true` captures
 each at the size it shows at, at the display's resolution, and raises cgs's
 capture memory limits for it (`cgs/`, below).
 
@@ -137,17 +137,17 @@ no display yet. The cells sit below the buttons.
 - Dropping a window's tile on a button sends the window to that grid's current
   cell, as Alt+Ctrl+N does; the overview stays where it is.
 
-Stages: the overview opens on the current cell at `grid_zoom` with
+Stages: the overview opens on the current cell at `zoom` with
 its neighbours around it; opening it again shows the whole grid, and a third time
 closes it. Esc steps back out a stage at a time: from the whole grid to the cell
-stage, from there out of the overview. `grid_fit = true` makes the whole grid the
+stage, from there out of the overview. `fit = true` makes the whole grid the
 only stage.
 
 When the current cell changes in the first stage, the camera moves as
-`[settings.ui.mission_control] grid_follow` says: `"reveal"` (default) moves only as far as it takes to show the current cell whole, a gap
+`[settings.grid.overview] follow` says: `"reveal"` (default) moves only as far as it takes to show the current cell whole, a gap
 from the edges; `"center"` centers the current cell every time.
 
-Each window's tile carries a row across its top (`grid_labels`, on by
+Each window's tile carries a row across its top (`labels`, on by
 default): the app's icon, the window's title, and a close button at the end,
 which asks the window to close, as its own close button would; the overview
 stays open. The row is the tile's width and 24 points high, and is left out on
@@ -159,7 +159,7 @@ open.
 
 ## Motion
 
-`[settings.ui.grid_motion]` shows where a move went. Both parts are on by default.
+`[settings.grid.motion]` shows where a move went. Both parts are on by default.
 
 - `pan`: the screen slides to the cell moved to, diagonally when the move
   skips across, over `duration_ms` (240, up to 10000). A window carried along

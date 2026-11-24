@@ -16,9 +16,9 @@ New code lives in fork modules; upstream files only call into them.
 | `actor/reactor/events/command.rs` | The list of grid commands and their arm in the command-kind `match`, and switch tracking for commands that change cells only when they cross an edge |
 | `layout_engine/engine.rs` | Grid commands in `handle_command` and `handle_virtual_workspace_command`; the recent window list; `return_to_remembered_cell` beside the persistence match in `assign_window_with_app_info`, `put_back_layouts` first on `SpaceExposed` and `cells.forget_app` on `AppTerminated` (`engine/cells.rs`); in `WindowAdded`, a window placed in a cell not shown reports a change, so it is moved off screen |
 | `model/virtual_workspace.rs` | `grid_current`; `shown_before`, which `ensure_space_initialized` shows first; the settings kept as `grid::effective_settings` (a workspace for every cell, named by grid and cell) in `new_with_config`, `plan_settings_names` and `apply_settings`; `remember_grid_cell` in `set_active_workspace`; `remap_grid_cells` in `remap_space`; app rules' `grid` through `rule_workspace` in `apply_app_rule_decision` |
-| `common/config/types.rs` | `grid_columns`, app rules' `grid`, `validate_grid`; grid fields in `MissionControlSettings`, whose `Default` is written out by hand |
-| `ui/mission_control.rs`, `actor/mission_control.rs` | Upstream's Overview is one spatial scene seen through a camera; the grid places each cell's region at its row and column (`place_grid_cells`, `sync_grid_layers`), and `default_camera` takes `grid_camera`: the current cell at `grid_zoom`, then the whole grid. `step_back`/`step_in` move between the two; `ToggleWhole`, `Changed` and `Step` events, Esc stepping in before it closes; `follow_grid` on refresh; `grid_input` first in `OverviewSession::input` (label close buttons, drops on grid buttons, `grid_bar_input`, arrows and Tab as `GridFocus`); in `drop_target`, the grid cell's workspace; window shadows slid in `apply_camera`; `set_capture_limits` first in `OverviewSession::new`; no pixel cap in `update_sources_at` with `full_resolution` |
-| `ui/menu_bar.rs`, `actor/menu_bar.rs` | Grid maps and the grid entries of the Workspace menu; the grid fields in the settings preview's `Workspace` |
+| `common/config/types.rs` | `grid_columns`, app rules' `grid`, `validate_grid`; `Settings.grid`, the fork's `[settings.grid]` (`common/config/grid.rs`); `UiSettings.borders` |
+| `ui/mission_control.rs`, `actor/mission_control.rs` | Upstream's Overview is one spatial scene seen through a camera; the grid places each cell's region at its row and column (`place_grid_cells`, `sync_grid_layers`), and `default_camera` takes `grid_camera`: the current cell at `[settings.grid.overview] zoom`, then the whole grid. `step_back`/`step_in` move between the two; `ToggleWhole`, `Changed` and `Step` events, Esc stepping in before it closes; `follow_grid` on refresh; `grid_input` first in `OverviewSession::input` (label close buttons, drops on grid buttons, `grid_bar_input`, arrows and Tab as `GridFocus`); in `drop_target`, the grid cell's workspace; window shadows slid in `apply_camera`; `set_capture_limits` first in `OverviewSession::new`; no pixel cap in `update_sources_at` with `full_resolution`. The grid's settings reach the Overview through `set_grid_settings`, which the reactor calls with the rest of `[settings.grid]` |
+| `ui/menu_bar.rs`, `actor/menu_bar.rs` | Grid maps and the grid entries of the Workspace menu; the grid fields in the settings preview's `Workspace`; `set_grid_maps` before each `update_config` |
 | `actor/gesture.rs` | `ActionConfig::grid`; the grid's actions in `Settings` (first in `action_for`, and `consume` while they are on); `DeviceSession` keeps `settings` and `mode` in place of upstream's `alternate`, so a late finger can pick any action; a `Lifecycle::Grid` variant, and one call to `grid_swipe` for a grid action's swipe frames |
 | `sys/gesture.rs`, `actor/input.rs` | `Filter::vertical`: with a vertical grid swipe on, vertical Dock swipes (Mission Control, App Exposé) go through arbitration too |
 | `actor/input.rs` (gesture `configure`) | Gestures stay on while the Overview is open when the grid's are; `Control::set_overview` after `configure`, and `action_for` then gives only grid actions |
@@ -27,7 +27,7 @@ New code lives in fork modules; upstream files only call into them.
 | `sys/mach.rs`, `sys/service.rs`, `common/config/types.rs`, `crates/rift-client/src/lib.rs`, `Cargo.toml`, `assets/Info.plist`, `rift.default.toml` | The fork's names (`crates/rift-protocol/src/names.rs`): the Mach service and launchd label, the binary looked up on `PATH`, the log paths, the config and data directories, the default layout folder, the `[[bin]]` names, the bundle id; clap's `name` in both binaries |
 | `bin/rift.rs` | `load_cells` after the layout engine is made |
 | `Cargo.toml` | `objc2-screen-capture-kit`, which upstream dropped with its screenshot previews: the grid's slides capture windows with it |
-| `ui/settings/*` | A Window Borders category (also in `sidebar.rs`'s badge match); in `interface::overview`, `full_resolution` in the first section and the grid's sections from `grid_pages::overview_sections`; their search entries; in `mod.rs`, one call that ends a field's editing on a click elsewhere or when the window goes to the back (`settings/editing.rs`), checked in `native_tests.rs` |
+| `ui/settings/*` | A Window Borders category (also in `sidebar.rs`'s badge match); in `interface::overview`, the grid's sections from `grid_pages::overview_sections`; their search entries; in `mod.rs`, one call that ends a field's editing on a click elsewhere or when the window goes to the back (`settings/editing.rs`), checked in `native_tests.rs` |
 
 ## cgs
 
@@ -50,10 +50,6 @@ These could shrink the fork's footprint in upstream files. None is a defect.
   one. Their `#[command(...)]` attributes put the ones that take no number in
   the settings app's command list; the rest are `skip`, since the list would
   offer workspace names for a grid number.
-- `MissionControlSettings` lost its derived `Default`, so every field upstream
-  adds must also go into the fork's impl. Moving the grid fields to their own
-  `[settings.ui.grid_overview]` table would restore the derive, at the cost of a
-  config change.
 - The settings app's category list, page match and search catalog: upstream
   reorganizes these often, and each time the fork's Window Borders entries
   conflict.

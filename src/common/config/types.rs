@@ -596,10 +596,10 @@ pub struct Settings {
     #[serde(default)]
     #[setting(ignore)]
     pub gestures: GestureSettings,
-    /// Trackpad swipes on the workspace grid
+    /// The workspace grid's own settings (rift-grid).
     #[serde(default)]
     #[setting(ignore)]
-    pub grid_gestures: super::GridGestureSettings,
+    pub grid: super::GridSettings,
     /// Modifier-assisted dragging and tiled-window drop settings.
     #[serde(default)]
     #[setting(ignore)]
@@ -644,8 +644,6 @@ pub struct UiSettings {
     pub mission_control: MissionControlSettings,
     #[serde(default)]
     pub borders: super::BorderSettings,
-    #[serde(default)]
-    pub grid_motion: super::GridMotionSettings,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, ConfigSchema)]
@@ -892,10 +890,6 @@ pub struct MenuBarSettings {
     /// Folder containing custom layout indicator images.
     #[setting(label = "Layout folder", custom, enabled_by = "enabled")]
     pub layout_folder: PathBuf,
-    #[serde(default)]
-    /// With workspaces in grids, which grids get a map.
-    #[setting(label = "Grid maps", choices, enabled_by = "enabled", aliases = "grid map 3x3")]
-    pub grid_maps: super::GridMaps,
 }
 
 impl MenuBarSettings {
@@ -921,7 +915,6 @@ impl Default for MenuBarSettings {
             display_style: WorkspaceDisplayStyle::default(),
             show_fullscreen_indicator: false,
             layout_folder: default_layout_folder(),
-            grid_maps: super::GridMaps::default(),
         }
     }
 }
@@ -1100,7 +1093,7 @@ impl StackLineReserve {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, ConfigSchema)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default, ConfigSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MissionControlSettings {
     /// Overview-only shortcuts. An omitted map uses the built-in bindings.
@@ -1139,76 +1132,6 @@ pub struct MissionControlSettings {
     /// Duration of Overview entry and camera navigation, in milliseconds.
     #[setting(label = "Animation duration", unit = "ms", enabled_by = "enabled")]
     pub fade_duration_ms: f64,
-    #[serde(default)]
-    /// No longer used: the Overview's previews are live in both grid styles.
-    /// Kept so that configs which set it still load.
-    #[setting(label = "Live preview interval", unit = "ms")]
-    pub live_preview_interval_ms: f64,
-    #[serde(default)]
-    /// Capture every preview at the size it shows at, at the display's
-    /// resolution, rather than at most 1024×768 for all but the selected
-    /// window: sharp previews, for more memory and capture work while the
-    /// Overview is open (rift-grid only).
-    #[setting(
-        label = "Full-resolution previews",
-        enabled_by = "window_previews",
-        aliases = "quality sharp retina resolution blurry soft previews capture"
-    )]
-    pub full_resolution: bool,
-    #[serde(default = "default_mission_control_grid_gap")]
-    /// Space between the cells of a workspace grid in Overview, as a fraction of the
-    /// display's shorter side, so it looks the same at any size and scale.
-    #[setting(
-        label = "Grid cell gap",
-        unit = "%",
-        scale = 100.0,
-        enabled_by = "enabled",
-        aliases = "grid overview spacing cells"
-    )]
-    pub grid_gap: f64,
-    #[serde(default = "yes")]
-    /// Show each window's app and title over its tile in a grid Overview.
-    #[setting(
-        label = "Grid tile labels",
-        enabled_by = "enabled",
-        aliases = "grid overview titles icons names"
-    )]
-    pub grid_labels: bool,
-    #[serde(default)]
-    /// Show the whole workspace grid as soon as Overview opens. Off, Overview first
-    /// shows the active cell at the grid zoom with its neighbours around it, and
-    /// opening it again steps back to the whole grid.
-    #[setting(
-        label = "Fit the whole grid",
-        enabled_by = "enabled",
-        aliases = "grid overview stages whole at a glance"
-    )]
-    pub grid_fit: bool,
-    #[serde(default = "default_mission_control_grid_zoom")]
-    /// Size of a grid cell in Overview's first stage, as a fraction of the display.
-    /// The whole grid is never shown larger than this.
-    #[setting(
-        label = "Grid zoom",
-        unit = "%",
-        scale = 100.0,
-        enabled_by = "enabled",
-        aliases = "grid overview cell size first stage"
-    )]
-    pub grid_zoom: f64,
-    #[serde(default)]
-    /// How the first stage of a grid Overview moves when the active cell changes.
-    #[setting(
-        label = "Grid camera",
-        choices,
-        enabled_by = "enabled",
-        aliases = "grid overview follow focus reveal centre center"
-    )]
-    pub grid_follow: super::GridFollow,
-    #[serde(default)]
-    /// No longer used: the grid Overview is the cards. Kept so that configs
-    /// which set it still load.
-    #[setting(label = "Grid style", choices)]
-    pub grid_style: super::GridStyle,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
@@ -1243,35 +1166,6 @@ impl MissionControlSettings {
 }
 
 fn default_mission_control_fade_duration_ms() -> f64 { 180.0 }
-
-fn default_mission_control_grid_gap() -> f64 { 0.01 }
-
-fn default_mission_control_grid_zoom() -> f64 { 0.5 }
-
-// A missing section keeps Overview and its previews off, as before; the grid's look
-// matches what a missing key gets.
-impl Default for MissionControlSettings {
-    fn default() -> Self {
-        Self {
-            keys: None,
-            activate_on_hotkey_release: false,
-            hide_toolbar: false,
-            show_empty_workspaces: false,
-            window_previews: false,
-            enabled: false,
-            fade_enabled: false,
-            fade_duration_ms: 0.0,
-            live_preview_interval_ms: 0.0,
-            full_resolution: false,
-            grid_gap: default_mission_control_grid_gap(),
-            grid_labels: true,
-            grid_fit: false,
-            grid_zoom: default_mission_control_grid_zoom(),
-            grid_follow: super::GridFollow::default(),
-            grid_style: super::GridStyle::default(),
-        }
-    }
-}
 
 fn default_drop_zone_fraction() -> f64 { 0.25 }
 
@@ -1749,7 +1643,7 @@ impl Settings {
 
         issues.extend(self.layout.validate());
         issues.extend(self.ui.stack_line.validate());
-        self.grid_gestures.validate(&mut issues);
+        self.grid.gestures.validate(&mut issues);
 
         if !(0.10..=0.45).contains(&self.drag_drop.drop_zone_fraction) {
             issues.push(format!(

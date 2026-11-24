@@ -46,6 +46,7 @@ use crate::sys::screen::SpaceId;
 use crate::ui::common::compute_window_layout_metrics;
 
 mod grid_map;
+pub(crate) use grid_map::set_maps as set_grid_maps;
 
 const CELL_WIDTH: f64 = 20.0;
 const CELL_HEIGHT: f64 = 15.0;
