@@ -64,12 +64,12 @@ instead, as a window back from the Dock does when its cell changed meanwhile.
 
 | Key (seed config) | Command | What it does |
 | --- | --- | --- |
-| Alt+1..9 | `switch_to_grid = N` | Show grid N at its current cell, on the display it is on, and focus that display |
-| Alt+Ctrl+1..9 | `move_window_to_grid = N` | Send the focused window to grid N's current cell; focus stays unless grid N is on screen on another display |
-| Alt+IJKL / arrows | `grid_focus` | Tile beside, or the next cell of this grid past its edge |
-| Alt+Shift+IJKL / arrows | `grid_move` | Swap with the tile beside, or carry the window into the next cell |
-| Alt+Cmd+IJKL | `grid_cell` | Next cell of this grid |
-| Alt+H | `grid_center` | Center cell of the grid on screen |
+| Alt+1..9 | `grid = N` | Show grid N at its current cell, on the display it is on, and focus that display |
+| Alt+Ctrl+1..9 | `send_to_grid = N` | Send the focused window to grid N's current cell; focus stays unless grid N is on screen on another display |
+| Alt+IJKL / arrows | `focus` | Tile beside, or the next cell of this grid past its edge |
+| Alt+Shift+IJKL / arrows | `move_tile` | Swap with the tile beside, or carry the window into the next cell |
+| Alt+Cmd+IJKL | `go_to_cell` | Next cell of this grid |
+| Alt+H | `go_to_center_cell` | Center cell of the grid on screen |
 | Alt+Tab | `focus_recent_window` | The window focused before this one, whichever cell or grid it is in; again goes back |
 | Alt+O | `show_mission_control_all` | Overview; again for the whole grid, again to close |
 
@@ -81,7 +81,7 @@ macOS and subline:
 
 | Swipe | What it does |
 | --- | --- |
-| Three fingers left / right / up / down | The cell to the right / left / below / above, like `grid_cell` |
+| Three fingers left / right / up / down | The cell to the right / left / below / above, like `go_to_cell` |
 | Four fingers left / right | The next / previous grid on this display (shown, or holding windows), round the end |
 | Four fingers up | The Overview, as Alt+O; again steps out to the whole grid, and stops there |
 | Four fingers down (Overview open) | Steps back in a stage, as Esc |
@@ -163,7 +163,7 @@ open.
 
 - `pan`: the screen slides to the cell moved to, diagonally when the move
   skips across, over `duration_ms` (240, up to 10000). A window carried along
-  by `grid_move` stays in place while the cells slide past it. Moving to another
+  by `move_tile` stays in place while the cells slide past it. Moving to another
   grid fades to it instead. The slide is drawn from screen captures on an overlay
   while rift moves the windows under it, so it needs Screen Recording access;
   without it, or while the Overview is open, moves show at once.

@@ -2627,12 +2627,12 @@ impl LayoutEngine {
             | LayoutCommand::SetWorkspaceLayout { .. }
             | LayoutCommand::CreateWorkspace
             | LayoutCommand::SwitchToLastWorkspace
-            | LayoutCommand::GridFocus(_)
-            | LayoutCommand::GridMove(_)
-            | LayoutCommand::GridCell(_)
-            | LayoutCommand::GridCenter
-            | LayoutCommand::SwitchToGrid(_)
-            | LayoutCommand::MoveWindowToGrid(_)
+            | LayoutCommand::Focus(_)
+            | LayoutCommand::MoveTile(_)
+            | LayoutCommand::GoToCell(_)
+            | LayoutCommand::GoToCenterCell
+            | LayoutCommand::Grid(_)
+            | LayoutCommand::SendToGrid(_)
             | LayoutCommand::SendWindowToGrid { .. }
             | LayoutCommand::MoveGridToDisplay { .. }
             | LayoutCommand::FocusRecentWindow => EventResponse::default(),
@@ -3113,12 +3113,12 @@ impl LayoutEngine {
                 };
                 self.switch_to_workspace_id(window_store, context, target.id, None)
             }
-            LayoutCommand::GridFocus(_)
-            | LayoutCommand::GridMove(_)
-            | LayoutCommand::GridCell(_)
-            | LayoutCommand::GridCenter
-            | LayoutCommand::SwitchToGrid(_)
-            | LayoutCommand::MoveWindowToGrid(_)
+            LayoutCommand::Focus(_)
+            | LayoutCommand::MoveTile(_)
+            | LayoutCommand::GoToCell(_)
+            | LayoutCommand::GoToCenterCell
+            | LayoutCommand::Grid(_)
+            | LayoutCommand::SendToGrid(_)
             | LayoutCommand::SendWindowToGrid { .. }
             | LayoutCommand::FocusRecentWindow => {
                 self.handle_grid_command(window_store, space, command)

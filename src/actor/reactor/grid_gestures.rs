@@ -32,12 +32,12 @@ impl Reactor {
                 }
                 return;
             }
-            GridSwipe::Cell => LayoutCommand::GridCell(towards),
+            GridSwipe::Cell => LayoutCommand::GoToCell(towards),
             GridSwipe::Grids { .. } => {
                 let Some(grid) = self.next_grid_on(space, towards == Direction::Right) else {
                     return;
                 };
-                LayoutCommand::SwitchToGrid(grid + 1)
+                LayoutCommand::Grid(grid + 1)
             }
         };
         let before = self.layout_manager.layout_engine.workspaces().active_workspace(space);
@@ -151,7 +151,7 @@ mod tests {
         reactor.handle_event(Event::ApplicationGloballyActivated(1));
         apps.simulate_until_quiet(&mut reactor);
         // Grids 1 and 3 hold a window each; grid 2 is on no display.
-        reactor.handle_test_layout_command(LayoutCommand::MoveWindowToGrid(3));
+        reactor.handle_test_layout_command(LayoutCommand::SendToGrid(3));
         apps.simulate_until_quiet(&mut reactor);
         assert!(reactor.grid_is_on(space, 2));
 

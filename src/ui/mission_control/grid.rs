@@ -864,14 +864,14 @@ impl OverviewSession {
         use crate::layout_engine::{Direction, LayoutCommand};
         self.displays.get(self.active)?.grid.shape?;
         let command = match *input {
-            Input::Up => LayoutCommand::GridFocus(Direction::Up),
-            Input::Down => LayoutCommand::GridFocus(Direction::Down),
-            Input::WorkspaceSteps(steps) if steps < 0 => LayoutCommand::GridFocus(Direction::Up),
-            Input::WorkspaceSteps(steps) if steps > 0 => LayoutCommand::GridFocus(Direction::Down),
-            Input::Left => LayoutCommand::GridFocus(Direction::Left),
-            Input::Right => LayoutCommand::GridFocus(Direction::Right),
-            Input::WindowSteps(steps) if steps < 0 => LayoutCommand::GridFocus(Direction::Left),
-            Input::WindowSteps(steps) if steps > 0 => LayoutCommand::GridFocus(Direction::Right),
+            Input::Up => LayoutCommand::Focus(Direction::Up),
+            Input::Down => LayoutCommand::Focus(Direction::Down),
+            Input::WorkspaceSteps(steps) if steps < 0 => LayoutCommand::Focus(Direction::Up),
+            Input::WorkspaceSteps(steps) if steps > 0 => LayoutCommand::Focus(Direction::Down),
+            Input::Left => LayoutCommand::Focus(Direction::Left),
+            Input::Right => LayoutCommand::Focus(Direction::Right),
+            Input::WindowSteps(steps) if steps < 0 => LayoutCommand::Focus(Direction::Left),
+            Input::WindowSteps(steps) if steps > 0 => LayoutCommand::Focus(Direction::Right),
             Input::Cycle(true) => LayoutCommand::NextWindow,
             Input::Cycle(false) => LayoutCommand::PrevWindow,
             _ => return None,
@@ -912,7 +912,7 @@ impl OverviewSession {
                             grid: button.grid + 1,
                             display: crate::model::reactor::DisplaySelector::Uuid(display),
                         },
-                        None => LayoutCommand::SwitchToGrid(button.grid + 1),
+                        None => LayoutCommand::Grid(button.grid + 1),
                     })
                 }))
             }

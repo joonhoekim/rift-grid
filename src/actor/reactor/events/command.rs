@@ -68,12 +68,12 @@ impl Reactor {
         );
         let is_grid_command = matches!(
             cmd,
-            LayoutCommand::GridFocus(_)
-                | LayoutCommand::GridMove(_)
-                | LayoutCommand::GridCell(_)
-                | LayoutCommand::GridCenter
-                | LayoutCommand::SwitchToGrid(_)
-                | LayoutCommand::MoveWindowToGrid(_)
+            LayoutCommand::Focus(_)
+                | LayoutCommand::MoveTile(_)
+                | LayoutCommand::GoToCell(_)
+                | LayoutCommand::GoToCenterCell
+                | LayoutCommand::Grid(_)
+                | LayoutCommand::SendToGrid(_)
                 | LayoutCommand::SendWindowToGrid { .. }
                 | LayoutCommand::MoveGridToDisplay { .. }
                 | LayoutCommand::FocusRecentWindow

@@ -91,11 +91,11 @@ pub(super) struct Before {
 fn moves_cells(command: &LayoutCommand) -> bool {
     matches!(
         command,
-        LayoutCommand::GridFocus(_)
-            | LayoutCommand::GridMove(_)
-            | LayoutCommand::GridCell(_)
-            | LayoutCommand::GridCenter
-            | LayoutCommand::SwitchToGrid(_)
+        LayoutCommand::Focus(_)
+            | LayoutCommand::MoveTile(_)
+            | LayoutCommand::GoToCell(_)
+            | LayoutCommand::GoToCenterCell
+            | LayoutCommand::Grid(_)
             | LayoutCommand::FocusRecentWindow
             | LayoutCommand::NextWorkspace(_)
             | LayoutCommand::PrevWorkspace(_)

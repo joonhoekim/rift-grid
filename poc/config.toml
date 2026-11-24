@@ -265,10 +265,10 @@ move2 = "Alt + Ctrl"
 
 [keys]
 # 3x3 grid proof of concept: cell-by-cell movement and the center cell.
-"Alt + Cmd + I" = { grid_cell = "up" }
-"Alt + Cmd + K" = { grid_cell = "down" }
-"Alt + Cmd + J" = { grid_cell = "left" }
-"Alt + Cmd + L" = { grid_cell = "right" }
+"Alt + Cmd + I" = { go_to_cell = "up" }
+"Alt + Cmd + K" = { go_to_cell = "down" }
+"Alt + Cmd + J" = { go_to_cell = "left" }
+"Alt + Cmd + L" = { go_to_cell = "right" }
 "Alt + H" = { switch_to_workspace = 4 }
 
 # ── Tier 1 — Alt: go there, open it ──────────────────────────────────────
@@ -283,14 +283,14 @@ move2 = "Alt + Ctrl"
 # spatial. The arrows are bound to the same actions throughout, permanently:
 # they are what IJKL is imitating, and they are the safety net while the hand
 # is still learning that K went from "up" to "down".
-"Alt + I" = { grid_focus = "up" }
-"Alt + K" = { grid_focus = "down" }
-"Alt + J" = { grid_focus = "left" }
-"Alt + L" = { grid_focus = "right" }
-"Alt + Up" = { grid_focus = "up" }
-"Alt + Down" = { grid_focus = "down" }
-"Alt + Left" = { grid_focus = "left" }
-"Alt + Right" = { grid_focus = "right" }
+"Alt + I" = { focus = "up" }
+"Alt + K" = { focus = "down" }
+"Alt + J" = { focus = "left" }
+"Alt + L" = { focus = "right" }
+"Alt + Up" = { focus = "up" }
+"Alt + Down" = { focus = "down" }
+"Alt + Left" = { focus = "left" }
+"Alt + Right" = { focus = "right" }
 
 # Workspaces flank the up key on the row above — U back, O forward. They were
 # U and I until IJKL took I. On hyprland and niri these are the same two keys,
@@ -366,14 +366,14 @@ move2 = "Alt + Ctrl"
 # ── Tier 2 — Alt+Shift: take the window with you ─────────────────────────
 # One rule, four groups: directions, workspace back/forward, workspace by
 # number, and the two window-state keys that have a bigger sibling.
-"move + I" = { grid_move = "up" }
-"move + K" = { grid_move = "down" }
-"move + J" = { grid_move = "left" }
-"move + L" = { grid_move = "right" }
-"move + Up" = { grid_move = "up" }
-"move + Down" = { grid_move = "down" }
-"move + Left" = { grid_move = "left" }
-"move + Right" = { grid_move = "right" }
+"move + I" = { move_tile = "up" }
+"move + K" = { move_tile = "down" }
+"move + J" = { move_tile = "left" }
+"move + L" = { move_tile = "right" }
+"move + Up" = { move_tile = "up" }
+"move + Down" = { move_tile = "down" }
+"move + Left" = { move_tile = "left" }
+"move + Right" = { move_tile = "right" }
 
 # `follow = true` so the window and the focus travel together — the point of
 # the tier is that you are going along with it.

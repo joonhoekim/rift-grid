@@ -980,12 +980,12 @@ fn parse_whole_grid_overview_toggle() {
         r#"
             [settings]
             [keys]
-            "Alt + Tab" = "toggle_mission_control_whole"
+            "Alt + Tab" = "overview_whole"
         "#,
     )
     .unwrap();
     assert!(config.binding_mode_specs[0].1.iter().any(|(spec, command)| spec == "Alt + Tab"
-        && *command == WmCommand::Wm(WmCmd::ToggleMissionControlWhole)));
+        && *command == WmCommand::Wm(WmCmd::OverviewWhole)));
 }
 
 #[test]

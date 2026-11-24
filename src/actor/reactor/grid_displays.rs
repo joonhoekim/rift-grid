@@ -1,7 +1,7 @@
 //! Grids belong to displays, as workspaces do in Hyprland: a grid is on one
 //! display at a time, the one showing it or holding its windows, and its number
-//! leads there. `switch_to_grid` shows the grid on its display and moves the
-//! focus there (not while the Overview is open); `move_window_to_grid` sends the window to that display. A grid
+//! leads there. `grid` shows the grid on its display and moves the
+//! focus there (not while the Overview is open); `send_to_grid` sends the window to that display. A grid
 //! on no display yet comes up on the focused one. A display that comes up showing
 //! an empty grid another display shows already is given the first free grid.
 //! `move_grid_to_display` hands a grid to another display, from the overview.
@@ -133,7 +133,7 @@ impl Reactor {
         if let Some(next) = next {
             let command_space = self.space_state.command_space;
             self.space_state.command_space = Some(source);
-            self.handle_event_inner(Event::Command(Command::Layout(LayoutCommand::SwitchToGrid(
+            self.handle_event_inner(Event::Command(Command::Layout(LayoutCommand::Grid(
                 next + 1,
             ))));
             self.space_state.command_space = command_space;
@@ -154,11 +154,11 @@ impl Reactor {
             }
             return Ok(());
         }
-        let (LayoutCommand::SwitchToGrid(grid) | LayoutCommand::MoveWindowToGrid(grid)) = *command
+        let (LayoutCommand::Grid(grid) | LayoutCommand::SendToGrid(grid)) = *command
         else {
             return Err(event);
         };
-        let switch = matches!(command, LayoutCommand::SwitchToGrid(_));
+        let switch = matches!(command, LayoutCommand::Grid(_));
         if !self.layout_manager.layout_engine.workspaces().grid_enabled() {
             return Err(event);
         }
@@ -226,7 +226,7 @@ impl Reactor {
             let Some(free) = free else { continue };
             let command_space = self.space_state.command_space;
             self.space_state.command_space = Some(space);
-            self.handle_event_inner(Event::Command(Command::Layout(LayoutCommand::SwitchToGrid(
+            self.handle_event_inner(Event::Command(Command::Layout(LayoutCommand::Grid(
                 free + 1,
             ))));
             self.space_state.command_space = command_space;
@@ -274,7 +274,7 @@ mod tests {
         let (mut reactor, left, right) = two_displays();
         assert_eq!(reactor.raw_command_space(), Some(left));
 
-        reactor.handle_test_layout_command(LayoutCommand::SwitchToGrid(2));
+        reactor.handle_test_layout_command(LayoutCommand::Grid(2));
         assert_eq!(
             reactor.raw_command_space(),
             Some(right),
@@ -282,7 +282,7 @@ mod tests {
         );
         assert_eq!((grid(&reactor, left), grid(&reactor, right)), (Some(0), Some(1)));
 
-        reactor.handle_test_layout_command(LayoutCommand::SwitchToGrid(3));
+        reactor.handle_test_layout_command(LayoutCommand::Grid(3));
         assert_eq!(
             grid(&reactor, right),
             Some(2),
@@ -290,12 +290,12 @@ mod tests {
         );
         assert_eq!(reactor.raw_command_space(), Some(right));
 
-        reactor.handle_test_layout_command(LayoutCommand::SwitchToGrid(1));
+        reactor.handle_test_layout_command(LayoutCommand::Grid(1));
         assert_eq!(reactor.raw_command_space(), Some(left));
         assert_eq!(grid(&reactor, left), Some(0));
 
         // Grid 2 left the screen empty, so it is on no display now.
-        reactor.handle_test_layout_command(LayoutCommand::SwitchToGrid(2));
+        reactor.handle_test_layout_command(LayoutCommand::Grid(2));
         assert_eq!(reactor.raw_command_space(), Some(left));
         assert_eq!((grid(&reactor, left), grid(&reactor, right)), (Some(1), Some(2)));
     }
@@ -327,13 +327,13 @@ mod tests {
                 apps.simulate_until_quiet(&mut reactor);
                 assert!(reactor.grid_has_windows(right, 1));
                 reactor.space_state.command_space = Some(right);
-                reactor.handle_test_layout_command(LayoutCommand::SwitchToGrid(3));
+                reactor.handle_test_layout_command(LayoutCommand::Grid(3));
                 reactor.handle_event(Event::WindowServerFocusChanged(window, left));
                 assert_eq!(grid(&reactor, right), Some(2));
                 assert_eq!(reactor.raw_command_space(), Some(left));
             }
 
-            reactor.handle_test_layout_command(LayoutCommand::MoveWindowToGrid(2));
+            reactor.handle_test_layout_command(LayoutCommand::SendToGrid(2));
             apps.simulate_until_quiet(&mut reactor);
             let current =
                 reactor.layout_manager.layout_engine.workspaces().grid_current_cell(right, 1);

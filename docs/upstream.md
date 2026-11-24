@@ -218,7 +218,7 @@ those hooks, and are useful upstream on their own. None has been proposed yet.
   gestures are two fixed actions: horizontal workspace switching and the
   Scrolling layout strip. A table like `[gestures] three.left = "..."` (as in
   subline) binding any command to three or four fingers in each direction
-  would make the cell swipe plain configuration (`grid_cell`), leaving the
+  would make the cell swipe plain configuration (`go_to_cell`), leaving the
   fork only its grid and Overview commands. It needs two changes the fork
   already carries: vertical Dock swipes (Mission Control, App Exposé) going
   through the event tap's arbitration (`Filter::vertical`), and a late finger

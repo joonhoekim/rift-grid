@@ -76,7 +76,7 @@ pub enum MenuAction {
     PrevWorkspace,
     SwitchToWorkspace(usize),
     /// Grid N, 1-based.
-    SwitchToGrid(usize),
+    Grid(usize),
     SaveLayout(PathBuf),
     SaveMasterFile,
     RestoreLayout {

@@ -364,19 +364,19 @@ enum LayoutCommands {
     /// Toggle centering of the selected column in scrolling layout.
     /// If invoked again on the same selection, centering is removed.
     CenterSelection,
-    /// Workspace grid: focus the neighboring tile, or the neighboring cell at the edge
-    GridFocus { direction: String },
-    /// Workspace grid: swap with the neighboring tile, or carry the window into the neighboring cell
-    GridMove { direction: String },
-    /// Workspace grid: go to the neighboring cell
-    GridCell { direction: String },
-    /// Workspace grid: go to the center cell of the grid on screen
-    GridCenter,
-    /// Workspace grid: show grid N (1-9) at its current cell
-    SwitchGrid { grid: usize },
-    /// Workspace grid: send the focused window to grid N's (1-9) current cell
-    MoveToGrid { grid: usize },
-    /// Workspace grid: hand grid N (1-9) to another display, which shows it
+    /// Grid: focus the tile beside, or the next cell past the cell's edge
+    Focus { direction: String },
+    /// Grid: swap with the tile beside, or carry the window into the next cell
+    MoveTile { direction: String },
+    /// Grid: go to the next cell
+    GoToCell { direction: String },
+    /// Grid: go to the center cell of the grid on screen
+    GoToCenterCell,
+    /// Grid: show grid N (1-9) at its current cell
+    Grid { grid: usize },
+    /// Grid: send the focused window to grid N's (1-9) current cell
+    SendToGrid { grid: usize },
+    /// Grid: hand grid N (1-9) to another display, which shows it
     MoveGridToDisplay {
         grid: usize,
         #[command(flatten)]
@@ -1000,23 +1000,23 @@ fn map_layout_command(cmd: LayoutCommands) -> Result<CliCommand, String> {
         LayoutCommands::MoveNode { direction } => Ok(CliCommand::Reactor(
             reactor::Command::Layout(LC::MoveNode(direction.into())),
         )),
-        LayoutCommands::GridFocus { direction } => Ok(CliCommand::Reactor(
-            reactor::Command::Layout(LC::GridFocus(direction.into())),
+        LayoutCommands::Focus { direction } => Ok(CliCommand::Reactor(
+            reactor::Command::Layout(LC::Focus(direction.into())),
         )),
-        LayoutCommands::GridMove { direction } => Ok(CliCommand::Reactor(
-            reactor::Command::Layout(LC::GridMove(direction.into())),
+        LayoutCommands::MoveTile { direction } => Ok(CliCommand::Reactor(
+            reactor::Command::Layout(LC::MoveTile(direction.into())),
         )),
-        LayoutCommands::GridCell { direction } => Ok(CliCommand::Reactor(
-            reactor::Command::Layout(LC::GridCell(direction.into())),
+        LayoutCommands::GoToCell { direction } => Ok(CliCommand::Reactor(
+            reactor::Command::Layout(LC::GoToCell(direction.into())),
         )),
-        LayoutCommands::GridCenter => {
-            Ok(CliCommand::Reactor(reactor::Command::Layout(LC::GridCenter)))
+        LayoutCommands::GoToCenterCell => {
+            Ok(CliCommand::Reactor(reactor::Command::Layout(LC::GoToCenterCell)))
         }
-        LayoutCommands::SwitchGrid { grid } => {
-            Ok(CliCommand::Reactor(reactor::Command::Layout(LC::SwitchToGrid(grid))))
+        LayoutCommands::Grid { grid } => {
+            Ok(CliCommand::Reactor(reactor::Command::Layout(LC::Grid(grid))))
         }
-        LayoutCommands::MoveToGrid { grid } => {
-            Ok(CliCommand::Reactor(reactor::Command::Layout(LC::MoveWindowToGrid(grid))))
+        LayoutCommands::SendToGrid { grid } => {
+            Ok(CliCommand::Reactor(reactor::Command::Layout(LC::SendToGrid(grid))))
         }
         LayoutCommands::MoveGridToDisplay { grid, display } => {
             Ok(CliCommand::Reactor(reactor::Command::Layout(LC::MoveGridToDisplay {

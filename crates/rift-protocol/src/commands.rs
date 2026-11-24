@@ -136,23 +136,23 @@ pub enum LayoutCommand {
     SwitchToLastWorkspace,
     /// Grid: focus the neighboring tile, or the neighboring cell at the edge.
     #[command(group = 2, label = "Focus tile or cell", order = 20)]
-    GridFocus(Direction),
+    Focus(Direction),
     /// Grid: swap with the neighboring tile, or carry the window into the
     /// neighboring cell at the edge.
     #[command(group = 2, label = "Move window to tile or cell", order = 21)]
-    GridMove(Direction),
+    MoveTile(Direction),
     /// Grid: go to the neighboring cell.
     #[command(group = 2, label = "Go to cell", order = 22)]
-    GridCell(Direction),
+    GoToCell(Direction),
     /// Grid: go to the center cell of the grid on screen.
     #[command(group = 2, label = "Go to center cell", order = 23)]
-    GridCenter,
+    GoToCenterCell,
     /// Grid: show grid N (1-based) at its current cell.
     #[command(skip)]
-    SwitchToGrid(usize),
+    Grid(usize),
     /// Grid: send the focused window to grid N's (1-based) current cell.
     #[command(skip)]
-    MoveWindowToGrid(usize),
+    SendToGrid(usize),
     /// Grid: send the window with this index to grid N's (1-based)
     /// current cell, as dropping it on a grid button in the overview does.
     #[command(skip)]

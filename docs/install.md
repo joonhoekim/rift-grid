@@ -97,27 +97,27 @@ then, in that file:
   (the default `Alt + H/J/K/L`, `Alt + 1..3`, `Alt + Tab`):
 
 ```toml
-"Alt + I" = { grid_focus = "up" }
-"Alt + K" = { grid_focus = "down" }
-"Alt + J" = { grid_focus = "left" }
-"Alt + L" = { grid_focus = "right" }
-"comb1 + I" = { grid_move = "up" }
-"comb1 + K" = { grid_move = "down" }
-"comb1 + J" = { grid_move = "left" }
-"comb1 + L" = { grid_move = "right" }
-"Alt + Cmd + I" = { grid_cell = "up" }
-"Alt + Cmd + K" = { grid_cell = "down" }
-"Alt + Cmd + J" = { grid_cell = "left" }
-"Alt + Cmd + L" = { grid_cell = "right" }
-"Alt + H" = "grid_center"
+"Alt + I" = { focus = "up" }
+"Alt + K" = { focus = "down" }
+"Alt + J" = { focus = "left" }
+"Alt + L" = { focus = "right" }
+"comb1 + I" = { move_tile = "up" }
+"comb1 + K" = { move_tile = "down" }
+"comb1 + J" = { move_tile = "left" }
+"comb1 + L" = { move_tile = "right" }
+"Alt + Cmd + I" = { go_to_cell = "up" }
+"Alt + Cmd + K" = { go_to_cell = "down" }
+"Alt + Cmd + J" = { go_to_cell = "left" }
+"Alt + Cmd + L" = { go_to_cell = "right" }
+"Alt + H" = "go_to_center_cell"
 "Alt + Tab" = "focus_recent_window"
 "Alt + O" = "show_mission_control_all"
-"Alt + 1" = { switch_to_grid = 1 }
-"Alt + 2" = { switch_to_grid = 2 }
-"Alt + 3" = { switch_to_grid = 3 }
-"Alt + Ctrl + 1" = { move_window_to_grid = 1 }
-"Alt + Ctrl + 2" = { move_window_to_grid = 2 }
-"Alt + Ctrl + 3" = { move_window_to_grid = 3 }
+"Alt + 1" = { grid = 1 }
+"Alt + 2" = { grid = 2 }
+"Alt + 3" = { grid = 3 }
+"Alt + Ctrl + 1" = { send_to_grid = 1 }
+"Alt + Ctrl + 2" = { send_to_grid = 2 }
+"Alt + Ctrl + 3" = { send_to_grid = 3 }
 ```
 
 `comb1` is the default file's name for Alt + Shift. Up to nine grids can be

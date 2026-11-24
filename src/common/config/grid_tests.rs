@@ -17,18 +17,18 @@ fn grid_commands_and_columns_parse() {
             grid_columns = 3
 
             [keys]
-            "Alt + J" = { grid_focus = "left" }
-            "Alt + Shift + J" = { grid_move = "left" }
-            "Alt + Cmd + J" = { grid_cell = "left" }
+            "Alt + J" = { focus = "left" }
+            "Alt + Shift + J" = { move_tile = "left" }
+            "Alt + Cmd + J" = { go_to_cell = "left" }
         "#,
     )
     .unwrap();
     assert_eq!(cfg.virtual_workspaces.grid_columns, 3);
     let commands: Vec<_> = cfg.keys.iter().map(|(_, command)| command.clone()).collect();
     for expected in [
-        LayoutCommand::GridFocus(crate::layout_engine::Direction::Left),
-        LayoutCommand::GridMove(crate::layout_engine::Direction::Left),
-        LayoutCommand::GridCell(crate::layout_engine::Direction::Left),
+        LayoutCommand::Focus(crate::layout_engine::Direction::Left),
+        LayoutCommand::MoveTile(crate::layout_engine::Direction::Left),
+        LayoutCommand::GoToCell(crate::layout_engine::Direction::Left),
     ] {
         let expected = WmCommand::ReactorCommand(reactor::Command::Layout(expected));
         assert!(commands.contains(&expected), "{expected:?} not in {commands:?}");

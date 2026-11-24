@@ -210,7 +210,7 @@ fn grid_hotkey(hotkeys: &[(Hotkey, WmCommand)], grid: usize) -> Option<&Hotkey> 
     hotkeys.iter().find_map(|(hotkey, command)| {
         matches!(
             command,
-            WmCommand::ReactorCommand(reactor::Command::Layout(LayoutCommand::SwitchToGrid(n)))
+            WmCommand::ReactorCommand(reactor::Command::Layout(LayoutCommand::Grid(n)))
                 if *n == grid
         )
         .then_some(hotkey)
@@ -291,7 +291,7 @@ impl MenuIcon {
 impl MenuActionHandler {
     fn on_switch_grid(&self, sender: Option<&NSMenuItem>) {
         if let Some(tag) = sender.map(|sender| sender.tag()).filter(|&tag| tag >= 0) {
-            self.emit(super::MenuAction::SwitchToGrid(tag as usize + 1));
+            self.emit(super::MenuAction::Grid(tag as usize + 1));
         }
     }
 }
@@ -328,7 +328,7 @@ mod tests {
             r#"
                 [settings]
                 [keys]
-                "Alt + 2" = { switch_to_grid = 2 }
+                "Alt + 2" = { grid = 2 }
             "#,
         )
         .unwrap();
