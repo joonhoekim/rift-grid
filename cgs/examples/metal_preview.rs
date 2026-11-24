@@ -3,23 +3,49 @@
 use std::cell::RefCell;
 use std::time::Instant;
 
-use cgs::{
-    CGPoint, CGRect, CGSize, CaptureMode, CaptureResolution, Easing, Preview, PreviewCompositor,
-    Transition,
+use cgs::compositor::preview::{
+    CaptureMode, CaptureResolution, Easing, Preview, PreviewCompositor, Transition,
 };
+use cgs::{CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{CGColor, CGDisplayBounds, CGMainDisplayID};
 use objc2_foundation::{NSDate, NSRunLoop, NSString};
 use objc2_metal::MTLTexture;
 use objc2_quartz_core::{CABasicAnimation, CALayer, CAMediaTiming};
 thread_local! { static COMPOSITOR: RefCell<Option<PreviewCompositor>> = const { RefCell::new(None) }; }
+thread_local! { static CAMERA_MOTION: RefCell<Option<(Instant,f64)>> = const { RefCell::new(None) }; }
+thread_local! { static CAMERA_COST: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) }; }
 thread_local! { static CANVASES: RefCell<Vec<PreviewCompositor>> = const { RefCell::new(Vec::new()) }; }
+thread_local! { static LAYERS: RefCell<Vec<(u32, cgs::compositor::preview::PreviewLayer)>> = const { RefCell::new(Vec::new()) }; }
 fn render() {
     // A shared canvas must drive capture and pacing without rendering the source owner.
     if CANVASES.with(|c| c.borrow().is_empty()) {
         COMPOSITOR.with(|c| {
             if let Some(c) = c.borrow_mut().as_mut() {
+                let moving = CAMERA_MOTION.with(|m| {
+                    m.borrow().as_ref().is_some_and(|(start, duration)| {
+                        let t = start.elapsed().as_secs_f64();
+                        if c.has_display_update() {
+                            let scale = 0.65 + 0.25 * (t * 2.8).sin();
+                            let before = Instant::now();
+                            c.set_camera(cgs::compositor::preview::PreviewCamera {
+                                scale: scale as f32,
+                                translation: [
+                                    (80. * (t * 2.).sin()) as f32,
+                                    (40. * (t * 2.).cos()) as f32,
+                                ],
+                            })
+                            .unwrap();
+                            CAMERA_COST
+                                .with(|v| v.borrow_mut().push(before.elapsed().as_nanos() as u64));
+                        }
+                        t < *duration
+                    })
+                });
                 if let Err(e) = c.render(Instant::now()) {
                     eprintln!("render error: {e}");
+                }
+                if moving {
+                    c.request_frame();
                 }
             }
         });
@@ -27,6 +53,13 @@ fn render() {
     CANVASES.with(|canvases| {
         for canvas in &mut *canvases.borrow_mut() {
             canvas.render(Instant::now()).expect("canvas render");
+        }
+    });
+    LAYERS.with(|layers| {
+        for (id, layer) in layers.borrow_mut().iter_mut() {
+            if let Some(frame) = compositor(|c| c.captured_frame(*id)) {
+                layer.set_frame(&frame);
+            }
         }
     });
 }
@@ -93,7 +126,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     if self_test {
         seconds = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(3.);
         let count: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(5);
-        assert!((1..=20).contains(&count));
+        assert!((1..=40).contains(&count));
         for i in 0..count {
             let (w, h) = if i == 0 {
                 (960., 640.)
@@ -110,7 +143,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     _ => frame(bounds.origin.x + 20., bounds.origin.y + 40., w, h), // visible, occluded by overlay
                 }
             };
-            let window = cgs::CgsWindow::new_compositor(
+            let window = cgs::compositor::CgsWindow::new_compositor(
                 frame(bounds.origin.x + 20., bounds.origin.y + 40., w, h),
                 0.,
             )?;
@@ -132,7 +165,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             animation.setAutoreverses(true);
             animation.setRepeatCount(f32::INFINITY);
             stripe.addAnimation_forKey(&animation, None);
-            let surface = cgs::WindowSurface::new_scaled(window.id(), root.bounds(), &root, 2.)?;
+            let surface =
+                cgs::compositor::WindowSurface::new_scaled(window.id(), root.bounds(), &root, 2.)?;
             window.order_above(None)?;
             surface.flush();
             let target = if count == 1 {
@@ -161,7 +195,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         // application does before Rift hides it. Capture starts only afterwards;
         // the compositor never moves or receives access to source windows.
         run_for(0.15);
-        let transaction = cgs::WindowTransaction::new()?;
+        let transaction = cgs::compositor::WindowTransaction::new()?;
         for ((_, window, _), position) in sources.iter().zip(parked_frames) {
             transaction.move_window(window, position.origin);
         }
@@ -179,7 +213,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             frame(100., 100., 960., 640.),
         ));
     }
-    if let Some(i) = args.iter().position(|a| a == "--canvas-probe") {
+    if let Some(i) = args.iter().position(|a| a == "--canvas-probe" || a == "--surface-probe") {
         canvas_probe(bounds, &scene, std::path::Path::new(&args[i + 1]))?;
         drop(sources);
         return Ok(());
@@ -188,13 +222,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Exercise the same renderer in a caller-owned CAContext, including its
     // existing native scroll probe and lifecycle/transition assertions.
     let host = if args.iter().any(|a| a == "--attached") {
-        let window = cgs::CgsWindow::new_compositor(bounds, 0.)?;
+        let window = cgs::compositor::CgsWindow::new_compositor(bounds, 0.)?;
         window.set_resolution(2.)?;
         window.set_level(25)?;
         let root = CALayer::layer();
         root.setFrame(frame(0., 0., bounds.size.width, bounds.size.height));
         root.setGeometryFlipped(true);
-        let surface = cgs::WindowSurface::new_scaled(window.id(), root.bounds(), &root, 2.)?;
+        let surface =
+            cgs::compositor::WindowSurface::new_scaled(window.id(), root.bounds(), &root, 2.)?;
         window.order_above(None)?;
         Some((surface, window, root))
     } else {
@@ -215,7 +250,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             .iter()
             .enumerate()
             .map(|(i, p)| {
-                let mut source = cgs::PreviewSource::from(p);
+                let mut source = cgs::compositor::preview::PreviewSource::from(p);
                 source.frame_interval =
                     std::time::Duration::from_secs_f64(1. / if i == 0 { 60. } else { 30. });
                 source
@@ -227,6 +262,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         c.set_scene(&scene)?;
     }
     c.show()?;
+    if args.iter().any(|a| a == "--camera-motion") {
+        CAMERA_MOTION.with(|m| m.replace(Some((Instant::now(), seconds))));
+        c.request_frame();
+    }
     println!(
         "overlay_window_id={} sources={:?}",
         c.window_id(),
@@ -234,6 +273,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     COMPOSITOR.with(|slot| slot.replace(Some(c)));
     run_for(seconds);
+    CAMERA_MOTION.with(|m| m.replace(None));
+    CAMERA_COST.with(|v| {
+        let mut costs = v.borrow_mut();
+        costs.sort_unstable();
+        if !costs.is_empty() {
+            println!(
+                "camera_update_ns samples={} p50={} p95={} p99={}",
+                costs.len(),
+                costs[costs.len() / 2],
+                costs[costs.len() * 95 / 100],
+                costs[costs.len() * 99 / 100]
+            );
+        }
+    });
     let stats = compositor(|c| c.stats());
     println!(
         "elapsed_ms={} stats={stats:?} diagnostics={:?}",
@@ -247,6 +300,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             compositor(|c| c.source_status(p.window_id))
         );
     }
+    if args.iter().any(|a| a == "--expect-unavailable") {
+        assert_eq!(stats.captured_frames, 0);
+        assert_eq!(stats.submitted_frames, 0);
+        assert!(
+            CAMERA_COST.with(|v| v.borrow().len() > 10),
+            "camera clock stalled without capture"
+        );
+        compositor(|c| c.hide())?;
+        run_for(0.3);
+        assert_eq!(compositor(|c| c.stats().process_capture_jobs), 0);
+        drop(COMPOSITOR.with(|c| c.take()));
+        println!("unavailable_source_camera_clock=ok shutdown_jobs=0");
+        return Ok(());
+    }
     assert!(stats.captured_frames > 0, "no valid capture frames");
     assert!(
         stats.presented_frames > 0,
@@ -256,6 +323,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     if args.iter().any(|a| a == "--measure-only") {
         compositor(|c| c.hide())?;
         run_for(0.3);
+        println!(
+            "shutdown_jobs_after_300ms={}",
+            compositor(|c| c.stats().process_capture_jobs)
+        );
+        run_for(1.7);
+        println!(
+            "shutdown_jobs_after_2s={}",
+            compositor(|c| c.stats().process_capture_jobs)
+        );
         assert_eq!(compositor(|c| c.stats().process_capture_jobs), 0);
         drop(COMPOSITOR.with(|c| c.take()));
         drop(sources);
@@ -279,7 +355,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             capture("before.png");
             let submitted = compositor(|c| c.stats().submitted_frames);
             {
-                let _transaction = cgs::LayerTransaction::disabled().flush_on_commit();
+                let _transaction = cgs::compositor::LayerTransaction::disabled().flush_on_commit();
                 compositor(|c| c.translate(CGPoint::new(0., 200.)))?;
             }
             // No owner run-loop turn and therefore no GPU submission can occur
@@ -307,7 +383,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             assert!(
                 matches!(
                     compositor(|c| c.source_status(p.window_id)),
-                    Some(cgs::SourceStatus::Complete { .. } | cgs::SourceStatus::Idle { .. })
+                    Some(
+                        cgs::compositor::preview::SourceStatus::Complete { .. }
+                            | cgs::compositor::preview::SourceStatus::Idle { .. }
+                    )
                 ),
                 "source never became usable"
             );
@@ -384,7 +463,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             "unchanged snapshot scene kept rendering"
         );
         // Visual-only updates preserve a paused capture and last-valid pixels.
-        let policies: Vec<_> = snapshot.iter().map(cgs::PreviewSource::from).collect();
+        let policies: Vec<_> =
+            snapshot.iter().map(cgs::compositor::preview::PreviewSource::from).collect();
         compositor(|c| c.set_sources(&policies))?;
         let before_policy = compositor(|c| c.stats().submitted_frames);
         let mut priority = policies[0];
@@ -422,7 +502,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             "visual edit resumed capture"
         );
         compositor(|c| {
-            c.set_camera(cgs::PreviewCamera {
+            c.set_camera(cgs::compositor::preview::PreviewCamera {
                 scale: 0.9,
                 translation: [4., 8.],
             })
@@ -433,7 +513,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             0,
             "camera edit resumed capture"
         );
-        compositor(|c| c.set_camera(cgs::PreviewCamera::default()))?;
+        compositor(|c| c.set_camera(cgs::compositor::preview::PreviewCamera::default()))?;
         compositor(|c| c.set_scene(&scene))?;
         run_for(0.5);
         assert!(
@@ -443,7 +523,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         // Resize an offscreen source and refresh descriptions: native capture
         // must resize without replacing its stream or losing other live sources.
         let resized = frame(bounds.max().x + 4000., bounds.max().y + 4000., 480., 320.);
-        let transaction = cgs::WindowTransaction::new()?;
+        let transaction = cgs::compositor::WindowTransaction::new()?;
         transaction.set_rounded_frame(&sources[0].1, resized, 0.)?;
         sources[0].0.set_bounds_in(&transaction, frame(0., 0., 480., 320.));
         sources[0].2.setFrame(frame(0., 0., 480., 320.));
@@ -457,7 +537,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
         assert!(matches!(
             compositor(|c| c.source_status(scene[0].window_id)),
-            Some(cgs::SourceStatus::Complete { .. } | cgs::SourceStatus::Idle { .. })
+            Some(
+                cgs::compositor::preview::SourceStatus::Complete { .. }
+                    | cgs::compositor::preview::SourceStatus::Idle { .. }
+            )
         ));
         // Destroy a captured source while commands may still reference it.
         let destroyed = sources.remove(0);
@@ -467,9 +550,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         assert!(matches!(
             compositor(|c| c.source_status(scene[0].window_id)),
             Some(
-                cgs::SourceStatus::Failed(_)
-                    | cgs::SourceStatus::Stopped
-                    | cgs::SourceStatus::Blank
+                cgs::compositor::preview::SourceStatus::Failed(_)
+                    | cgs::compositor::preview::SourceStatus::Stopped
+                    | cgs::compositor::preview::SourceStatus::Blank
             )
         ));
         compositor(|c| c.hide())?;
@@ -540,13 +623,14 @@ fn canvas_probe(
     out: &std::path::Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(out)?;
-    let window = cgs::CgsWindow::new_compositor(bounds, 0.)?;
+    let window = cgs::compositor::CgsWindow::new_compositor(bounds, 0.)?;
     window.set_resolution(2.)?;
     window.set_level(25)?;
     let root = CALayer::layer();
     root.setFrame(frame(0., 0., bounds.size.width, bounds.size.height));
     root.setGeometryFlipped(true);
-    let surface = cgs::WindowSurface::new_scaled(window.id(), root.bounds(), &root, 2.)?;
+    let surface =
+        cgs::compositor::WindowSurface::new_scaled(window.id(), root.bounds(), &root, 2.)?;
     let row = CALayer::layer();
     row.setFrame(frame(0., 60., bounds.size.width, 400.));
     row.setMasksToBounds(true);
@@ -554,9 +638,24 @@ fn canvas_probe(
     let mut owner = PreviewCompositor::new_attached(window.id(), &root, bounds, 2., || {
         dispatch2::DispatchQueue::main().exec_async(render);
     })?;
-    owner.set_sources(&scene.iter().map(cgs::PreviewSource::from).collect::<Vec<_>>())?;
+    let direct = std::env::args().any(|a| a == "--surface-probe");
+    let policies: Vec<_> = scene
+        .iter()
+        .map(|p| {
+            let mut source = cgs::compositor::preview::PreviewSource::from(p);
+            if direct {
+                source.mode = CaptureMode::Snapshot;
+                source.frame_interval = std::time::Duration::from_millis(200);
+            }
+            source
+        })
+        .collect();
+    owner.set_sources(&policies)?;
     owner.set_visual_scene(&[])?;
     owner.show()?;
+    if direct {
+        return surface_probe(owner, &window, &surface, &row, scene, out);
+    }
     let mut canvas =
         owner.new_canvas(window.id(), &row, frame(0., 0., bounds.size.width, 400.), 2.)?;
     let mut local = scene[0].clone();
@@ -598,7 +697,7 @@ fn canvas_probe(
     let submitted =
         CANVASES.with(|s| s.borrow().iter().map(|c| c.stats().submitted_frames).sum::<u64>());
     {
-        let _tx = cgs::LayerTransaction::disabled().flush_on_commit();
+        let _tx = cgs::compositor::LayerTransaction::disabled().flush_on_commit();
         CANVASES.with(|s| s.borrow_mut()[0].translate(CGPoint::new(80., 0.)))?;
     }
     screenshot("horizontal.png");
@@ -607,7 +706,7 @@ fn canvas_probe(
         CANVASES.with(|s| s.borrow().iter().map(|c| c.stats().submitted_frames).sum::<u64>())
     );
     {
-        let _tx = cgs::LayerTransaction::disabled().flush_on_commit();
+        let _tx = cgs::compositor::LayerTransaction::disabled().flush_on_commit();
         row.setFrame(frame(0., 140., bounds.size.width, 400.));
     }
     screenshot("vertical.png");
@@ -619,13 +718,39 @@ fn canvas_probe(
     screenshot("rebased.png");
     // Immediate direction reversal while an earlier replacement may be queued.
     {
-        let _tx = cgs::LayerTransaction::disabled().flush_on_commit();
+        let _tx = cgs::compositor::LayerTransaction::disabled().flush_on_commit();
         CANVASES.with(|s| s.borrow_mut()[0].translate(CGPoint::new(-80., 0.)))?;
         row.setFrame(frame(0., 60., bounds.size.width, 400.));
     }
     screenshot("reversed.png");
     run_for(0.3);
     screenshot("reversed-rebased.png");
+    {
+        let _tx = cgs::compositor::LayerTransaction::disabled().flush_on_commit();
+        CANVASES.with(|s| {
+            s.borrow_mut()[0].set_camera(cgs::compositor::preview::PreviewCamera {
+                scale: 0.5,
+                translation: [40., 20.],
+            })
+        })?;
+    }
+    let submitted = CANVASES.with(|s| s.borrow()[0].stats().submitted_frames);
+    screenshot("camera-held.png");
+    assert_eq!(
+        submitted,
+        CANVASES.with(|s| s.borrow()[0].stats().submitted_frames)
+    );
+    run_for(0.4);
+    screenshot("camera-rebased.png");
+    {
+        let _tx = cgs::compositor::LayerTransaction::disabled().flush_on_commit();
+        CANVASES.with(|s| {
+            s.borrow_mut()[0].set_camera(cgs::compositor::preview::PreviewCamera::default())
+        })?;
+    }
+    screenshot("camera-reversed.png");
+    run_for(0.3);
+    screenshot("camera-reversed-rebased.png");
     CANVASES.with(|s| s.borrow_mut().clear());
     compositor(|c| c.hide())?;
     run_for(0.3);
@@ -638,5 +763,101 @@ fn canvas_probe(
         format!("shared_canvas_before={before:?} after={after:?}\n"),
     )?;
     println!("shared_canvas_before={before:?} after={after:?}");
+    Ok(())
+}
+
+// The same hidden-window fixture and source owner, consumed directly by CA.
+fn surface_probe(
+    owner: PreviewCompositor,
+    window: &cgs::compositor::CgsWindow,
+    surface: &cgs::compositor::WindowSurface,
+    row: &CALayer,
+    scene: &[Preview],
+    out: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    window.disable_shadow();
+    LAYERS.with(|layers| {
+        let mut layers = layers.borrow_mut();
+        for (i, p) in scene.iter().enumerate() {
+            let layer = cgs::compositor::preview::PreviewLayer::new();
+            layer.layer().setFrame(frame(60. + i as f64 * 260., 100., 240., 160.));
+            layer.layer().setCornerRadius(12.);
+            layer.layer().setMasksToBounds(true);
+            row.addSublayer(layer.layer());
+            layers.push((p.window_id, layer));
+        }
+    });
+    COMPOSITOR.with(|slot| slot.replace(Some(owner)));
+    window.order_above(None)?;
+    surface.flush();
+    run_for(3.);
+    assert!(
+        LAYERS.with(|s| s.borrow().iter().all(|(_, l)| l.has_frame())),
+        "hidden source missing"
+    );
+    assert_eq!(compositor(|c| c.stats().submitted_frames), 0);
+    let screenshot = |name: &str| {
+        assert!(
+            std::process::Command::new("screencapture")
+                .args(["-x", "-o", "-l", &window.id().to_string()])
+                .arg(out.join(name))
+                .status()
+                .unwrap()
+                .success()
+        );
+    };
+    screenshot("before.png");
+    assert!(
+        std::process::Command::new("screencapture")
+            .args(["-x", "-o", "-l", &scene[0].window_id.to_string()])
+            .arg(out.join("source.png"))
+            .status()?
+            .success()
+    );
+    // Stop capture entirely. Moving, scaling and reversing last-valid pixels must
+    // still work, including while the owner isn't servicing a display/GPU callback.
+    compositor(|c| c.hide())?;
+    let full_bounds = row.bounds();
+    for (name, x, y, scale) in [
+        ("translated.png", 80., 60., 1.),
+        ("scaled.png", 80., 60., 0.5),
+        ("clipped.png", 80., 60., 0.5),
+        ("reversed.png", 0., 60., 1.),
+    ] {
+        {
+            let _tx = cgs::compositor::LayerTransaction::disabled().flush_on_commit();
+            row.setBounds(if name == "clipped.png" {
+                frame(0., 0., 720., 400.)
+            } else {
+                full_bounds
+            });
+            row.setAnchorPoint(CGPoint::ZERO);
+            row.setPosition(CGPoint::new(x, y));
+            row.setAffineTransform(objc2_core_foundation::CGAffineTransform {
+                a: scale,
+                b: 0.,
+                c: 0.,
+                d: scale,
+                tx: 0.,
+                ty: 0.,
+            });
+        }
+        surface.flush();
+        run_for(0.1);
+        screenshot(name);
+    }
+    run_for(0.3);
+    assert_eq!(compositor(|c| c.stats().process_capture_jobs), 0);
+    assert_eq!(compositor(|c| c.stats().submitted_frames), 0);
+    assert_eq!(compositor(|c| c.diagnostics().process_reserved_capture_bytes), 0);
+    LAYERS.with(|s| s.borrow_mut().clear());
+    surface.flush();
+    run_for(0.3);
+    screenshot("cleared.png");
+    drop(COMPOSITOR.with(|s| s.take()));
+    std::fs::write(
+        out.join("presented.txt"),
+        "direct IOSurface layers: zero GPU submissions; capture stopped before transforms\n",
+    )?;
     Ok(())
 }

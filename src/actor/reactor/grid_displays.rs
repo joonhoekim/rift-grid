@@ -6,8 +6,10 @@
 //! an empty grid another display shows already is given the first free grid.
 //! `move_grid_to_display` hands a grid to another display, from the overview.
 
-use super::events::EventOutcome;
-use super::{Command, DisplaySelector, Event, Reactor, ReactorCommand, WorkspaceSwitchOrigin};
+use super::{
+    Changes, Command, DisplaySelector, Event, Presentation, Reactor, ReactorCommand,
+    WorkspaceSwitchOrigin,
+};
 use crate::common::config::GRID_COUNT;
 use crate::layout_engine::LayoutCommand;
 use crate::sys::screen::SpaceId;
@@ -66,7 +68,7 @@ impl Reactor {
             .is_some_and(|(space, grid)| self.grid_elsewhere(space, grid).is_some())
     }
 
-    fn focus_display(&mut self, display: String) {
+    fn focus_grid_display(&mut self, display: String) {
         self.handle_event_inner(Event::Command(Command::Reactor(ReactorCommand::FocusDisplay(
             DisplaySelector::Uuid(display),
         ))));
@@ -105,23 +107,18 @@ impl Reactor {
         ) else {
             return;
         };
-        let mut outcome =
-            EventOutcome::layout_changed(false).with_layout_response(response, Some(target));
+        let mut changes = Changes::default();
+        changes.move_between(source, target, Presentation::WorkspaceSwitch);
+        changes.workspace_changed(source);
+        changes.workspace_changed(target);
+        let source_frame = self.space_state.screen_by_space(source).map(|screen| screen.frame);
         for wid in moved {
-            let Some(window) = self.state.windows.window_mut(wid) else {
-                continue;
-            };
-            let frame = Self::center_frame_on_screen(window.frame_monotonic, screen.frame);
-            window.frame_monotonic = frame;
-            let sys_id = window.info.sys_id;
-            if let Some(sys_id) = sys_id {
-                self.state.windows.observe_native_space(sys_id, target, true);
-            }
-            outcome = outcome.with_pre_layout_window_frame_write(wid, frame, true);
+            self.request_window_transfer(&mut changes, wid, target, source_frame);
         }
         self.workspace_switch_manager
-            .start_workspace_switch(WorkspaceSwitchOrigin::Manual);
-        self.apply_event_outcome(outcome);
+            .start_workspace_switch(target, WorkspaceSwitchOrigin::Manual);
+        self.reconcile_layout_response(&mut changes, response, None);
+        self.finish(changes, None, None);
         if !shown {
             return;
         }
@@ -180,7 +177,7 @@ impl Reactor {
             if crate::ui::grid_motion::overview_open() {
                 self.space_state.command_space = Some(here);
             } else {
-                self.focus_display(display);
+                self.focus_grid_display(display);
             }
             return Ok(());
         }
@@ -201,7 +198,7 @@ impl Reactor {
             if let Some((_, display)) =
                 self.grid_displays().into_iter().find(|&(space, _)| space == here)
             {
-                self.focus_display(display);
+                self.focus_grid_display(display);
             }
         }
         Ok(())

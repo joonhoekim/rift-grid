@@ -1,6 +1,6 @@
 [package]
 name = "rift-wm"
-version = "0.7.1"
+version = "0.8.6"
 edition = "2024"
 build = "build.rs"
 
@@ -27,6 +27,15 @@ debug-assertions = true
 overflow-checks = true
 split-debuginfo = "unpacked"
 panic = "unwind"
+
+# Keep native dispatch fast during ordinary cargo run. Signature validation walks
+# Objective-C metadata on every message; application debug assertions stay enabled.
+[profile.dev.package.objc2]
+opt-level = 2
+debug-assertions = false
+
+[profile.dev.package.cgs]
+opt-level = 2
 
 [profile.release]
 opt-level = 3
@@ -61,7 +70,7 @@ disable-axuielement-destroyed = []
 
 [dependencies]
 rift-config-derive = { path = "crates/rift-config-derive" }
-cgs = { version = "0.3.15" }#, path = "cgs" }
+cgs = { version = "0.5.3" }#, path = "cgs" }
 anyhow = { version = "1.0.83", default-features = false }
 ascii_tree = "0.1.1"
 thiserror = { version = "2.0.17", default-features = false }
@@ -163,6 +172,8 @@ objc2-screen-capture-kit = { version = "0.3.2", default-features = false, featur
 ] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
 	"CAAnimation",
+	"CAMediaTiming",
+	"CATransform3D",
 	"CADisplayLink",
 	"CAFrameRateRange",
 	"CABase",
@@ -204,7 +215,7 @@ embed_plist = "1.2.2"
 rustc-hash = "2.1.1"
 rift-client = { path = "crates/rift-client" }
 rift-protocol = { path = "crates/rift-protocol" }
-multitouch = "0.3.2"
+multitouch = "0.3.3"
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"
@@ -216,6 +227,6 @@ test_bin = "0.5.0"
 name = "settings_native"
 harness = false
 
-# cgs 0.3.15 as published, with the fork's patch on top (see docs/upstream.md).
+# cgs 0.5.3 as published, with the fork's patch on top (see docs/upstream.md).
 [patch.crates-io]
 cgs = { path = "cgs" }

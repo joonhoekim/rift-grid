@@ -4,7 +4,20 @@ use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
-use cgs::*;
+use cgs::app::Application;
+use cgs::collection::Table;
+use cgs::controls::{NumberField, NumberSlider, Popup, Slider, Switch};
+use cgs::input::{SearchField, TextField};
+use cgs::layout::{HStack, Spacer, VStack, uniform_insets};
+use cgs::menu::{Menu, MenuItem};
+use cgs::navigation::{HeaderControls, NavigationSplitView, Toolbar};
+use cgs::settings::{
+    Section, SettingsRow, SettingsWindow, Validation, ValidationMessage, settings_sidebar_pane,
+};
+use cgs::text::{Caption, Label, SubsectionTitle};
+use cgs::view::{NativeView, PageHost, View};
+use cgs::window::{Sheet, WindowRef};
+use cgs::{CGSize, Insets, Ui};
 use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEventModifierFlags, NSMenu};
 use rift_protocol::ApplicationData;
@@ -107,6 +120,7 @@ type Preview = Rc<dyn Fn(&ConfigSource)>;
 /// Runtime context shared by the window model and its sheet drafts.
 struct Env {
     requests: UnboundedSender<Request>,
+    shortcut_capture: RefCell<Option<Rc<dyn Fn(bool) -> Result<(), String>>>>,
     window: RefCell<WindowRef>,
     displays: RefCell<Vec<ScreenInfo>>,
     config_path: PathBuf,
@@ -324,6 +338,7 @@ impl Router {
     }
 
     fn show(&self, id: Category) {
+        let navigation = timing::start();
         self.title.set_text(id.title());
         if self.pages.borrow()[id.index()].is_none() {
             let page_timing = timing::start();
@@ -351,6 +366,9 @@ impl Router {
                 id.title(),
                 false,
             );
+        }
+        if navigation.is_some() {
+            timing::finish(navigation, &format!("{} page navigation", id.title()));
         }
     }
 }
@@ -390,6 +408,11 @@ impl SettingsActivation {
 }
 
 impl Settings {
+    /// Install the process transport used to protect shortcut recording from the daemon.
+    pub fn set_shortcut_capture(&self, capture: impl Fn(bool) -> Result<(), String> + 'static) {
+        *self.router.model.env.shortcut_capture.borrow_mut() = Some(Rc::new(capture));
+    }
+
     pub fn new(
         ui: Ui,
         source: impl Into<Arc<ConfigSource>>,
@@ -401,6 +424,7 @@ impl Settings {
     ) -> Self {
         let env = Rc::new(Env {
             requests,
+            shortcut_capture: RefCell::new(None),
             window: RefCell::new(WindowRef::default()),
             displays: RefCell::new(displays),
             config_path,
@@ -652,22 +676,7 @@ fn sidebar_pane(ui: Ui, router: &Rc<Router>, sidebar: Rc<SettingsSidebar>) -> Vi
                 open(entry);
             }
         });
-    search.control_size(objc2_app_kit::NSControlSize::Large);
-    search.height(28.0);
-    let pane = VStack::new(&ui)
-        .spacing(4.0)
-        .push(
-            HStack::new(&ui)
-                .insets(Insets {
-                    top: 6.0,
-                    left: 10.0,
-                    bottom: 0.0,
-                    right: 10.0,
-                })
-                .push(search),
-        )
-        .push(content);
-    View::new(&ui).safe_area_content(pane)
+    settings_sidebar_pane(&ui, search, content)
 }
 
 type SliderRange = Rc<dyn Fn(&ConfigSource) -> (f64, f64)>;
@@ -898,6 +907,9 @@ impl FormBuilder {
         } else {
             field.on_change(commit.clone())
         });
+        if slider_range.is_some() {
+            input.hide_stepper();
+        }
         let slider = slider_range.as_ref().map(|range| {
             let model = self.model.clone();
             let (min, max) = range(&model.upgrade().unwrap().source.borrow());

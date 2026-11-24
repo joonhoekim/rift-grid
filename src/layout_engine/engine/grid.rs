@@ -4,10 +4,11 @@
 
 use objc2_core_foundation::{CGPoint, CGRect};
 
-use super::{EventResponse, LayoutCommand, LayoutEngine};
+use super::{EventResponse, LayoutCommand, LayoutEngine, WindowRelocation};
 use crate::actor::app::WindowId;
 use crate::common::grid_nav;
-use crate::layout_engine::{Direction, LayoutSystem};
+use crate::layout_engine::Direction;
+use crate::layout_engine::systems::{LayoutEdit, LayoutSystem};
 use crate::model::VirtualWorkspaceId;
 use crate::model::window_store::WindowStore;
 use crate::sys::screen::SpaceId;
@@ -97,8 +98,9 @@ impl LayoutEngine {
         grid: usize,
         window_id: Option<u32>,
     ) -> EventResponse {
-        let Some(target) =
-            grid.checked_sub(1).and_then(|grid| self.workspaces.grid_current_cell(space, grid))
+        let Some(target) = grid
+            .checked_sub(1)
+            .and_then(|grid| self.workspaces.grid_current_cell(space, grid))
         else {
             return EventResponse::default();
         };
@@ -128,11 +130,10 @@ impl LayoutEngine {
         grid: usize,
         target_size: objc2_core_foundation::CGSize,
     ) -> Option<(EventResponse, Vec<WindowId>)> {
-        let (moved, cells) = self.workspaces.move_grid(window_store, source, target, grid)?;
+        let (moved, _) = self.workspaces.move_grid(window_store, source, target, grid)?;
         for &wid in &moved {
             self.floating.remove_active_for_window(wid);
         }
-        self.move_departures(target, &cells);
         self.ensure_workspace_layouts(target, target_size);
         let cell = self.workspaces.grid_current_cell(target, grid)?;
         // Showing the grid there must not take the focus to that display.
@@ -140,20 +141,23 @@ impl LayoutEngine {
         response.focus_window = None;
         response.workspace_space = None;
         self.update_active_floating_windows(window_store, source);
-        self.broadcast_windows_changed(window_store, source);
         Some((response, moved))
     }
 
     /// Focus the window that had the focus before the focused one, showing its
     /// cell first when it is in another one.
-    fn focus_recent_window(&mut self, window_store: &WindowStore) -> EventResponse {
+    fn focus_recent_window(&mut self, window_store: &mut WindowStore) -> EventResponse {
         let current = self.focused_window;
-        let target = self.recent.0.iter().copied().filter(|&wid| Some(wid) != current).find_map(
-            |wid| {
-                let workspace = window_store.workspace_for_window(wid)?;
-                Some((wid, self.workspaces.workspace_space(workspace)?, workspace))
-            },
-        );
+        let target =
+            self.recent
+                .0
+                .iter()
+                .copied()
+                .filter(|&wid| Some(wid) != current)
+                .find_map(|wid| {
+                    let workspace = window_store.workspace_for_window(wid)?;
+                    Some((wid, self.workspaces.workspace_space(workspace)?, workspace))
+                });
         let Some((wid, target_space, workspace)) = target else {
             return EventResponse::default();
         };
@@ -183,17 +187,15 @@ impl LayoutEngine {
     ) -> Option<(grid_nav::Rect, Vec<(WindowId, grid_nav::Rect)>)> {
         let size = self.workspaces[workspace].layout_state.active_size()?;
         let layout = self.workspaces.active_layout(space, workspace)?;
-        let tiles = self.workspaces[workspace].layout_system.calculate_layout(
+        let tiles = self.project_arrangement(
+            &self.workspaces[workspace].layout_system,
             layout,
             CGRect::new(CGPoint::new(0.0, 0.0), size),
-            self.layout_settings.stack.stack_offset,
-            &self.window_layout_constraints,
             &crate::common::config::GapSettings::default(),
             crate::common::config::StackLineReserve::default(),
         );
-        let rect = |f: CGRect| {
-            grid_nav::Rect::new(f.origin.x, f.origin.y, f.size.width, f.size.height)
-        };
+        let rect =
+            |f: CGRect| grid_nav::Rect::new(f.origin.x, f.origin.y, f.size.width, f.size.height);
         Some((
             grid_nav::Rect::new(0.0, 0.0, size.width, size.height),
             tiles.into_iter().map(|(wid, frame)| (wid, rect(frame))).collect(),
@@ -282,7 +284,14 @@ impl LayoutEngine {
         let Some(wid) = self.focused_tile(space) else {
             return EventResponse::default();
         };
-        if self.workspaces[ws_id].layout_system.move_selection(layout, direction) {
+        let moved = self.workspaces[ws_id]
+            .layout_system
+            .edit(layout, LayoutEdit::Move {
+                direction,
+                has_display_neighbor: false,
+            })
+            .changed();
+        if moved {
             return EventResponse {
                 changed: true,
                 focus_window: Some(wid),
@@ -292,19 +301,15 @@ impl LayoutEngine {
         let Some(target) = self.workspaces.grid_neighbor(space, ws_id, direction) else {
             return EventResponse::default();
         };
-        let Some(target_layout) = self.workspaces.active_layout(space, target) else {
-            return EventResponse::default();
-        };
-        self.workspaces[ws_id].layout_system.remove_window(wid);
-        if !self.workspaces.assign_window_to_workspace(window_store, space, wid, target) {
-            self.workspaces[ws_id].layout_system.add_window_after_selection(layout, wid);
+        if !self.relocate_window_to_workspace(
+            window_store,
+            ws_id,
+            (space, target),
+            wid,
+            WindowRelocation::Directional(direction),
+        ) {
             return EventResponse::default();
         }
-        self.workspaces[target].layout_system.add_window_from_direction(
-            target_layout,
-            wid,
-            direction,
-        );
         self.workspaces.set_last_focused_window(space, ws_id, None);
         let response = self.activate_workspace(window_store, space, target, Some(wid));
         self.record_grid_focus(space, target, &response);
@@ -319,6 +324,20 @@ mod tests {
     use super::*;
     use crate::common::config::{LayoutMode, LayoutSettings, VirtualWorkspaceSettings};
     use crate::layout_engine::{LayoutEvent, WindowLayoutInfo};
+
+    /// A window the store admits, observed on `space`.
+    fn observe(engine: &mut LayoutEngine, store: &mut WindowStore, space: SpaceId, wid: WindowId) {
+        let frame = CGRect::new(CGPoint::ZERO, CGSize::new(400.0, 300.0));
+        let mut state: crate::model::reactor::WindowState =
+            crate::actor::reactor::testing::make_window_info(frame, None, "Window", None).into();
+        state.is_manageable = true;
+        store.insert_window(wid, state);
+        let info = window_layout_info(wid, frame.size);
+        let _ = engine.handle_event(
+            store,
+            LayoutEvent::windows_observed(space, wid.pid, vec![info], None),
+        );
+    }
 
     fn window_layout_info(window_id: WindowId, current_size: CGSize) -> WindowLayoutInfo {
         WindowLayoutInfo {
@@ -341,7 +360,7 @@ mod tests {
         settings.default_workspace = 4;
         let mut layout_settings = LayoutSettings::default();
         layout_settings.mode = LayoutMode::Bsp;
-        let mut engine = LayoutEngine::new(&settings, &layout_settings, None);
+        let mut engine = LayoutEngine::new(&settings, &layout_settings);
         let mut window_store = WindowStore::default();
         let space = SpaceId::new(90);
         let screen = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(1920.0, 1080.0));
@@ -356,15 +375,7 @@ mod tests {
         let left = WindowId::new(90, 1);
         let right = WindowId::new(90, 2);
         for wid in [left, right] {
-            let _ = engine.handle_event(
-                &mut window_store,
-                LayoutEvent::windows_observed(
-                    space,
-                    wid.pid,
-                    vec![window_layout_info(wid, CGSize::new(0.0, 0.0))],
-                    None,
-                ),
-            );
+            observe(&mut engine, &mut window_store, space, wid);
         }
         let _ = engine.handle_event(&mut window_store, LayoutEvent::WindowFocused(space, left));
         let grid = |engine: &mut LayoutEngine, store: &mut WindowStore, command| {
@@ -455,22 +466,14 @@ mod tests {
         settings.default_workspace = 4;
         let mut layout_settings = LayoutSettings::default();
         layout_settings.mode = LayoutMode::Bsp;
-        let mut engine = LayoutEngine::new(&settings, &layout_settings, None);
+        let mut engine = LayoutEngine::new(&settings, &layout_settings);
         let mut store = WindowStore::default();
         let space = SpaceId::new(91);
         let screen = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(1920.0, 1080.0));
         let _ = engine.handle_event(&mut store, LayoutEvent::SpaceExposed(space, screen.size));
         let open = |engine: &mut LayoutEngine, store: &mut WindowStore, idx: u32| {
             let wid = WindowId::new(91, idx);
-            let _ = engine.handle_event(
-                store,
-                LayoutEvent::windows_observed(
-                    space,
-                    wid.pid,
-                    vec![window_layout_info(wid, CGSize::new(0.0, 0.0))],
-                    None,
-                ),
-            );
+            observe(engine, store, space, wid);
             let _ = engine.handle_event(store, LayoutEvent::WindowFocused(space, wid));
             wid
         };
@@ -532,7 +535,7 @@ mod tests {
         settings.workspace_names = Vec::new();
         let mut layout_settings = LayoutSettings::default();
         layout_settings.mode = LayoutMode::Bsp;
-        let mut engine = LayoutEngine::new(&settings, &layout_settings, None);
+        let mut engine = LayoutEngine::new(&settings, &layout_settings);
         let mut store = WindowStore::default();
         let space = SpaceId::new(92);
         let screen = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(1920.0, 1080.0));
@@ -545,14 +548,26 @@ mod tests {
         };
         let active = |engine: &LayoutEngine| engine.workspaces().active_workspace(space);
 
-        assert_eq!(engine.workspaces_mut().list_workspaces(space).len(), 81, "9 grids of 9 cells");
+        assert_eq!(
+            engine.workspaces_mut().list_workspaces(space).len(),
+            81,
+            "9 grids of 9 cells"
+        );
         assert_eq!(engine.workspaces_mut().list_workspaces(space)[13].1, "2·5");
         assert_eq!(active(&engine), Some(cell(&mut engine, 4)), "grid 1, center");
 
         // Cells never lead into the next grid.
-        let _ = run(&mut engine, &mut store, LayoutCommand::GridCell(Direction::Right));
+        let _ = run(
+            &mut engine,
+            &mut store,
+            LayoutCommand::GridCell(Direction::Right),
+        );
         assert_eq!(active(&engine), Some(cell(&mut engine, 5)));
-        let edge = run(&mut engine, &mut store, LayoutCommand::GridCell(Direction::Right));
+        let edge = run(
+            &mut engine,
+            &mut store,
+            LayoutCommand::GridCell(Direction::Right),
+        );
         assert!(!edge.changed, "grid 1's right edge, not grid 2");
 
         // A grid opens at its center, and comes back to the cell it was left on.
@@ -561,44 +576,44 @@ mod tests {
         let _ = run(&mut engine, &mut store, LayoutCommand::GridCell(Direction::Up));
         assert_eq!(active(&engine), Some(cell(&mut engine, 10)));
         let _ = run(&mut engine, &mut store, LayoutCommand::SwitchToGrid(1));
-        assert_eq!(active(&engine), Some(cell(&mut engine, 5)), "grid 1 where it was left");
+        assert_eq!(
+            active(&engine),
+            Some(cell(&mut engine, 5)),
+            "grid 1 where it was left"
+        );
         let _ = run(&mut engine, &mut store, LayoutCommand::SwitchToGrid(2));
         assert_eq!(active(&engine), Some(cell(&mut engine, 10)));
         let _ = run(&mut engine, &mut store, LayoutCommand::GridCenter);
-        assert_eq!(active(&engine), Some(cell(&mut engine, 13)), "this grid's center");
+        assert_eq!(
+            active(&engine),
+            Some(cell(&mut engine, 13)),
+            "this grid's center"
+        );
         let nothing = run(&mut engine, &mut store, LayoutCommand::SwitchToGrid(10));
         assert!(!nothing.changed, "there are nine grids");
 
         // A window sent to a grid lands on that grid's current cell; focus stays.
         let wid = WindowId::new(92, 1);
-        let _ = engine.handle_event(
-            &mut store,
-            LayoutEvent::windows_observed(
-                space,
-                wid.pid,
-                vec![window_layout_info(wid, CGSize::new(0.0, 0.0))],
-                None,
-            ),
-        );
+        observe(&mut engine, &mut store, space, wid);
         let _ = engine.handle_event(&mut store, LayoutEvent::WindowFocused(space, wid));
         let _ = run(&mut engine, &mut store, LayoutCommand::MoveWindowToGrid(1));
         assert_eq!(store.workspace_for_window(wid), Some(cell(&mut engine, 5)));
-        assert_eq!(active(&engine), Some(cell(&mut engine, 13)), "focus stays in grid 2");
+        assert_eq!(
+            active(&engine),
+            Some(cell(&mut engine, 13)),
+            "focus stays in grid 2"
+        );
 
         // The window focused before is reached wherever it is, and back again.
         let other = WindowId::new(92, 2);
-        let _ = engine.handle_event(
-            &mut store,
-            LayoutEvent::windows_observed(
-                space,
-                other.pid,
-                vec![window_layout_info(other, CGSize::new(0.0, 0.0))],
-                None,
-            ),
-        );
+        observe(&mut engine, &mut store, space, other);
         let _ = engine.handle_event(&mut store, LayoutEvent::WindowFocused(space, other));
         let back = run(&mut engine, &mut store, LayoutCommand::FocusRecentWindow);
-        assert_eq!(active(&engine), Some(cell(&mut engine, 5)), "the sent window's cell");
+        assert_eq!(
+            active(&engine),
+            Some(cell(&mut engine, 5)),
+            "the sent window's cell"
+        );
         assert_eq!(back.focus_window, Some(wid));
         let _ = engine.handle_event(&mut store, LayoutEvent::WindowFocused(space, wid));
         let again = run(&mut engine, &mut store, LayoutCommand::FocusRecentWindow);
@@ -607,15 +622,7 @@ mod tests {
 
         // In the same cell too.
         let third = WindowId::new(93, 3);
-        let _ = engine.handle_event(
-            &mut store,
-            LayoutEvent::windows_observed(
-                space,
-                third.pid,
-                vec![window_layout_info(third, CGSize::new(0.0, 0.0))],
-                None,
-            ),
-        );
+        observe(&mut engine, &mut store, space, third);
         let _ = engine.handle_event(&mut store, LayoutEvent::WindowFocused(space, other));
         let _ = engine.handle_event(&mut store, LayoutEvent::WindowFocused(space, third));
         let same = run(&mut engine, &mut store, LayoutCommand::FocusRecentWindow);

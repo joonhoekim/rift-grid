@@ -4,7 +4,9 @@
 //! window costs its whole area at the display's scale, and the middle of a
 //! border is empty.
 
-use cgs::{CgsWindow, CgsWindowError, WindowSurface, WindowTransaction, with_disabled_actions};
+use cgs::compositor::{
+    CgsWindow, CgsWindowError, WindowSurface, WindowTransaction, with_disabled_actions,
+};
 use objc2::rc::Retained;
 use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
 use objc2::runtime::AnyObject;

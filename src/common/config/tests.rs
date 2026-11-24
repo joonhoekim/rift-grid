@@ -11,6 +11,76 @@ use crate::layout_engine::{LayoutCommand, ResizeOrientation};
 use crate::sys::hotkey::Modifiers;
 
 #[test]
+fn overview_shortcuts_validate_within_their_own_scope() {
+    use OverviewCommand::*;
+    let defaults = Config::parse("[settings]\n[keys]").unwrap();
+    let settings = &defaults.settings.ui.mission_control;
+    assert!(settings.keys.is_none());
+    assert_eq!(settings.keymap().get("Meta + Equal"), Some(&ZoomIn));
+    assert_eq!(settings.keymap().get("Shift + F"), Some(&FitAllWorkspaces));
+
+    let section = "[keys]\n[settings.ui.mission_control.keys]\n";
+    for (bindings, expected) in [
+        (r#""F" = "unknown""#, "unknown variant"),
+        (r#""F + G" = "zoom_in""#, "Could not parse Overview shortcut"),
+        (r#""Alt ++ F" = "zoom_in""#, "Could not parse Overview shortcut"),
+        (
+            "\"Alt + F\" = \"fit_workspace\"\n\"AltLeft + F\" = \"fit_workspace\"",
+            "conflicts with another Overview binding",
+        ),
+    ] {
+        let error = Config::parse(&format!("{section}{bindings}")).unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+    assert!(Config::parse(
+        "[keys]\nF = \"show_mission_control_all\"\n[settings.ui.mission_control.keys]\nF = \"fit_workspace\""
+    ).is_ok());
+}
+
+#[test]
+fn overview_shortcut_edits_persist_and_keep_an_explicit_empty_map() {
+    use OverviewCommand::*;
+    let mut document = ConfigDocument::parse(
+        "# Overview preferences\n[settings.ui.mission_control]\nenabled = true # keep this\n[keys]\n",
+    )
+    .unwrap();
+    let edit = |document: &mut ConfigDocument, action, old, new: Option<&str>| {
+        let change = document.edited(|s| {
+            s.edit_overview_shortcut(action, old, new.map(str::to_owned))
+                .map_err(anyhow::Error::msg)
+        })?;
+        *document = change.document;
+        Ok::<_, anyhow::Error>(())
+    };
+
+    edit(&mut document, FitWorkspace, None, Some("Alt + G")).unwrap();
+    edit(&mut document, FitWorkspace, Some("F"), Some("H")).unwrap();
+    let before = document.to_string();
+    assert!(edit(&mut document, FitWorkspace, Some("H"), Some("AltLeft + G")).is_err());
+    assert_eq!(document.to_string(), before);
+    let settings = document.source().unwrap().settings.ui.mission_control;
+    assert_eq!(settings.keymap().get("Alt + G"), Some(&FitWorkspace));
+    assert_eq!(settings.keymap().get("H"), Some(&FitWorkspace));
+    assert_eq!(settings.keymap().get("F"), None);
+    assert_eq!(settings.keymap().get("Shift + F"), Some(&FitAllWorkspaces));
+    for (key, action) in settings.keymap() {
+        edit(&mut document, *action, Some(key), None).unwrap();
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    document.save(&path).unwrap();
+    let reloaded = ConfigDocument::read(&path).unwrap();
+    assert!(reloaded.to_string().contains("# Overview preferences"));
+    assert!(reloaded.to_string().contains("enabled = true # keep this"));
+    assert_eq!(
+        reloaded.source().unwrap().settings.ui.mission_control.keys,
+        Some(Default::default())
+    );
+    assert!(reloaded.runtime().unwrap().settings.ui.mission_control.keymap().is_empty());
+}
+
+#[test]
 fn scrolling_display_widths_merge_and_validate() {
     let settings: ScrollingLayoutSettings = toml::from_str(
         r#"
@@ -134,6 +204,7 @@ fn app_rule_geometry_validation_rejects_invalid_values() {
         title_substring: None,
         ax_role: None,
         ax_subrole: None,
+        window_tags: None,
     });
 
     let issues = settings.validate();
@@ -514,6 +585,39 @@ fn config_validation_rejects_empty_command_arrays() {
 }
 
 #[test]
+fn overview_hotkey_release_setting_defaults_to_sticky_and_can_be_edited() {
+    let mut document =
+        ConfigDocument::parse("[keys]\n[settings.ui.mission_control]\nenabled = true\n").unwrap();
+    assert!(
+        !document
+            .runtime()
+            .unwrap()
+            .settings
+            .ui
+            .mission_control
+            .activate_on_hotkey_release
+    );
+    let runtime = document
+        .update(|source| source.settings.ui.mission_control.activate_on_hotkey_release = true)
+        .unwrap();
+    assert!(runtime.settings.ui.mission_control.activate_on_hotkey_release);
+    assert!(
+        ConfigDocument::parse(&document.to_string())
+            .unwrap()
+            .runtime()
+            .unwrap()
+            .settings
+            .ui
+            .mission_control
+            .activate_on_hotkey_release
+    );
+    let runtime = document
+        .update(|source| source.settings.ui.mission_control.activate_on_hotkey_release = false)
+        .unwrap();
+    assert!(!runtime.settings.ui.mission_control.activate_on_hotkey_release);
+}
+
+#[test]
 fn default_document_is_the_canonical_template() {
     let document =
         ConfigDocument::from_source(ConfigDocument::default().source().unwrap()).unwrap();
@@ -794,10 +898,10 @@ fn stack_tab_geometry_rejects_unusable_values() {
 }
 
 #[test]
-fn workspace_mode_defaults_to_per_display_and_round_trips() {
+fn workspace_mode_defaults_to_global_and_round_trips() {
     assert_eq!(
         toml::from_str::<VirtualWorkspaceSettings>("").unwrap().mode,
-        WorkspaceMode::PerDisplay
+        WorkspaceMode::Global
     );
     for (text, mode) in [
         ("per_display", WorkspaceMode::PerDisplay),
@@ -882,4 +986,218 @@ fn parse_whole_grid_overview_toggle() {
     .unwrap();
     assert!(config.binding_mode_specs[0].1.iter().any(|(spec, command)| spec == "Alt + Tab"
         && *command == WmCommand::Wm(WmCmd::ToggleMissionControlWhole)));
+}
+
+#[test]
+fn app_rule_commas_stay_on_the_preceding_line() {
+    let mut base = ConfigDocument::default();
+    base.update(|source| {
+        for id in ["a", "b", "c"] {
+            source.virtual_workspaces.app_rules.push(AppWorkspaceRule {
+                app_id: Some(format!("com.example.{id}")),
+                workspace: Some(WorkspaceSelector::Index(1)),
+                ..Default::default()
+            });
+        }
+    })
+    .unwrap();
+    let mut document = ConfigDocument::parse(&base.to_string().replace("\n\t{", "\n  {")).unwrap();
+    let check = |document: &ConfigDocument, expected: usize| {
+        let text = document.to_string();
+        assert!(
+            !text.lines().any(|line| line.trim_start().starts_with(',')),
+            "{text}"
+        );
+        let start = text.rfind("\napp_rules = [").unwrap();
+        let end = start + text[start..].find("\n]").unwrap();
+        assert!(!text[start..end].contains("\n\n"), "{text}");
+        assert_eq!(
+            Config::parse(&text).unwrap().virtual_workspaces.app_rules.len(),
+            expected
+        );
+    };
+    document
+        .update(|source| {
+            source.virtual_workspaces.app_rules.push(AppWorkspaceRule {
+                app_id: Some("com.example.d".into()),
+                ..Default::default()
+            })
+        })
+        .unwrap();
+    check(&document, 4);
+    document
+        .update(|source| source.virtual_workspaces.app_rules[1].floating = true)
+        .unwrap();
+    check(&document, 4);
+    document
+        .update(|source| drop(source.virtual_workspaces.app_rules.remove(0)))
+        .unwrap();
+    check(&document, 3);
+    document
+        .update(|source| drop(source.virtual_workspaces.app_rules.pop()))
+        .unwrap();
+    check(&document, 2);
+}
+
+#[test]
+fn binding_edits_never_overwrite_overlapping_shortcuts() {
+    let mut source = ConfigDocument::default().source().unwrap();
+    let focus_left = source.keys["Alt + H"].clone();
+    let toggle = source.keys["Alt + Z"].clone();
+    // `comb1` expands to the same keys as an explicit binding.
+    let combination = source.modifier_combinations["comb1"].clone();
+    let (key, command) = source
+        .conflicting_binding("default", &format!("{combination} + H"), None)
+        .unwrap();
+    assert_eq!((key.as_str(), command), ("comb1 + H", &source.keys["comb1 + H"]));
+    // Left/right-specific modifiers overlap their family.
+    assert!(source.conflicting_binding("default", "AltLeft + H", None).is_some());
+    assert!(source.conflicting_binding("default", "Alt + H", Some("Alt + H")).is_none());
+
+    let before = source.keys.clone();
+    let taken = source.bind("default", None, "AltLeft + h".into(), toggle.clone());
+    assert!(taken.unwrap_err().contains("Alt + H"));
+    assert!(source.bind("default", None, "Alt + Nope".into(), toggle.clone()).is_err());
+    // A rebinding whose original changed elsewhere fails instead of clobbering it.
+    let stale = source.bind(
+        "default",
+        Some(("Alt + H", &toggle)),
+        "Alt + B".into(),
+        toggle.clone(),
+    );
+    assert!(stale.is_err());
+    assert_eq!(source.keys, before);
+
+    source
+        .bind(
+            "default",
+            Some(("Alt + H", &focus_left)),
+            "Alt + B".into(),
+            focus_left.clone(),
+        )
+        .unwrap();
+    assert!(!source.keys.contains_key("Alt + H"));
+    assert_eq!(source.keys["Alt + B"], focus_left);
+    // Keeping the key while changing parameters replaces the command in place.
+    source
+        .bind(
+            "default",
+            Some(("Alt + B", &focus_left)),
+            "Alt + B".into(),
+            toggle.clone(),
+        )
+        .unwrap();
+    assert_eq!(source.keys["Alt + B"], toggle);
+
+    // Edits through the document keep the rest of the file untouched.
+    let document = ConfigDocument::default();
+    let text = document.to_string();
+    let edited = document
+        .edited_from(document.source().unwrap(), |s| {
+            s.bind(
+                "default",
+                Some(("Alt + H", &focus_left)),
+                "Alt + B".into(),
+                focus_left.clone(),
+            )
+            .map_err(anyhow::Error::msg)
+        })
+        .unwrap()
+        .document
+        .to_string();
+    let removed: Vec<_> = text.lines().filter(|line| !edited.contains(line)).collect();
+    assert_eq!(removed, [r#""Alt + H" = { move_focus = "left" }"#]);
+}
+
+#[test]
+fn replacing_shortcuts_is_atomic_and_scoped_to_the_reviewed_mode() {
+    use std::collections::BTreeMap;
+    let document = ConfigDocument::default();
+    let defaults = document.source().unwrap();
+    let first = defaults.keys["Alt + H"].clone();
+    let second = defaults.keys["Alt + L"].clone();
+    let replacement = defaults.keys["Alt + Z"].clone();
+    let mut source = defaults.clone();
+    source.keys = BTreeMap::from([
+        ("AltLeft + H".into(), first.clone()),
+        ("AltRight + H".into(), second.clone()),
+        ("Ctrl + Q".into(), first.clone()),
+        ("Alt + K".into(), replacement.clone()),
+    ]);
+    source.binding_modes.insert(
+        "edit".into(),
+        BTreeMap::from([("Alt + H".into(), second.clone())]),
+    );
+    let reviewed = vec![
+        ("AltLeft + H".into(), first.clone()),
+        ("AltRight + H".into(), second.clone()),
+    ];
+    let before = source.clone();
+    // Neither a missing conflict nor a stale original may partially remove anything.
+    assert!(
+        source
+            .bind_replacing(
+                "default",
+                Some(("Alt + K", &replacement)),
+                "Alt + H".into(),
+                replacement.clone(),
+                &reviewed[..1]
+            )
+            .is_err()
+    );
+    assert!(source == before);
+    assert!(
+        source
+            .bind_replacing(
+                "default",
+                Some(("Alt + K", &first)),
+                "Alt + H".into(),
+                replacement.clone(),
+                &reviewed
+            )
+            .is_err()
+    );
+    assert!(source == before);
+    source.keys.insert("AltRight + H".into(), first.clone());
+    let changed = source.clone();
+    assert!(
+        source
+            .bind_replacing(
+                "default",
+                Some(("Alt + K", &replacement)),
+                "Alt + H".into(),
+                replacement.clone(),
+                &reviewed
+            )
+            .is_err()
+    );
+    assert!(source == changed);
+    source = before;
+    source
+        .bind_replacing(
+            "default",
+            Some(("Alt + K", &replacement)),
+            "Alt + H".into(),
+            replacement.clone(),
+            &reviewed,
+        )
+        .unwrap();
+    assert_eq!(
+        source.keys,
+        BTreeMap::from([
+            ("Alt + H".into(), replacement.clone()),
+            ("Ctrl + Q".into(), first)
+        ])
+    );
+    assert_eq!(source.binding_modes["edit"]["Alt + H"], second);
+    // The successful transaction survives the actual TOML document and parser boundary.
+    let edited = document
+        .edited(|current| {
+            *current = source.clone();
+            Ok(())
+        })
+        .unwrap();
+    let reopened = ConfigDocument::parse(&edited.document.to_string()).unwrap().source().unwrap();
+    assert_eq!(reopened.keys, source.keys);
+    assert_eq!(reopened.binding_modes, source.binding_modes);
 }

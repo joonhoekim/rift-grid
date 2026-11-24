@@ -1,13 +1,13 @@
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use tracing::debug;
 
-use super::{Event, EventOutcome, Reactor, Record, Requested, ScreenInfo, TransactionId};
+use super::{Changes, Event, Presentation, Reactor, Record, Requested, ScreenInfo, TransactionId};
 use crate::actor;
 use crate::actor::app::{AppThreadHandle, Quiet, Request, WindowId};
 use crate::actor::spaces::ForwardedSpaceState;
 use crate::common::collections::BTreeMap;
 use crate::common::config::Config;
-use crate::layout_engine::{LayoutCommand, LayoutEngine};
+use crate::layout_engine::{LayoutCommand, LayoutEngine, LayoutEvent};
 use crate::sys::app::{AppInfo, WindowInfo, pid_t};
 use crate::sys::geometry::SameAs;
 use crate::sys::screen::SpaceId;
@@ -15,6 +15,10 @@ use crate::sys::window_server::{WindowServerId, WindowServerInfo};
 
 impl Reactor {
     pub fn new_for_test(layout: LayoutEngine) -> Reactor {
+        // Simulated reactors must not query the live WindowServer session.
+        crate::sys::event::TEST_MOUSE_STATE
+            .with(|state| state.set(Some(crate::sys::event::MouseState::Up)));
+        crate::sys::screen::TEST_SEPARATE_SPACES.with(|separate| separate.set(Some(true)));
         let mut config = Config::default();
         config.settings.default_disable = false;
         config.settings.animate = false;
@@ -103,6 +107,12 @@ impl Reactor {
         )
     }
 
+    pub(super) fn assign_test_window_to_active_workspace(&mut self, space: SpaceId, wid: WindowId) {
+        let workspace =
+            self.layout_manager.layout_engine.workspaces().active_workspace(space).unwrap();
+        assert!(self.assign_test_window_to_workspace(space, wid, workspace));
+    }
+
     pub fn set_test_active_workspace(
         &mut self,
         space: SpaceId,
@@ -126,9 +136,35 @@ impl Reactor {
         self.handle_event(Event::Command(crate::model::reactor::Command::Layout(command)));
     }
 
-    pub(crate) fn dispatch_test_layout_command(&mut self, command: LayoutCommand) -> EventOutcome {
-        self.dispatch_workflow(Event::Command(crate::model::reactor::Command::Layout(command)))
-            .expect("test layout command should dispatch")
+    pub(super) fn commit_test(&mut self, reconcile: impl FnOnce(&mut Self, &mut Changes)) {
+        let mut changes = Changes::default();
+        reconcile(self, &mut changes);
+        self.finish(changes, None, None);
+    }
+
+    pub(super) fn reconcile_test_membership(&mut self, space: SpaceId, windows: &[WindowId]) {
+        let visible = windows
+            .iter()
+            .map(|&id| (self.test_window_server_id(id), Some(space)))
+            .collect();
+        self.commit_test(|reactor, changes| {
+            reactor.reconcile_authoritative_active_window_snapshot(changes, visible, false, &[])
+        });
+    }
+
+    pub(super) fn handle_test_layout_event(&mut self, event: LayoutEvent) {
+        self.commit_test(|reactor, changes| reactor.reconcile_layout_event(changes, event));
+    }
+
+    pub(super) fn arrange_test(&mut self, workspace_switch: bool, space: Option<SpaceId>) -> bool {
+        let mut changes = Changes::default();
+        let policy = if workspace_switch {
+            Presentation::WorkspaceSwitch
+        } else {
+            Presentation::Animated
+        };
+        changes.arrange(space, policy);
+        super::LayoutManager::commit(self, &mut changes)
     }
 
     pub fn mark_test_window_visible_in_space(&mut self, wsid: WindowServerId, space: SpaceId) {
@@ -238,6 +274,7 @@ impl Reactor {
         is_manageable: bool,
     ) {
         self.state.windows.insert_window(wid, super::WindowState {
+            native_transient: false,
             info: WindowInfo {
                 has_native_tabs: false,
                 is_standard: true,
@@ -273,7 +310,6 @@ pub fn test_reactor_with_workspace_settings(
     Reactor::new_for_test(LayoutEngine::new(
         workspace_settings,
         &crate::common::config::LayoutSettings::default(),
-        None,
     ))
 }
 
@@ -585,7 +621,6 @@ impl Apps {
             debug!(?request);
             match request {
                 Request::Terminate => break,
-                Request::WindowMaybeDestroyed(_) => {}
                 Request::RefreshWindowInventory(token) => {
                     if got_visible_windows {
                         continue;

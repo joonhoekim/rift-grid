@@ -1,7 +1,8 @@
-use objc2_core_foundation::{CGPoint, CGRect};
+use objc2_core_foundation::CGRect;
 
 use crate::actor::app::WindowId;
 use crate::layout_engine::WindowDropAction;
+use crate::sys::geometry::SameAs;
 use crate::sys::screen::SpaceId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9,6 +10,19 @@ pub enum DragKind {
     NativeMove,
     NativeResize,
     ModifierMove,
+}
+
+impl DragKind {
+    pub fn is_move(self) -> bool { matches!(self, Self::NativeMove | Self::ModifierMove) }
+
+    /// A native drag that keeps the window's size moves it; one that changes it resizes it.
+    pub fn native(origin_frame: CGRect, frame: CGRect) -> Self {
+        if origin_frame.size.same_as(frame.size) {
+            Self::NativeMove
+        } else {
+            Self::NativeResize
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -63,8 +77,6 @@ pub struct DragSource {
 pub struct DragCommit {
     pub source: DragSource,
     pub target: Option<DropTarget>,
-    pub pointer: CGPoint,
-    pub kind: DragKind,
 }
 
 #[derive(Debug, Clone, Copy)]

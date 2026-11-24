@@ -1,56 +1,15 @@
-//! The settings app's pages for the grid fork: the grid Overview with how moves
+//! The settings app's pages for the grid fork: the grid sections of the Overview, how moves
 //! between cells are shown, and the window borders.
 
-use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
+use cgs::controls::ColorWell;
+use cgs::settings::{Section, SettingsPage};
 
-use super::interface::screen_recording_status;
 use super::*;
 use crate::common::config::*;
 
-// Replaced by `overview` below; named here so it is not dead code.
-const _: fn(Ui, &Rc<Model>) -> Page = super::interface::overview;
-
-/// Upstream's Overview page (`interface::overview`), with the grid's settings.
-pub(super) fn overview(ui: Ui, model: &Rc<Model>) -> Page {
-    let mut f = FormBuilder::new(ui, model);
-    f.tooltips = true;
-    let visibility = f.fields(
-        Section::new(&ui, "Workspaces"),
-        &["enabled", "show_empty_workspaces", "window_previews", "full_resolution"],
-        |s| &s.settings.ui.mission_control,
-        |s| &mut s.settings.ui.mission_control,
-    );
-    let permission = Rc::new(Caption::new(&ui, ""));
-    f.sync(&permission, |caption, _| {
-        caption.set_text(screen_recording_status())
-    });
-    let status = Rc::downgrade(&permission);
-    let check = Button::new(&ui, "Check Screen Recording Access…").on_click(move || {
-        if !CGPreflightScreenCaptureAccess() && !CGRequestScreenCaptureAccess() {
-            Application::open(
-                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
-            );
-        }
-        if let Some(status) = status.upgrade() {
-            status.set_text(screen_recording_status());
-        }
-    });
-    let recording = Section::new(&ui, "Screen Recording")
-        .content(VStack::new(&ui).spacing(8.0).push(permission).push(check));
-    let transitions = f.fields(
-        Section::new(&ui, "Transitions"),
-        &["fade_enabled"],
-        |s| &s.settings.ui.mission_control,
-        |s| &mut s.settings.ui.mission_control,
-    );
-    let duration = f.field(
-        "fade_duration_ms",
-        |s| &s.settings.ui.mission_control,
-        |s| &mut s.settings.ui.mission_control,
-    );
-    f.enabled(&duration, |s| {
-        s.settings.ui.mission_control.enabled && s.settings.ui.mission_control.fade_enabled
-    });
+/// The grid's sections of upstream's Overview page (`interface::overview`).
+pub(super) fn overview_sections(f: &mut FormBuilder) -> (Section, Section) {
+    let ui = f.ui;
     let grid = f.fields(
         Section::new(&ui, "Grid").description("When workspaces form a grid."),
         &[
@@ -72,19 +31,7 @@ pub(super) fn overview(ui: Ui, model: &Rc<Model>) -> Page {
         |s| &s.settings.ui.grid_motion,
         |s| &mut s.settings.ui.grid_motion,
     );
-    f.finish(
-        SettingsPage::new(&ui, "")
-            .section(visibility)
-            .section(recording)
-            .section(transitions.row(duration))
-            .section(grid)
-            .section(motion)
-            .section(Caption::new(
-                &ui,
-                "Turning Overview on or off takes effect after restarting Rift; the rest \
-                 applies the next time it opens.",
-            )),
-    )
+    (grid, motion)
 }
 
 /// The grid's swipes, on the Mouse & Trackpad page after upstream's.

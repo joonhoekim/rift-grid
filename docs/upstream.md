@@ -14,21 +14,20 @@ New code lives in fork modules; upstream files only call into them.
 | `actor/reactor.rs` | Three `Event` variants (`BorderSettle`, `WindowsReordered`, `GridMotion`); in `handle_event_inner`, the border, grid motion and grid display handlers, `grid_motion_before`/`after`, `settle_display_grids` after a display change, and `update_borders`; `save_cells` last in `handle_event_inner` |
 | `actor/reactor/query.rs`, `model/server.rs` | The grid fields of `RuntimeWorkspaceData` (`grid_cell`, `grid`, `grid_elsewhere`, `layout_focus`) |
 | `actor/reactor/events/command.rs` | The list of grid commands and their arm in the command-kind `match`, and switch tracking for commands that change cells only when they cross an edge |
-| `layout_engine/engine.rs` | Grid commands in `handle_command` and `handle_virtual_workspace_command`; the recent window list; the calls into `engine/departures.rs` (see below); `ready_remembered_cell` before both checks for a departed window's workspace, and `put_back_layouts` first on `SpaceExposed` (`engine/cells.rs`) |
+| `layout_engine/engine.rs` | Grid commands in `handle_command` and `handle_virtual_workspace_command`; the recent window list; `return_to_remembered_cell` beside the persistence match in `assign_window_with_app_info`, `put_back_layouts` first on `SpaceExposed` and `cells.forget_app` on `AppTerminated` (`engine/cells.rs`); in `WindowAdded`, a window placed in a cell not shown reports a change, so it is moved off screen |
 | `model/virtual_workspace.rs` | `grid_current`; `shown_before`, which `ensure_space_initialized` shows first; the settings kept as `grid::effective_settings` (a workspace for every cell, named by grid and cell) in `new_with_config`, `plan_settings_names` and `apply_settings`; `remember_grid_cell` in `set_active_workspace`; `remap_grid_cells` in `remap_space`; app rules' `grid` through `rule_workspace` in `apply_app_rule_decision` |
 | `common/config/types.rs` | `grid_columns`, app rules' `grid`, `validate_grid`; grid fields in `MissionControlSettings`, whose `Default` is written out by hand |
-| `ui/mission_control.rs`, `actor/mission_control.rs` | The grid overview's two stages, gliding cards, and refresh on reactor broadcasts; `set_capture_limits` first in `OverviewSession::new`; in `sync_metal`, the size previews are captured at (`card_capture_size`), a grid card's preview frame (`card_image_frame`), the focused window's border (`preview_border`) and the canvas resized with its cell (`fit_canvas`); the grid buttons' input first in `OverviewSession::input` (`grid_bar_input`) |
+| `ui/mission_control.rs`, `actor/mission_control.rs` | Upstream's Overview is one spatial scene seen through a camera; the grid places each cell's region at its row and column (`place_grid_cells`, `sync_grid_layers`), and `default_camera` takes `grid_camera`: the current cell at `grid_zoom`, then the whole grid. `step_back`/`step_in` move between the two; `ToggleWhole`, `Changed` and `Step` events, Esc stepping in before it closes; `follow_grid` on refresh; `grid_input` first in `OverviewSession::input` (label close buttons, drops on grid buttons, `grid_bar_input`, arrows and Tab as `GridFocus`); in `drop_target`, the grid cell's workspace; window shadows slid in `apply_camera`; `set_capture_limits` first in `OverviewSession::new`; no pixel cap in `update_sources_at` with `full_resolution` |
 | `ui/menu_bar.rs`, `actor/menu_bar.rs` | Grid maps and the grid entries of the Workspace menu; the grid fields in the settings preview's `Workspace` |
 | `actor/gesture.rs` | `ActionConfig::grid`; the grid's actions in `Settings` (first in `action_for`, and `consume` while they are on); `DeviceSession` keeps `settings` and `mode` in place of upstream's `alternate`, so a late finger can pick any action; a `Lifecycle::Grid` variant, and one call to `grid_swipe` for a grid action's swipe frames |
 | `sys/gesture.rs`, `actor/input.rs` | `Filter::vertical`: with a vertical grid swipe on, vertical Dock swipes (Mission Control, App Exposé) go through arbitration too |
 | `actor/input.rs` (gesture `configure`) | Gestures stay on while the Overview is open when the grid's are; `Control::set_overview` after `configure`, and `action_for` then gives only grid actions |
 | `actor/wm_controller.rs`, `actor/mission_control.rs` | `WmEvent::OverviewStep` passed on as `mission_control::Event::Step`, handled by `overview_step` |
 | `actor/reactor/gesture.rs` | `Lifecycle::Grid` goes to `grid_gestures.rs`; `gesture_space_active` is `pub(super)` |
-| `actor/wm_controller.rs` | The Overview closes on a space state update only when `grid_motion::screens_changed` says the displays or their Spaces changed |
 | `sys/mach.rs`, `sys/service.rs`, `common/config/types.rs`, `crates/rift-client/src/lib.rs`, `Cargo.toml`, `assets/Info.plist`, `rift.default.toml` | The fork's names (`crates/rift-protocol/src/names.rs`): the Mach service and launchd label, the binary looked up on `PATH`, the log paths, the config and data directories, the default layout folder, the `[[bin]]` names, the bundle id; clap's `name` in both binaries |
 | `bin/rift.rs` | `load_cells` after the layout engine is made |
 | `Cargo.toml` | `objc2-screen-capture-kit`, which upstream dropped with its screenshot previews: the grid's slides capture windows with it |
-| `ui/settings/*` | A Window Borders category (also in `sidebar.rs`'s color match), the fork's Overview page in place of `interface::overview` (`screen_recording_status` made `pub(super)` for it), and their search entries; in `mod.rs`, one call that ends a field's editing on a click elsewhere or when the window goes to the back (`settings/editing.rs`), checked in `native_tests.rs` |
+| `ui/settings/*` | A Window Borders category (also in `sidebar.rs`'s badge match); in `interface::overview`, `full_resolution` in the first section and the grid's sections from `grid_pages::overview_sections`; their search entries; in `mod.rs`, one call that ends a field's editing on a click elsewhere or when the window goes to the back (`settings/editing.rs`), checked in `native_tests.rs` |
 
 ## cgs
 
@@ -48,15 +47,16 @@ These could shrink the fork's footprint in upstream files. None is a defect.
 
 - The grid commands are listed in three places: `command.rs` and twice in
   `engine.rs`. A `LayoutCommand::is_grid()` in the protocol crate would leave
-  one.
+  one. Their `#[command(...)]` attributes put the ones that take no number in
+  the settings app's command list; the rest are `skip`, since the list would
+  offer workspace names for a grid number.
 - `MissionControlSettings` lost its derived `Default`, so every field upstream
   adds must also go into the fork's impl. Moving the grid fields to their own
   `[settings.ui.grid_overview]` table would restore the derive, at the cost of a
   config change.
 - The settings app's category list, page match and search catalog: upstream
-  reorganizes these often, and each time the fork's Overview and Window Borders
-  entries conflict. `grid_pages::overview` copies upstream's Overview sections,
-  so check it against `interface::overview` after a merge.
+  reorganizes these often, and each time the fork's Window Borders entries
+  conflict.
 - `reactor.rs` has seven separate hook calls. One `Event::Fork` variant with a
   hook before and after handling would make it two.
 
@@ -83,11 +83,15 @@ editor groups, in every layout:
   the window into that cell, as the cell's empty space does. A drop that keeps
   the window's slot is taken, as on the screen.
 
-Upstream's code for all this is deleted, not bypassed, in `actor/drag.rs`,
-`model/drag.rs`, `actor/reactor.rs` (`resolve_drag_preview`,
-`refresh_active_drag_scene`, which builds the scene for the space the drag began
-in), `layout_engine/engine.rs` (`DropPreview`, `source_move_neighbors`, the
-Overview's same-slot check) and `ui/mission_control.rs` (`move_drag`). When a
+- Targets are on the display under the pointer, as upstream has them since
+  #709: the scene is that display's (`move_drag_scene`).
+
+Upstream's code for all this is deleted, not bypassed, in `actor/drag.rs`
+(`hit_test_available`, hysteresis, the retry list), `model/drag.rs`
+(`source_neighbors`), `actor/reactor.rs` (`resolve_drag_preview`'s retry
+loop), `layout_engine/engine.rs` (`DropPreview`, `source_move_neighbors`, the
+same-slot refusal in `relocate_window_with_drop`) and `ui/mission_control.rs`
+(`move_drag`). When a
 merge conflicts there, keep the fork's side and carry over only what upstream
 fixed. `WindowDropAction::Move` is no longer produced by a drag; the layouts
 still handle it.
@@ -146,6 +150,8 @@ its next normalization undoes.
 - On macOS 27, `settings_native --verify` fails on upstream too: switching to
   Traditional at a 700×420 window widens it to 704. The other checks pass with
   that size left out.
+  Since upstream 0.8.6 it stops earlier, at "search replaces the sidebar",
+  on upstream as well (checked 2026-11-24 at `d8b83ab`).
 - On macOS 27 the unit tests abort now and then (about one run in five, mostly
   the first after a build) with `Cannot form weak reference to instance of
   class SLSWindowManagementFallbackBridge`, inside SkyLight. Run them again.
@@ -156,14 +162,14 @@ its next normalization undoes.
   elsewhere in the window and when the window goes to the back, and could go
   upstream as is.
 
-- A window minimized, hidden with its app or put in native fullscreen came
-  back next to whatever was selected, at default sizes, and a hidden app's
-  windows could come back in the workspace on screen instead of their own
-  (upstream #520, with #479, #511 and #541). The fork's
-  `layout_engine/engine/departures.rs` keeps the workspace's layouts from before
-  the window left and puts them back when nothing else changed meanwhile, or
-  else puts the window after its old neighbor; it works for every layout mode.
-  Sent upstream as #595 (from the `joonhoekim/rift` fork, remote `pr`).
+- A window minimized, hidden with its app or put in native fullscreen keeps
+  its place: upstream's #647, which superseded the fork's #595, keeps such a
+  window in its layouts without taking part in them. `engine/cells.rs` uses the
+  same for a cell's layouts kept across a restart: its windows are put back
+  dormant (`initialize_dormant_windows`) and each takes part again as it comes.
+- Upstream's workspace mode defaults to `global` since 0.8.0. Grids ignore it:
+  `grid::effective_settings` sets `per_display`, and `grid_displays.rs` gives
+  each grid one display.
 
 ## App lifecycle fixes to send
 
@@ -175,11 +181,8 @@ live after it.
   `kEventAppTerminated` arrives after `GetProcessPID` stops resolving the
   process, so upstream never terminates an app; every quit app stays in
   `rift-grid-cli query applications` with its actor and AX observer.
-- `c9eba46` *manage an app whose window shows before it turns regular*: an app
-  started outside LaunchServices (an exec binding) reads Prohibited until it
-  sets its policy, and when both discoveries read Prohibited its windows are
-  never managed. Reproduced with a small app that shows a window and turns
-  Regular three seconds later.
+- `c9eba46` *manage an app whose window shows before it turns regular*: taken
+  upstream as #642.
 - `66eb1af` *attach again a running app whose actor gave up*: an app busy when its
   actor starts (seen with Chrome and Brave as rift restarted) refuses AX
   requests for the two seconds `init` waits, the actor exits, and only
@@ -191,20 +194,13 @@ live after it.
   seconds to 5 minutes. With tests in `wm_controller.rs`
   (`app_lifecycle_tests`) that do not build without the fix.
 
-## Display move fixes to send
+## Display move fixes
 
-Two fixes of #601's revisioned space state, each its own commit. Before them,
-`move_window_to_display` (Alt+Ctrl+IJKL) left the window at its old size or
-place on the new display until the next layout. Both were reproduced with
-trace logs and checked live after the fix.
-
-- `994c7d5` *keep the frames in flight when a window only moves between
-  Spaces*: the window's own change of Space bumped the revision and revoked the
-  resize sent a moment before. With a test in `spaces/tests.rs` that fails
-  without the fix.
-- `89385be` *don't end animations on a space snapshot that revoked nothing*:
-  the repeat of the accepted revision about 100 ms later stopped every
-  animation where it was; seen with Chrome, whose resizes are slow.
+`994c7d5` and `89385be` fixed #601's revisioned space state for
+`move_window_to_display`: a window's own change of Space revoked its resize,
+and a repeat of the accepted revision ended animations. Upstream fixed both
+its own way in 0.8.x (`SpaceSnapshot::presentation_changed`), and the merge
+took upstream's code.
 
 ## Gesture changes to propose
 

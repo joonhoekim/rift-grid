@@ -2,7 +2,9 @@
 //! Capture callbacks only replace a single retained, immutable sample; they never render.
 mod capture;
 mod gpu;
+mod layer;
 mod pacing;
+mod session;
 mod timing;
 
 use std::cell::RefCell;
@@ -20,12 +22,15 @@ use capture::Captures;
 pub fn set_capture_limits(process: usize, compositor: usize, stream: usize) {
     capture::set_capture_limits(process, compositor, stream);
 }
+pub use capture::DesktopSnapshot;
 use gpu::Gpu;
-use objc2::MainThreadMarker;
+pub use layer::PreviewLayer;
 use objc2::rc::Retained;
-use objc2_core_foundation::{CGPoint, CGRect};
+use objc2::{MainThreadMarker, Message};
+use objc2_core_foundation::{CGAffineTransform, CGPoint, CGRect};
 use objc2_metal::MTLDrawable;
 use objc2_quartz_core::{CALayer, CAMetalLayer};
+pub use session::{PreviewCaptureSession, PreviewSurfaceFrame};
 
 use super::{CgsWindow, LayerTransaction, WindowSurface, WindowTransaction};
 
@@ -39,11 +44,15 @@ pub enum PreviewError {
     InvalidScene,
 }
 impl std::fmt::Display for PreviewError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{self:?}") }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
 }
 impl std::error::Error for PreviewError {}
 impl From<super::CgsWindowError> for PreviewError {
-    fn from(e: super::CgsWindowError) -> Self { Self::Window(e) }
+    fn from(e: super::CgsWindowError) -> Self {
+        Self::Window(e)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,19 +126,31 @@ pub struct PreviewFrame {
     window_id: u32,
     process_id: i32,
     frame: capture::Frame,
+    texture: Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLTexture>>,
     _owner: std::marker::PhantomData<Rc<()>>,
 }
 impl PreviewFrame {
-    pub fn window_id(&self) -> u32 { self.window_id }
+    pub fn window_id(&self) -> u32 {
+        self.window_id
+    }
 
-    pub fn process_id(&self) -> i32 { self.process_id }
+    pub fn process_id(&self) -> i32 {
+        self.process_id
+    }
+
+    /// When this frame was first imported. Reusing a frame preserves its timestamp.
+    pub fn received_at(&self) -> Instant {
+        self.frame.received
+    }
 
     /// Read-only capture texture. Do not write pixels or mutate its IOSurface.
     pub fn texture(&self) -> &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLTexture> {
-        &self.frame.texture
+        &self.texture
     }
 
-    pub fn texture_coordinates(&self) -> [f32; 4] { self.frame.uv }
+    pub fn texture_coordinates(&self) -> [f32; 4] {
+        self.frame.uv
+    }
 }
 
 /// Array order is back to front. Geometry is in canvas-local, top-left logical points.
@@ -218,7 +239,9 @@ pub struct Transition {
     pub easing: Easing,
 }
 impl Transition {
-    pub fn new(duration: Duration, easing: Easing) -> Self { Self { duration, easing } }
+    pub fn new(duration: Duration, easing: Easing) -> Self {
+        Self { duration, easing }
+    }
 }
 struct Animation {
     from: Vec<Preview>,
@@ -310,7 +333,9 @@ impl Wake {
 /// Display-local preview canvas, optionally hosted in its own CGS window. Not Send or Sync.
 ///
 /// Call `render` after the coalesced wake callback. A dirty-driven CAMetalDisplayLink
-/// supplies drawables and animation timing; do not add another clock. The callback may run
+/// supplies drawables and animation timing for Metal scenes; do not add another
+/// Metal clock. With an empty visual scene it only pumps capture: `PreviewLayer`
+/// consumers use their host's CA transaction and display cadence. The callback may run
 /// on any framework queue and must
 /// only schedule work on this object's owner. It must not call back into the compositor.
 /// hide stops this canvas clock; hiding the source owner also retires shared capture.
@@ -337,6 +362,7 @@ pub struct PreviewCompositor {
     revision: u64,
     offset: CGPoint,
     presented_offset: CGPoint,
+    presented_camera: PreviewCamera,
     _owner: std::marker::PhantomData<Rc<()>>,
 }
 impl PreviewCompositor {
@@ -372,7 +398,13 @@ impl PreviewCompositor {
         if window_id == 0 {
             return Err(PreviewError::InvalidScene);
         }
-        Self::create(bounds, scale, Wake::new(wake), Some((window_id, parent)), None)
+        Self::create(
+            bounds,
+            scale,
+            Wake::new(wake),
+            Some((window_id, parent)),
+            None,
+        )
     }
 
     fn create(
@@ -414,6 +446,8 @@ impl PreviewCompositor {
         layer.setDisplaySyncEnabled(false);
         let local = CGRect::new(CGPoint::ZERO, bounds.size);
         layer.setFrame(local);
+        layer.setAnchorPoint(CGPoint::ZERO);
+        layer.setPosition(CGPoint::ZERO);
         layer.setContentsScale(scale);
         layer.setDrawableSize(objc2_core_foundation::CGSize::new(
             bounds.size.width * scale,
@@ -464,8 +498,14 @@ impl PreviewCompositor {
             revision: 1,
             offset: CGPoint::ZERO,
             presented_offset: CGPoint::ZERO,
+            presented_camera: PreviewCamera::default(),
             _owner: std::marker::PhantomData,
         })
+    }
+
+    /// The current visual revision has reached hardware presentation, independently of missing sources.
+    pub fn is_presented(&self) -> bool {
+        self.visible && !self._root.isHidden() && self.gpu.visual_is_presented(self.revision)
     }
 
     pub fn is_ready(&self) -> bool {
@@ -509,7 +549,9 @@ impl PreviewCompositor {
         )
     }
 
-    /// Change the shared camera without updating source inventory or per-window transforms.
+    /// Change the shared camera without updating capture or per-window transforms.
+    /// Cached pixels transform immediately in the caller’s CA transaction. A newly
+    /// rendered drawable atomically rebases that transform when presented.
     pub fn set_camera(&mut self, camera: PreviewCamera) -> PreviewResult<()> {
         if !camera.scale.is_finite()
             || camera.scale <= 0.
@@ -519,6 +561,7 @@ impl PreviewCompositor {
         }
         if self.camera != camera {
             self.camera = camera;
+            self.position_layer();
             self.revision += 1;
             self.dirty = true;
             self.wake.notify();
@@ -534,7 +577,9 @@ impl PreviewCompositor {
             .find(|p| p.window_id == window_id)
             .and_then(|p| captures.frame(p).map(|f| (p.process_id, f.clone())))
             .or_else(|| captures.captured_frame(window_id))?;
+        let texture = frame.metal_texture(&self.gpu.device).ok()?.retain();
         Some(PreviewFrame {
+            texture,
             window_id,
             process_id,
             frame,
@@ -555,7 +600,9 @@ impl PreviewCompositor {
         }
     }
 
-    pub fn window_id(&self) -> u32 { self.host_window_id }
+    pub fn window_id(&self) -> u32 {
+        self.host_window_id
+    }
 
     pub fn set_level(&self, level: i32) -> PreviewResult<()> {
         let window = self.window.as_ref().ok_or_else(|| {
@@ -576,13 +623,7 @@ impl PreviewCompositor {
 
     /// Replace capture policy without changing geometry or presentation state.
     pub fn set_sources(&mut self, sources: &[PreviewSource]) -> PreviewResult<()> {
-        if !self.owns_captures
-            || sources.len() > 256
-            || sources
-                .iter()
-                .enumerate()
-                .any(|(i, p)| !p.valid() || sources[..i].iter().any(|q| q.window_id == p.window_id))
-        {
+        if !self.owns_captures || !valid_sources(sources) {
             return Err(PreviewError::InvalidScene);
         }
         if self.sources.as_deref() == Some(sources) {
@@ -592,7 +633,9 @@ impl PreviewCompositor {
         inventory.clear();
         inventory.extend_from_slice(sources);
         if self.visible {
-            self.captures.borrow_mut().set_sources(sources.iter().copied())?;
+            self.captures
+                .borrow_mut()
+                .set_sources(sources.iter().copied())?;
         }
         self.wake.notify();
         Ok(())
@@ -601,29 +644,15 @@ impl PreviewCompositor {
     /// Update existing source policies without rebuilding the inventory or discovering windows.
     pub fn update_sources(&mut self, updates: &[PreviewSource]) -> PreviewResult<()> {
         let sources = self.sources.as_mut().ok_or(PreviewError::InvalidScene)?;
-        if !self.owns_captures
-            || updates.len() > 256
-            || updates.iter().any(|p| {
-                !p.valid()
-                    || !sources
-                        .iter()
-                        .any(|q| p.window_id == q.window_id && p.process_id == q.process_id)
-            })
-        {
+        if !self.owns_captures {
             return Err(PreviewError::InvalidScene);
         }
-        let mut changed = false;
-        let mut inventory = false;
-        for update in updates {
-            let source = sources.iter_mut().find(|s| s.window_id == update.window_id).unwrap();
-            inventory |=
-                source.mode == CaptureMode::Inactive || update.mode == CaptureMode::Inactive;
-            changed |= *source != *update;
-            *source = *update;
-        }
+        let (changed, inventory) = update_source_policies(sources, updates)?;
         if changed && self.visible {
             if inventory {
-                self.captures.borrow_mut().set_sources(sources.iter().copied())?;
+                self.captures
+                    .borrow_mut()
+                    .set_sources(sources.iter().copied())?;
             } else {
                 self.captures.borrow_mut().update_sources(updates);
             }
@@ -706,11 +735,11 @@ impl PreviewCompositor {
             return Err(PreviewError::InvalidScene);
         }
         let mut changed = false;
-        for p in self
-            .scene
-            .iter_mut()
-            .chain(self.animation.iter_mut().flat_map(|a| a.from.iter_mut().chain(&mut a.to)))
-        {
+        for p in self.scene.iter_mut().chain(
+            self.animation
+                .iter_mut()
+                .flat_map(|a| a.from.iter_mut().chain(&mut a.to)),
+        ) {
             if p.window_id == window_id && (p.border_width != width || p.border_color != color) {
                 p.border_width = width;
                 p.border_color = color;
@@ -736,7 +765,9 @@ impl PreviewCompositor {
             let result: PreviewResult<()> = (|| {
                 if self.owns_captures {
                     if let Some(sources) = &self.sources {
-                        self.captures.borrow_mut().set_sources(sources.iter().copied())?;
+                        self.captures
+                            .borrow_mut()
+                            .set_sources(sources.iter().copied())?;
                     } else {
                         self.captures.borrow_mut().set_scene(&self.scene)?;
                     }
@@ -821,13 +852,21 @@ impl PreviewCompositor {
 
     fn position_layer(&self) {
         let _transaction = LayerTransaction::disabled();
-        self.layer.setFrame(CGRect::new(
-            CGPoint::new(
-                self.offset.x - self.presented_offset.x,
-                self.offset.y - self.presented_offset.y,
-            ),
-            self.bounds.size,
+        let ratio = self.camera.scale as f64 / self.presented_camera.scale as f64;
+        self.layer.setPosition(CGPoint::new(
+            (self.offset.x - self.presented_offset.x) * ratio + self.camera.translation[0] as f64
+                - self.presented_camera.translation[0] as f64 * ratio,
+            (self.offset.y - self.presented_offset.y) * ratio + self.camera.translation[1] as f64
+                - self.presented_camera.translation[1] as f64 * ratio,
         ));
+        self.layer.setAffineTransform(CGAffineTransform {
+            a: ratio,
+            b: 0.,
+            c: 0.,
+            d: ratio,
+            tx: 0.,
+            ty: 0.,
+        });
     }
 
     pub fn resize(&mut self, bounds: CGRect, scale: f64) -> PreviewResult<()> {
@@ -846,12 +885,13 @@ impl PreviewCompositor {
             surface.set_bounds_in(&transaction, local);
         }
         self._root.setFrame(local);
-        self.layer.setFrame(local);
+        self.layer.setBounds(local);
         self.layer.setContentsScale(scale);
-        self.layer.setDrawableSize(objc2_core_foundation::CGSize::new(
-            bounds.size.width * scale,
-            bounds.size.height * scale,
-        ));
+        self.layer
+            .setDrawableSize(objc2_core_foundation::CGSize::new(
+                bounds.size.width * scale,
+                bounds.size.height * scale,
+            ));
         if let Some(window) = &self.window {
             window.set_resolution(scale)?;
         }
@@ -920,10 +960,14 @@ impl PreviewCompositor {
         Ok(())
     }
 
-    pub fn is_visible(&self) -> bool { self.visible }
+    pub fn is_visible(&self) -> bool {
+        self.visible
+    }
 
     pub fn is_animating(&self) -> bool {
-        self.animation.as_ref().is_some_and(|a| a.progress.is_none())
+        self.animation
+            .as_ref()
+            .is_some_and(|a| a.progress.is_none())
     }
 
     fn interpolate(&mut self, now: Instant) {
@@ -1005,7 +1049,9 @@ impl PreviewCompositor {
 
     /// Prepare retained scene changes once a display-link drawable is available,
     /// before calling render. Neither method acquires a drawable or waits for GPU work.
-    pub fn has_display_update(&self) -> bool { self.pacing.has_update() }
+    pub fn has_display_update(&self) -> bool {
+        self.pacing.has_update()
+    }
 
     pub fn request_frame(&self) {
         if self.visible {
@@ -1034,13 +1080,18 @@ impl PreviewCompositor {
                 self.pacing.pause();
                 self.dirty = false;
             }
-            self.captures.borrow_mut().update(&mut self.gpu, &self.scene)?;
+            self.captures
+                .borrow_mut()
+                .update(&mut self.gpu, &self.scene)?;
             return Ok(false);
         }
         if let Some(presentation) = self.gpu.take_presentation() {
             let _transaction = LayerTransaction::disabled().flush_on_commit();
-            if self.presented_offset != presentation.offset {
+            if self.presented_offset != presentation.offset
+                || self.presented_camera != presentation.camera
+            {
                 self.presented_offset = presentation.offset;
+                self.presented_camera = presentation.camera;
                 self.position_layer();
             }
             self._root.setHidden(false);
@@ -1055,8 +1106,14 @@ impl PreviewCompositor {
                 Instant::now() + Duration::from_secs_f64(delta)
             })
             .unwrap_or(presentation);
-        let changed = self.captures.borrow_mut().update(&mut self.gpu, &self.scene)?;
-        self.dirty |= changed || self.gpu.sources_changed(&self.scene, &self.captures.borrow());
+        let changed = self
+            .captures
+            .borrow_mut()
+            .update(&mut self.gpu, &self.scene)?;
+        self.dirty |= changed
+            || self
+                .gpu
+                .sources_changed(&self.scene, &self.captures.borrow());
         if update.is_some() || !self.is_animating() {
             self.interpolate(presentation);
         }
@@ -1118,14 +1175,18 @@ impl PreviewCompositor {
     }
 
     /// Per-source status distinguishes a stale/idle source from a failed stream.
-    pub fn refresh_sources(&mut self) { self.captures.borrow_mut().refresh(); }
+    pub fn refresh_sources(&mut self) {
+        self.captures.borrow_mut().refresh();
+    }
 
     pub fn source_status(&self, window_id: u32) -> Option<SourceStatus> {
         self.captures.borrow().status(window_id)
     }
 }
 impl Drop for PreviewCompositor {
-    fn drop(&mut self) { let _ = self.hide(); }
+    fn drop(&mut self) {
+        let _ = self.hide();
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1136,6 +1197,45 @@ pub enum SourceStatus {
     Blank,
     Stopped,
     Failed(String),
+}
+
+fn valid_sources(sources: &[PreviewSource]) -> bool {
+    sources.len() <= 256
+        && sources.iter().enumerate().all(|(index, source)| {
+            source.valid()
+                && !sources[..index]
+                    .iter()
+                    .any(|other| other.window_id == source.window_id)
+        })
+}
+
+fn update_source_policies(
+    sources: &mut [PreviewSource],
+    updates: &[PreviewSource],
+) -> PreviewResult<(bool, bool)> {
+    if updates.len() > 256
+        || updates.iter().any(|update| {
+            !update.valid()
+                || !sources.iter().any(|source| {
+                    source.window_id == update.window_id && source.process_id == update.process_id
+                })
+        })
+    {
+        return Err(PreviewError::InvalidScene);
+    }
+    let mut changed = false;
+    let mut inventory_changed = false;
+    for update in updates {
+        let source = sources
+            .iter_mut()
+            .find(|source| source.window_id == update.window_id)
+            .ok_or(PreviewError::InvalidScene)?;
+        inventory_changed |=
+            source.mode == CaptureMode::Inactive || update.mode == CaptureMode::Inactive;
+        changed |= *source != *update;
+        *source = *update;
+    }
+    Ok((changed, inventory_changed))
 }
 
 fn validate_bounds(bounds: CGRect, scale: f64) -> PreviewResult<()> {

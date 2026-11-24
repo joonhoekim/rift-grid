@@ -9,12 +9,13 @@
 //! A window is known by its process and window number, and a cell by its macOS
 //! Space and its place among the Space's workspaces. Both hold for as long as
 //! the login session: after a reboot nothing matches, and windows go where a
-//! new window would, as before. A remembered cell is used as a departure is
-//! (`departures.rs`), for a window that comes with no assignment.
+//! new window would, as before. A remembered cell is used for a window that
+//! comes with no assignment, as a match of upstream's layout persistence is.
 //!
 //! Each cell's layouts are kept too. When the first of its windows comes back,
-//! they are put back with all its windows departed, so that each returns to
-//! its place and size whatever order the apps are found in.
+//! they are put back with all its windows dormant (not taking part in the
+//! layout, as a minimized window does), so that each returns to its place and
+//! size whatever order the apps are found in.
 
 use std::path::PathBuf;
 
@@ -25,6 +26,7 @@ use crate::actor::app::WindowId;
 use crate::common::collections::HashMap;
 use crate::common::config::LayoutMode;
 use crate::layout_engine::LayoutSystemKind;
+use crate::layout_engine::systems::{LayoutSystem, WindowChange, WindowQuery};
 use crate::layout_engine::workspaces::WorkspaceLayoutState;
 use crate::model::WindowStore;
 use crate::model::virtual_workspace::VirtualWorkspaceId;
@@ -92,7 +94,9 @@ pub(super) struct Cells {
 }
 
 impl Cells {
-    pub(super) fn forget(&mut self, wid: WindowId) { self.remembered.remove(&wid); }
+    pub(super) fn forget_app(&mut self, pid: i32) {
+        self.remembered.retain(|wid, _| wid.pid != pid);
+    }
 }
 
 fn cells_file() -> PathBuf { crate::common::config::data_dir().join("cells.json") }
@@ -106,14 +110,16 @@ impl LayoutEngine {
     pub fn load_cells(&mut self) { self.load_cells_from(&cells_file()); }
 
     fn load_cells_from(&mut self, path: &std::path::Path) {
-        let Ok(text) = std::fs::read_to_string(path) else { return };
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return;
+        };
         let Ok(saved) = serde_json::from_str::<Saved>(&text) else {
             tracing::warn!(?path, "Unreadable cells file; windows start in the active cell");
             return;
         };
         self.workspaces.shown_before =
             saved.shown.iter().map(|s| (SpaceId::new(s.space), s.index)).collect();
-        let cells = &mut self.departures.cells;
+        let cells = &mut self.cells;
         cells.remembered = saved
             .windows
             .iter()
@@ -152,7 +158,7 @@ impl LayoutEngine {
             .iter_workspace_assignments()
             .filter_map(|(wid, workspace)| Some((wid, place(workspace)?)))
             .collect();
-        let cells = &mut self.departures.cells;
+        let cells = &mut self.cells;
         // A window placed since is no longer waiting for its cell.
         cells.remembered.retain(|wid, _| !assigned.contains_key(wid));
         let mut entries: Vec<Entry> = assigned
@@ -172,12 +178,17 @@ impl LayoutEngine {
             .into_iter()
             .filter_map(|space| {
                 let active = workspaces.active_workspace(space)?;
-                Some(Shown { space: space.get(), index: place(active)?.1 })
+                Some(Shown {
+                    space: space.get(),
+                    index: place(active)?.1,
+                })
             })
-            .chain(workspaces.shown_before.iter().map(|(space, &index)| Shown {
-                space: space.get(),
-                index,
-            }))
+            .chain(
+                workspaces
+                    .shown_before
+                    .iter()
+                    .map(|(space, &index)| Shown { space: space.get(), index }),
+            )
             .collect();
         shown.sort_unstable();
         shown.dedup_by_key(|s| s.space);
@@ -198,7 +209,11 @@ impl LayoutEngine {
                     state: &workspace.layout_state,
                 })
                 .ok()?;
-                Some(CellLayout { space: space.get(), index, layout })
+                Some(CellLayout {
+                    space: space.get(),
+                    index,
+                    layout,
+                })
             })
             .collect();
         layouts.extend(
@@ -213,7 +228,11 @@ impl LayoutEngine {
                 }),
         );
         layouts.sort_unstable_by_key(|cell| (cell.space, cell.index));
-        let saved = Saved { windows: entries, shown, layouts };
+        let saved = Saved {
+            windows: entries,
+            shown,
+            layouts,
+        };
         if saved == cells.saved {
             return None;
         }
@@ -224,20 +243,19 @@ impl LayoutEngine {
     /// Make `space`'s workspaces when `wid` is remembered there, so that its
     /// cell can be found before the Space has been shown.
     pub(super) fn ready_remembered_cell(&mut self, wid: WindowId, space: SpaceId) {
-        if self.departures.cells.remembered.get(&wid).is_some_and(|&(was, _)| was == space) {
+        if self.cells.remembered.get(&wid).is_some_and(|&(was, _)| was == space) {
             self.workspaces.ensure_space_initialized(space);
             self.put_back_layouts(space);
         }
     }
 
     /// Put back the kept layouts of `space`'s cells, with their remembered
-    /// windows departed (`install_departed_layouts`), once its workspaces are
+    /// windows dormant (`install_dormant_layouts`), once its workspaces are
     /// made: when the Space is exposed, before any window comes, or when a
     /// window remembered there comes first. A layout made for another mode
     /// than its cell's, or that does not read, is dropped.
     pub(super) fn put_back_layouts(&mut self, space: SpaceId) {
         let cells: Vec<usize> = self
-            .departures
             .cells
             .layouts
             .keys()
@@ -245,7 +263,7 @@ impl LayoutEngine {
             .map(|&(_, index)| index)
             .collect();
         for index in cells {
-            let Some(layout) = self.departures.cells.layouts.remove(&(space, index)) else {
+            let Some(layout) = self.cells.layouts.remove(&(space, index)) else {
                 continue;
             };
             let Some(&workspace) = self.workspaces.workspace_ids(space).get(index) else {
@@ -262,15 +280,68 @@ impl LayoutEngine {
                 continue;
             }
             let away: Vec<WindowId> = self
-                .departures
                 .cells
                 .remembered
                 .iter()
                 .filter(|&(_, &cell)| cell == (space, index))
                 .map(|(&wid, _)| wid)
                 .collect();
-            self.install_departed_layouts(workspace, layout.system, layout.state, &away);
+            self.install_dormant_layouts(workspace, layout.system, layout.state, &away);
         }
+    }
+
+    /// Make `system` and `state` `workspace_id`'s layouts again, with the
+    /// windows of `away` dormant in them and the others left out: each goes
+    /// back to its place, at its size, as it comes. A workspace that already
+    /// tiles windows keeps its own.
+    fn install_dormant_layouts(
+        &mut self,
+        workspace_id: VirtualWorkspaceId,
+        mut system: LayoutSystemKind,
+        state: WorkspaceLayoutState,
+        away: &[WindowId],
+    ) {
+        let workspace = &mut self.workspaces[workspace_id];
+        let members = |system: &LayoutSystemKind| -> Vec<WindowId> {
+            let mut windows: Vec<WindowId> = state
+                .all_layouts()
+                .flat_map(|layout| system.windows(layout, WindowQuery::All))
+                .collect();
+            windows.sort_unstable();
+            windows.dedup();
+            windows
+        };
+        if workspace
+            .layout_state
+            .all_layouts()
+            .any(|layout| !workspace.layout_system.windows(layout, WindowQuery::All).is_empty())
+        {
+            return;
+        }
+        let (dormant, gone): (Vec<_>, Vec<_>) =
+            members(&system).into_iter().partition(|wid| away.contains(wid));
+        for wid in gone {
+            system.update(WindowChange::Remove(wid));
+        }
+        system.initialize_dormant_windows(dormant);
+        workspace.layout_system = system;
+        workspace.layout_state = state;
+    }
+
+    /// Assign `wid` to the cell it was in on `space` when rift-grid last ran,
+    /// first putting back that cell's layouts. Returns whether it was.
+    pub(super) fn return_to_remembered_cell(
+        &mut self,
+        window_store: &mut WindowStore,
+        wid: WindowId,
+        space: SpaceId,
+    ) -> bool {
+        self.ready_remembered_cell(wid, space);
+        let Some(workspace) = self.remembered_cell(wid, space) else {
+            return false;
+        };
+        self.cells.remembered.remove(&wid);
+        self.workspaces.assign_window_to_workspace(window_store, space, wid, workspace)
     }
 
     /// The workspace `wid` was in on `space` when rift last ran.
@@ -279,8 +350,10 @@ impl LayoutEngine {
         wid: WindowId,
         space: SpaceId,
     ) -> Option<VirtualWorkspaceId> {
-        let &(was, index) = self.departures.cells.remembered.get(&wid)?;
-        (was == space).then(|| self.workspaces.workspace_ids(space).get(index).copied()).flatten()
+        let &(was, index) = self.cells.remembered.get(&wid)?;
+        (was == space)
+            .then(|| self.workspaces.workspace_ids(space).get(index).copied())
+            .flatten()
     }
 }
 
@@ -296,17 +369,19 @@ fn write_atomically(path: &std::path::Path, saved: &Saved) -> std::io::Result<()
 
 #[cfg(test)]
 mod tests {
-    use objc2_core_foundation::CGSize;
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 
     use super::*;
-    use crate::layout_engine::LayoutSystem;
     use crate::common::config::{LayoutSettings, VirtualWorkspaceSettings};
     use crate::layout_engine::LayoutEvent;
     use crate::layout_engine::engine::WindowLayoutInfo;
 
     fn engine(space: SpaceId) -> (LayoutEngine, WindowStore) {
-        let settings = VirtualWorkspaceSettings { grid_columns: 3, ..Default::default() };
-        let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default(), None);
+        let settings = VirtualWorkspaceSettings {
+            grid_columns: 3,
+            ..Default::default()
+        };
+        let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default());
         let mut store = WindowStore::default();
         let size = CGSize::new(1000.0, 800.0);
         let _ = engine.handle_event(&mut store, LayoutEvent::SpaceExposed(space, size));
@@ -314,6 +389,14 @@ mod tests {
     }
 
     fn observe(engine: &mut LayoutEngine, store: &mut WindowStore, space: SpaceId, w: &[WindowId]) {
+        for &wid in w {
+            let frame = CGRect::new(CGPoint::ZERO, CGSize::new(400.0, 300.0));
+            let mut state: crate::model::reactor::WindowState =
+                crate::actor::reactor::testing::make_window_info(frame, None, "Window", None)
+                    .into();
+            state.is_manageable = true;
+            store.insert_window(wid, state);
+        }
         let info = w
             .iter()
             .map(|&window_id| WindowLayoutInfo {
@@ -334,7 +417,8 @@ mod tests {
     fn a_restarted_rift_puts_windows_back_in_their_cells() {
         let space = SpaceId::new(7);
         let (a, b, c) = (WindowId::new(10, 1), WindowId::new(10, 2), WindowId::new(11, 3));
-        let path = std::env::temp_dir().join(format!("rift-grid-cells-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("rift-grid-cells-{}.json", std::process::id()));
 
         // The rift before: a in cell 6 of grid 1, b in cell 4 of grid 2.
         let (mut before, mut store) = engine(space);
@@ -344,12 +428,18 @@ mod tests {
         store.assign_window_to_workspace(b, ids[12]);
         before.workspaces.set_active_workspace(space, ids[12]);
         let saved = before.cells_changed(&store).expect("first save");
-        assert!(before.cells_changed(&store).is_none(), "unchanged, not written again");
+        assert!(
+            before.cells_changed(&store).is_none(),
+            "unchanged, not written again"
+        );
         write_atomically(&path, &saved).unwrap();
 
         // The rift after: windows come with no assignment.
-        let settings = VirtualWorkspaceSettings { grid_columns: 3, ..Default::default() };
-        let mut after = LayoutEngine::new(&settings, &LayoutSettings::default(), None);
+        let settings = VirtualWorkspaceSettings {
+            grid_columns: 3,
+            ..Default::default()
+        };
+        let mut after = LayoutEngine::new(&settings, &LayoutSettings::default());
         let mut store = WindowStore::default();
         after.load_cells_from(&path);
         let size = CGSize::new(1000.0, 800.0);
@@ -361,13 +451,16 @@ mod tests {
         let active = after.workspaces.active_workspace(space);
         assert_eq!(active, Some(ids[12]), "the Space shows what it showed");
         assert_eq!(store.workspace_for_window(c), active, "a new window, as before");
-        assert!(after.departures.cells.remembered.is_empty(), "both placed");
+        assert!(after.cells.remembered.is_empty(), "both placed");
 
         // Another Space, or a window it never saw, is left alone.
         let (mut other, mut store) = engine(SpaceId::new(8));
         other.load_cells_from(&path);
         observe(&mut other, &mut store, SpaceId::new(8), &[a]);
-        assert_eq!(store.workspace_for_window(a), other.workspaces.active_workspace(SpaceId::new(8)));
+        assert_eq!(
+            store.workspace_for_window(a),
+            other.workspaces.active_workspace(SpaceId::new(8))
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -377,15 +470,24 @@ mod tests {
     };
 
     fn bsp_engine(space: SpaceId) -> (LayoutEngine, WindowStore) {
-        let settings = VirtualWorkspaceSettings { grid_columns: 3, ..Default::default() };
-        let layout = LayoutSettings { mode: crate::common::config::LayoutMode::Bsp, ..Default::default() };
-        let mut engine = LayoutEngine::new(&settings, &layout, None);
+        let settings = VirtualWorkspaceSettings {
+            grid_columns: 3,
+            ..Default::default()
+        };
+        let layout = LayoutSettings {
+            mode: crate::common::config::LayoutMode::Bsp,
+            ..Default::default()
+        };
+        let mut engine = LayoutEngine::new(&settings, &layout);
         let mut store = WindowStore::default();
         let _ = engine.handle_event(&mut store, LayoutEvent::SpaceExposed(space, SCREEN.size));
         (engine, store)
     }
 
-    fn frames(engine: &mut LayoutEngine, space: SpaceId) -> Vec<(WindowId, objc2_core_foundation::CGRect)> {
+    fn frames(
+        engine: &mut LayoutEngine,
+        space: SpaceId,
+    ) -> Vec<(WindowId, objc2_core_foundation::CGRect)> {
         let gaps = LayoutSettings::default().gaps;
         let mut frames = engine.calculate_layout(space, SCREEN, &gaps, Default::default());
         frames.sort_by_key(|(window, _)| (window.pid, window.idx));
@@ -399,7 +501,8 @@ mod tests {
     fn a_restarted_rift_arranges_a_cell_as_it_was() {
         let space = SpaceId::new(7);
         let (a, b, c) = (WindowId::new(10, 1), WindowId::new(10, 2), WindowId::new(11, 3));
-        let path = std::env::temp_dir().join(format!("rift-grid-cells-l-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("rift-grid-cells-l-{}.json", std::process::id()));
 
         let (mut before, mut store) = bsp_engine(space);
         observe(&mut before, &mut store, space, &[a, b, c]);
@@ -433,13 +536,14 @@ mod tests {
         let space = SpaceId::new(7);
         let (a, b, c) = (WindowId::new(10, 1), WindowId::new(10, 2), WindowId::new(11, 3));
         let stranger = WindowId::new(12, 4);
-        let path = std::env::temp_dir().join(format!("rift-grid-cells-s-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("rift-grid-cells-s-{}.json", std::process::id()));
 
         let (mut before, mut store) = bsp_engine(space);
         observe(&mut before, &mut store, space, &[a, b, c]);
         let order = |engine: &LayoutEngine| {
             let (workspace, layout) = engine.workspaces.active_layout_for_space(space).unwrap();
-            engine.workspaces[workspace].layout_system.all_windows_in_layout(layout)
+            engine.workspaces[workspace].layout_system.windows(layout, WindowQuery::All)
         };
         let arranged = order(&before);
         write_atomically(&path, &before.cells_changed(&store).unwrap()).unwrap();
@@ -463,7 +567,8 @@ mod tests {
     fn a_layout_from_another_mode_is_not_put_back() {
         let space = SpaceId::new(7);
         let (a, b) = (WindowId::new(10, 1), WindowId::new(10, 2));
-        let path = std::env::temp_dir().join(format!("rift-grid-cells-m-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("rift-grid-cells-m-{}.json", std::process::id()));
         let (mut before, mut store) = bsp_engine(space);
         observe(&mut before, &mut store, space, &[a, b]);
         write_atomically(&path, &before.cells_changed(&store).unwrap()).unwrap();
@@ -479,12 +584,25 @@ mod tests {
 
     #[test]
     fn a_window_seen_before_its_space_is_shown_goes_back_too() {
-        let path = std::env::temp_dir().join(format!("rift-grid-cells-u-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("rift-grid-cells-u-{}.json", std::process::id()));
         let a = WindowId::new(10, 1);
-        let saved = Saved { windows: vec![Entry { pid: 10, window: 1, space: 9, index: 12 }], shown: Vec::new(), layouts: Vec::new() };
+        let saved = Saved {
+            windows: vec![Entry {
+                pid: 10,
+                window: 1,
+                space: 9,
+                index: 12,
+            }],
+            shown: Vec::new(),
+            layouts: Vec::new(),
+        };
         write_atomically(&path, &saved).unwrap();
-        let settings = VirtualWorkspaceSettings { grid_columns: 3, ..Default::default() };
-        let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default(), None);
+        let settings = VirtualWorkspaceSettings {
+            grid_columns: 3,
+            ..Default::default()
+        };
+        let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default());
         let mut store = WindowStore::default();
         engine.load_cells_from(&path);
         observe(&mut engine, &mut store, SpaceId::new(9), &[a]);
@@ -496,20 +614,35 @@ mod tests {
     #[test]
     fn windows_not_seen_yet_stay_in_the_file() {
         let space = SpaceId::new(7);
-        let path = std::env::temp_dir().join(format!("rift-grid-cells-k-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("rift-grid-cells-k-{}.json", std::process::id()));
         let saved = Saved {
-            windows: vec![Entry { pid: 10, window: 1, space: 7, index: 5 }],
+            windows: vec![Entry {
+                pid: 10,
+                window: 1,
+                space: 7,
+                index: 5,
+            }],
             shown: vec![Shown { space: 7, index: 13 }],
             layouts: Vec::new(),
         };
         write_atomically(&path, &saved).unwrap();
-        let settings = VirtualWorkspaceSettings { grid_columns: 3, ..Default::default() };
-        let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default(), None);
+        let settings = VirtualWorkspaceSettings {
+            grid_columns: 3,
+            ..Default::default()
+        };
+        let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default());
         let mut store = WindowStore::default();
         engine.load_cells_from(&path);
         assert!(engine.cells_changed(&store).is_none(), "as read");
-        let _ = engine.handle_event(&mut store, LayoutEvent::SpaceExposed(space, CGSize::new(1000.0, 800.0)));
-        assert!(engine.cells_changed(&store).is_none(), "the Space shows what it showed");
+        let _ = engine.handle_event(
+            &mut store,
+            LayoutEvent::SpaceExposed(space, CGSize::new(1000.0, 800.0)),
+        );
+        assert!(
+            engine.cells_changed(&store).is_none(),
+            "the Space shows what it showed"
+        );
         let _ = std::fs::remove_file(&path);
     }
 }

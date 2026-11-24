@@ -1,3 +1,19 @@
+use cgs::app::Application;
+use cgs::collection::{EditableList, SettingsList};
+use cgs::controls::{
+    AddRemoveControl, Button, Checkbox, IconButton, NumberField, Popup, SheetActions,
+};
+use cgs::image::Image;
+use cgs::input::{SearchField, TextField};
+use cgs::layout::{
+    Disclosure, Divider, GroupBox, HStack, ScrollView, Spacer, VStack, uniform_insets,
+};
+use cgs::menu::{Menu, MenuItem};
+use cgs::settings::{Section, SettingsPage, SettingsRow, Validation, ValidationMessage};
+use cgs::text::{Caption, Label, SectionTitle};
+use cgs::view::{Metrics, NativeControl, NativeView, PageHost, WeakView};
+use cgs::window::{Popover, Sheet};
+use cgs::{CGPoint, Insets, Ui};
 use objc2_app_kit::NSAccessibility;
 
 use super::pages::{layouts, optional_number};
@@ -14,6 +30,17 @@ fn record_editor(
     title: &str,
     build: impl FnOnce(&Rc<Model>) -> Page,
     scrolling: bool,
+) {
+    record_editor_with_delete(ui, model, title, build, scrolling, None);
+}
+
+fn record_editor_with_delete(
+    ui: Ui,
+    model: &Rc<Model>,
+    title: &str,
+    build: impl FnOnce(&Rc<Model>) -> Page,
+    scrolling: bool,
+    delete_rule: Option<usize>,
 ) {
     let parent = model.env.window.borrow().clone();
     if !parent.is_open() {
@@ -84,6 +111,47 @@ fn record_editor(
             }),
         );
     });
+    let footer: Rc<dyn NativeView> = if let Some(index) = delete_rule {
+        let weak = Rc::downgrade(model);
+        let base = draft.draft.as_ref().unwrap().base.clone();
+        let error = Rc::downgrade(&message);
+        let delete = Button::new(&ui, "Delete Rule").on_click(move || {
+            let Some(model) = weak.upgrade() else { return };
+            let base = base.clone();
+            let weak = Rc::downgrade(&model);
+            let error = error.clone();
+            model.submit_edit(
+                Box::new(move |source| {
+                    if *source != *base {
+                        return Err(
+                            "Settings changed elsewhere. Reopen this rule before deleting it."
+                                .into(),
+                        );
+                    }
+                    source.virtual_workspaces.app_rules.remove(index);
+                    Ok(())
+                }),
+                Box::new(move |result| {
+                    if let Some(model) = weak.upgrade() {
+                        match result {
+                            Ok(()) => model.close_sheet(),
+                            Err(text) => {
+                                if let Some(error) = error.upgrade() {
+                                    error.set_validation(&Validation::Error(text));
+                                }
+                            }
+                        }
+                    }
+                }),
+            );
+        });
+        delete
+            .ns_button()
+            .setContentTintColor(Some(&objc2_app_kit::NSColor::systemRedColor()));
+        Rc::new(HStack::new(&ui).push(delete).spacer(&ui).push(cancel))
+    } else {
+        cancel
+    };
     let body: Rc<dyn NativeView> = if scrolling {
         let scroll = ScrollView::new(&ui, page.view.clone());
         scroll.fit_width();
@@ -103,7 +171,7 @@ fn record_editor(
         .push(SectionTitle::new(&ui, title))
         .push(body)
         .push(message)
-        .push(cancel);
+        .push(footer);
     let sheet = Sheet::new(&ui, title, content);
     sheet.fit_content();
     model.sheet.borrow_mut().take();
@@ -769,11 +837,17 @@ pub(super) fn rules(ui: Ui, model: &Rc<Model>) -> Page {
                 .get(index)
                 .map(|rule| rule_name(&model, rule))
                 .unwrap_or_else(|| "App Rule".into());
-            record_editor(ui, &model, &title, |draft| rule_detail(ui, draft, index), true);
+            record_editor_with_delete(
+                ui,
+                &model,
+                &title,
+                |draft| rule_detail(ui, draft, index),
+                true,
+                Some(index),
+            );
         }
     });
     let edit_record = edit_rule;
-    let next_editor = edit_record.clone();
     let indices = visible.clone();
     let edit_rule: Rc<dyn Fn(usize)> = Rc::new(move |row| {
         if let Some(&index) = indices.borrow().get(row) {
@@ -834,11 +908,13 @@ pub(super) fn rules(ui: Ui, model: &Rc<Model>) -> Page {
         }
     });
     let weak = Rc::downgrade(model);
-    let controls = AddRemoveControl::new(&ui).on_add(move || {
+    let add = Button::new(&ui, "Add").symbol("plus").on_click(move || {
         if let Some(model) = weak.upgrade() {
-            add_rule(ui, &model, next_editor.clone());
+            add_rule(ui, &model);
         }
     });
+    add.accessibility_label("Add App Rule…");
+    add.tooltip("Add App Rule…");
     let weak = Rc::downgrade(model);
     let weak_table = Rc::downgrade(&table);
     let error = Rc::downgrade(&message);
@@ -862,7 +938,7 @@ pub(super) fn rules(ui: Ui, model: &Rc<Model>) -> Page {
         }
     });
     let action = remove_rule.clone();
-    let controls = Rc::new(controls.on_remove(move || action()));
+    let remove = Rc::new(IconButton::new(&ui, "trash", "Remove Rule").on_click(move || action()));
     let weak_table = Rc::downgrade(&table);
     table.set_context_menu(
         Menu::new(&ui)
@@ -873,13 +949,13 @@ pub(super) fn rules(ui: Ui, model: &Rc<Model>) -> Page {
             }))
             .item(MenuItem::new(&ui, "Remove").on_click(move || remove_rule())),
     );
-    controls.set_remove_enabled(false);
+    remove.set_enabled(false);
     edit.set_enabled(false);
-    let weak_controls = Rc::downgrade(&controls);
+    let weak_remove = Rc::downgrade(&remove);
     let weak_edit = WeakView::new(&edit);
     table.set_on_select(move |selection| {
-        if let Some(controls) = weak_controls.upgrade() {
-            controls.set_remove_enabled(selection.is_some());
+        if let Some(remove) = weak_remove.upgrade() {
+            remove.set_enabled(selection.is_some());
         }
         weak_edit.set_enabled(selection.is_some());
     });
@@ -941,7 +1017,6 @@ pub(super) fn rules(ui: Ui, model: &Rc<Model>) -> Page {
         *query.borrow_mut() = value.to_lowercase();
         update();
     });
-    let tint = Rc::new(RefCell::new(Weak::<HeaderControls>::new()));
     let menu = Menu::new(&ui);
     let mut filter_items = Vec::new();
     let mut choices = vec!["All workspaces".to_owned()];
@@ -952,12 +1027,8 @@ pub(super) fn rules(ui: Ui, model: &Rc<Model>) -> Page {
     for (index, title) in choices.into_iter().enumerate() {
         let filter = filter.clone();
         let update = refresh.clone();
-        let tint = tint.clone();
         let item = MenuItem::new(&ui, &title).on_click(move || {
             filter.set(index);
-            if let Some(header) = tint.borrow().upgrade() {
-                header.set_filtered(index != 0);
-            }
             update();
         });
         filter_items.push(item.weak());
@@ -968,21 +1039,19 @@ pub(super) fn rules(ui: Ui, model: &Rc<Model>) -> Page {
             item.set_checked(filter.get() == index);
         }
     });
-    let header = Rc::new(HeaderControls::new(
+    let header = Rc::new(cgs::settings::ShortcutPresentation::toolbar(
         &ui,
-        "Filter rules",
-        "line.3.horizontal.decrease",
-        menu,
-        search,
+        add,
+        Popup::actions(&ui, "Filter rules by workspace", menu),
     ));
-    *tint.borrow_mut() = Rc::downgrade(&header);
     let mut page = f.finish(
         SettingsPage::new(&ui, "")
             .subtitle(
                 "Choose which windows Rift manages and where they open. Drag rules to change their order.",
             )
+            .section(search)
             .section(table)
-            .bottom_bar(HStack::new(&ui).push(controls).spacer(&ui).push(edit))
+            .bottom_bar(HStack::new(&ui).push(remove).spacer(&ui).push(edit))
             .section(message),
     );
     page.header = Some(header);
@@ -1119,135 +1188,23 @@ fn app_picker(
     )
 }
 
-fn add_rule(ui: Ui, model: &Rc<Model>, edit_rule: Rc<dyn Fn(usize)>) {
-    // A native sheet collects the first matcher before inserting a valid rule.
-    let validation = Rc::new(ValidationMessage::new(&ui));
-    let input_error = Rc::downgrade(&validation);
-    let weak_sheet = Rc::downgrade(model);
-    let cancel = Rc::new(SheetActions::new(&ui));
-    cancel.set_on_cancel(move || {
-        if let Some(model) = weak_sheet.upgrade() {
-            model.close_sheet();
-        }
-    });
-    let weak_cancel = Rc::downgrade(&cancel);
-    let input = Rc::new(TextField::new(&ui).placeholder("com.apple.Safari").on_change(
-        move |value| {
-            if let Some(cancel) = weak_cancel.upgrade() {
-                cancel.set_changed(!value.trim().is_empty());
-            }
+fn add_rule(ui: Ui, model: &Rc<Model>) {
+    // Use the same local draft as editing: an incomplete rule stays in the sheet
+    // until the user supplies at least one matcher and commits it.
+    record_editor(
+        ui,
+        model,
+        "Add App Rule",
+        |draft| {
+            let index = draft.source.borrow().virtual_workspaces.app_rules.len();
+            Arc::make_mut(&mut draft.source.borrow_mut())
+                .virtual_workspaces
+                .app_rules
+                .push(AppWorkspaceRule::default());
+            rule_detail(ui, draft, index)
         },
-    ));
-    let app_name = Rc::new(RefCell::new(None::<String>));
-    let selected_name = app_name.clone();
-    let weak_model = Rc::downgrade(model);
-    let weak_input = Rc::downgrade(&input);
-    cancel.set_primary_title("Add Rule");
-    cancel.set_on_done(move || {
-        let Some(input) = weak_input.upgrade() else {
-            return;
-        };
-        let value = input.get_value();
-        let name = if value.trim().is_empty() {
-            selected_name.borrow().clone()
-        } else {
-            None
-        };
-        if value.trim().is_empty() && name.is_none() {
-            if let Some(message) = input_error.upgrade() {
-                message.set_validation(&Validation::Error(
-                    "Choose an app or enter a bundle identifier.".into(),
-                ));
-            }
-            if let Some(model) = weak_model.upgrade()
-                && let Some(sheet) = model.sheet.borrow().as_ref()
-            {
-                sheet.fit_content();
-            }
-            return;
-        }
-        let Some(model) = weak_model.upgrade() else {
-            return;
-        };
-        let weak = Rc::downgrade(&model);
-        let message = input_error.clone();
-        let next = edit_rule.clone();
-        let _ = model.env.requests.send(Request {
-            control: None,
-            action: Action::Edit(Box::new(move |source| {
-                source.virtual_workspaces.app_rules.push(AppWorkspaceRule {
-                    app_id: (!value.trim().is_empty()).then(|| value.trim().to_string()),
-                    app_name: name,
-                    ..Default::default()
-                });
-                Ok(())
-            })),
-            finish: Box::new(move |result| {
-                if let Some(model) = weak.upgrade() {
-                    match result {
-                        Ok(()) => {
-                            if let Some(sheet) = model.sheet.borrow().as_ref() {
-                                sheet.end();
-                            }
-                            let index = model
-                                .source
-                                .borrow()
-                                .virtual_workspaces
-                                .app_rules
-                                .len()
-                                .checked_sub(1);
-                            if let Some(index) = index {
-                                next(index);
-                            }
-                        }
-                        Err(error) => {
-                            if let Some(message) = message.upgrade() {
-                                message.set_validation(&Validation::Error(error));
-                            }
-                            if let Some(sheet) = model.sheet.borrow().as_ref() {
-                                sheet.fit_content();
-                            }
-                        }
-                    }
-                }
-            }),
-        });
-    });
-    let target = Rc::downgrade(&input);
-    let weak_cancel = Rc::downgrade(&cancel);
-    let picker = application_picker(ui, model, 260.0, move |choice| {
-        if let Some(cancel) = weak_cancel.upgrade() {
-            cancel.set_changed(choice.is_some());
-        }
-        if let Some(input) = target.upgrade() {
-            let (id, name) = choice.unwrap_or_default();
-            input.set_value(id.as_deref().unwrap_or_default());
-            *app_name.borrow_mut() = name;
-        }
-    });
-    let content = VStack::new(&ui)
-        .insets(Insets {
-            top: 20.0,
-            left: 20.0,
-            bottom: 20.0,
-            right: 20.0,
-        })
-        .push(SectionTitle::new(&ui, "Add App Rule"))
-        .push(Caption::new(
-            &ui,
-            "Choose an app, then set how Rift should handle its windows.",
-        ))
-        .push(picker)
-        .push(Disclosure::new(&ui, "Enter a bundle identifier manually", input))
-        .push(validation)
-        .push(cancel);
-    // The sheet fits its content; give the application list room to read.
-    content.min_width(380.0);
-    let native = Sheet::new(&ui, "Add Rule", content);
-    native.fit_content();
-    if native.show(&model.env.window.borrow()) {
-        *model.sheet.borrow_mut() = Some(native);
-    }
+        true,
+    );
 }
 
 fn rule_name(model: &Model, rule: &AppWorkspaceRule) -> String {
@@ -1265,12 +1222,231 @@ fn rule_summary(r: &AppWorkspaceRule) -> String {
         .or(r.ax_subrole.as_ref())
         .or(r.ax_role.as_ref())
         .cloned()
-        .unwrap_or("Rule".into())
+        .unwrap_or_else(|| {
+            r.window_tags
+                .map(|bits| format!("Raw window tags · {} selected", bits.count_ones()))
+                .unwrap_or_else(|| "Any application".into())
+        })
 }
+/// Keep the long private-tag catalog out of the rule form.
+fn window_tag_picker(f: &mut FormBuilder, model: &Rc<Model>, i: usize) -> SettingsRow {
+    let ui = f.ui;
+    let message = Rc::new(ValidationMessage::new(&ui));
+    let summary = Rc::new(Label::new(&ui, "").truncating());
+    let selected_count = Rc::new(Caption::single_line(&ui, ""));
+    let weak_count = Rc::downgrade(&selected_count);
+    let weak_summary = Rc::downgrade(&summary);
+    f.sync.push(Box::new(move |source| {
+        if let Some(summary) = weak_summary.upgrade() {
+            let bits = source
+                .virtual_workspaces
+                .app_rules
+                .get(i)
+                .and_then(|r| r.window_tags)
+                .unwrap_or(0);
+            let names: Vec<_> = crate::sys::skylight::SLSWindowTags::from_bits_retain(bits)
+                .iter_names()
+                .map(|(name, _)| tag_label(name))
+                .collect();
+            if let Some(count) = weak_count.upgrade() {
+                count.set_text(&format!("{} selected", bits.count_ones()));
+            }
+            let text = match names.len() {
+                0 => "Not configured".to_string(),
+                1..=2 => names.join(", "),
+                count => format!("{}, {} +{}", names[0], names[1], count - 2),
+            };
+            summary.set_text(&text);
+            summary.tooltip(&names.join(", "));
+        }
+    }));
+    let mut catalog: Vec<_> = crate::sys::skylight::SLSWindowTags::all()
+        .iter_names()
+        .filter(|(_, tag)| tag.bits() <= i64::MAX as u64)
+        .collect();
+    // Alphabetical order avoids presenting particular private flags as recommendations.
+    catalog.sort_by_key(|(name, _)| tag_label(name));
+    let mut rows = VStack::new(&ui).spacing(0.0);
+    let mut filters = Vec::new();
+    for (name, tag) in catalog {
+        let mask = tag.bits();
+        let label = tag_label(name);
+        let get = move |s: &ConfigSource| {
+            s.virtual_workspaces
+                .app_rules
+                .get(i)
+                .and_then(|r| r.window_tags)
+                .is_some_and(|bits| bits & mask != 0)
+        };
+        let change = f.assign(
+            get,
+            move |s, checked| {
+                if let Some(rule) = s.virtual_workspaces.app_rules.get_mut(i) {
+                    let bits = rule.window_tags.unwrap_or(0);
+                    let bits = if checked { bits | mask } else { bits & !mask };
+                    rule.window_tags = (bits != 0).then_some(bits);
+                }
+            },
+            Rc::downgrade(&message),
+        );
+        let checkbox = Rc::new(Checkbox::new(&ui, &label).on_change(change));
+        checkbox.ns_button().setFont(Some(&cgs::style::Font::caption()));
+        checkbox.tooltip(&format!("{name} · bit {}", mask.trailing_zeros()));
+        f.sync_when(&checkbox, get, move |input, source| input.set_value(get(source)));
+        let bit = Caption::single_line(&ui, &format!("Bit {}", mask.trailing_zeros()));
+        bit.width(40.0);
+        let row = Rc::new(
+            HStack::new(&ui)
+                .insets(Insets {
+                    top: 6.0,
+                    bottom: 6.0,
+                    left: 10.0,
+                    right: 10.0,
+                })
+                .push(checkbox)
+                .spacer(&ui)
+                .push(bit),
+        );
+        filters.push((
+            format!("{label} {name} bit {}", mask.trailing_zeros()).to_lowercase(),
+            Rc::downgrade(&row),
+        ));
+        rows = rows.push(row);
+    }
+    let empty = Rc::new(Caption::new(&ui, "No matching tags"));
+    empty.set_hidden(true);
+    let empty_search = empty.clone();
+    let search = SearchField::new(&ui).placeholder("Search raw tags").on_change(move |query| {
+        let query = query.trim().to_lowercase();
+        let mut visible = 0;
+        for (name, view) in &filters {
+            if let Some(view) = view.upgrade() {
+                let matches = name.contains(&query);
+                view.set_hidden(!matches);
+                visible += usize::from(matches);
+            }
+        }
+        empty_search.set_hidden(visible != 0);
+    });
+    let scroll = ScrollView::new(&ui, rows.push(empty));
+    scroll.fit_width();
+    scroll.height(252.0);
+    let raw = Section::new(&ui, "").row(f.text(
+        "Tag bitmask (decimal)",
+        move |s| {
+            s.virtual_workspaces
+                .app_rules
+                .get(i)
+                .and_then(|r| r.window_tags)
+                .map(|v| v.to_string())
+                .unwrap_or_default()
+        },
+        move |s, v| {
+            let mask = if v.trim().is_empty() {
+                None
+            } else {
+                let mask =
+                    v.trim().parse::<u64>().map_err(|_| "Enter a positive integer bitmask")?;
+                if mask == 0 || mask > i64::MAX as u64 {
+                    return Err("Enter a mask from 1 to 9223372036854775807, or leave blank".into());
+                }
+                Some(mask)
+            };
+            let rule = s.virtual_workspaces.app_rules.get_mut(i).ok_or("Rule no longer exists")?;
+            rule.window_tags = mask;
+            Ok(())
+        },
+    ));
+
+    let weak = Rc::downgrade(model);
+    let error = Rc::downgrade(&message);
+    let clear = Button::new(&ui, "Clear selection").borderless().on_click(move || {
+        Model::submit(
+            &weak,
+            Box::new(move |source| {
+                let rule = source
+                    .virtual_workspaces
+                    .app_rules
+                    .get_mut(i)
+                    .ok_or("Rule no longer exists")?;
+                rule.window_tags = None;
+                Ok(())
+            }),
+            error.clone(),
+        );
+    });
+    let dismissal = Rc::new(RefCell::new(Weak::<Popover>::new()));
+    let dismiss = dismissal.clone();
+    let done = Button::new(&ui, "Done").on_click(move || {
+        if let Some(popover) = dismiss.borrow().upgrade() {
+            popover.close();
+        }
+    });
+    let heading = HStack::new(&ui)
+        .push(SectionTitle::new(&ui, "Raw window tags"))
+        .spacer(&ui)
+        .push(Caption::single_line(&ui, "Advanced use"));
+    let warning = GroupBox::with_insets(
+        &ui,
+        Caption::new(
+            &ui,
+            "Low-level WindowServer flags can match unexpectedly and vary across apps and macOS versions. Use application or title matching for normal rules.",
+        ),
+        uniform_insets(10.0),
+    );
+    let list_header = HStack::new(&ui)
+        .push(Caption::single_line(&ui, "Required tags"))
+        .spacer(&ui)
+        .push(selected_count);
+    let footer = HStack::new(&ui).push(clear).spacer(&ui).push(done);
+    let content = VStack::new(&ui)
+        .spacing(10.0)
+        .insets(uniform_insets(16.0))
+        .push(heading)
+        .push(warning)
+        .push(search)
+        .push(list_header)
+        .push(GroupBox::with_insets(&ui, scroll, uniform_insets(0.0)))
+        .push(Caption::new(
+            &ui,
+            "All selected bits must be present. Other bits are allowed.",
+        ))
+        .push(Disclosure::new(&ui, "Custom bitmask", raw).compact())
+        .push(message.clone())
+        .push(Divider::new(&ui))
+        .push(footer);
+    content.width(440.0);
+    let popover = Rc::new(Popover::new(&ui, content));
+    *dismissal.borrow_mut() = Rc::downgrade(&popover);
+    let button = Button::new(&ui, "Configure…");
+    let anchor = WeakView::new(&button);
+    let button = button.on_click(move || {
+        if let Some(view) = anchor.load() {
+            popover.show(&view);
+        }
+    });
+    SettingsRow::new(
+        &ui,
+        "Raw window tags",
+        HStack::new(&ui).push(summary).spacer(&ui).push(button),
+    )
+    .description("Advanced use only. Low-level WindowServer flags can match unexpectedly.")
+}
+
+fn tag_label(name: &str) -> String {
+    let label = name.to_lowercase().replace('_', " ");
+    let mut chars = label.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
+        .unwrap_or_default()
+}
+
 fn rule_detail(ui: Ui, model: &Rc<Model>, i: usize) -> Page {
     let mut f = FormBuilder::new(ui, model);
-    let mut matches = Section::new(&ui, "Matching conditions")
-        .description("Match an application or window title.");
+    let mut matches = Section::new(&ui, "Match windows").description(
+        "All conditions must match. Leave the application unset to match across apps.",
+    );
     let existing = model
         .source
         .borrow()
@@ -1312,7 +1488,51 @@ fn rule_detail(ui: Ui, model: &Rc<Model>, i: usize) -> Page {
             picker.set_text(&name);
         }
     }));
-    matches = matches.row(SettingsRow::new(&ui, "Application", picker_view)).footer(message);
+    let weak = Rc::downgrade(model);
+    let error = Rc::downgrade(&message);
+    let any_app = Rc::new(
+        Button::new(&ui, "Any application").borderless().on_click(move || {
+            Model::submit(
+                &weak,
+                Box::new(move |source| {
+                    let rule = source
+                        .virtual_workspaces
+                        .app_rules
+                        .get_mut(i)
+                        .ok_or("Rule no longer exists")?;
+                    rule.app_id = None;
+                    rule.app_name = None;
+                    Ok(())
+                }),
+                error.clone(),
+            );
+        }),
+    );
+    f.sync_when(
+        &any_app,
+        move |source| {
+            source
+                .virtual_workspaces
+                .app_rules
+                .get(i)
+                .is_some_and(|rule| rule.app_id.is_some() || rule.app_name.is_some())
+        },
+        move |button, source| {
+            let constrained = source
+                .virtual_workspaces
+                .app_rules
+                .get(i)
+                .is_some_and(|rule| rule.app_id.is_some() || rule.app_name.is_some());
+            button.set_hidden(!constrained);
+        },
+    );
+    matches = matches
+        .row(SettingsRow::new(
+            &ui,
+            "Application",
+            HStack::new(&ui).push(picker_view).push(any_app),
+        ))
+        .footer(message);
     let mut advanced = Section::new(&ui, "");
     for (title, field) in [
         ("Bundle identifier", 0),
@@ -1360,6 +1580,8 @@ fn rule_detail(ui: Ui, model: &Rc<Model>, i: usize) -> Page {
             advanced = advanced.row(row);
         }
     }
+    let raw_tags = Section::new(&ui, "").row(window_tag_picker(&mut f, model, i));
+    advanced = advanced.content(Disclosure::new(&ui, "Raw WindowServer tags", raw_tags).compact());
     matches = matches.content(Disclosure::new(&ui, "Advanced matching", advanced));
     let workspace = workspace_popup(
         &mut f,
@@ -2006,7 +2228,7 @@ pub(super) fn field_group(ui: &Ui, unit: &str, fields: Vec<(&str, Rc<NumberField
             .alignment(objc2_app_kit::NSLayoutAttribute::FirstBaseline),
         |row, (name, field)| {
             let value = field.unit_field(ui, unit);
-            value.width(56.0);
+            field.width(cgs::view::Metrics::VALUE_FIELD_WIDTH);
             row.push(
                 VStack::new(ui)
                     .spacing(3.0)

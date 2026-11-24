@@ -63,6 +63,8 @@ pub enum WmEvent {
     SpaceStateUpdated(ForwardedSpaceState, CoordinateConverter),
     PowerStateChanged(bool),
     KeyboardLayoutChanged,
+    OverviewChanged,
+    OverviewActivationTarget(reactor::OverviewTarget),
     ConfigUpdated(crate::common::config::Config),
     Command(WmCommand),
     /// A grid swipe up (`out`) or down: the Overview's next stage.
@@ -96,26 +98,66 @@ pub enum ConfiguredLayoutCommand {
     SwitchPresetColumnWidth,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, strum_macros::VariantNames)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    strum_macros::VariantNames,
+    rift_config_derive::CommandCatalog,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum WmCmd {
+    #[command(group = 2, label = "Toggle tiling", order = 40)]
     ToggleSpaceActivated,
+    #[command(
+        label = "Run command",
+        order = 45,
+        sample = "Self::Exec(ExecCmd::String(String::new()))"
+    )]
     Exec(ExecCmd),
+    #[command(order = 46)]
     ReloadConfig,
+    #[command(
+        label = "Switch to keymap",
+        order = 44,
+        sample = "Self::BindingMode(\"default\".into())"
+    )]
     BindingMode(String),
 
+    #[command(group = 2, order = 31)]
     NextWorkspace,
+    #[command(group = 2, label = "Previous workspace", order = 32)]
     PrevWorkspace,
+    #[command(
+        group = 2,
+        order = 29,
+        sample = "Self::SwitchToWorkspace(WorkspaceSelector::Index(0))"
+    )]
     SwitchToWorkspace(WorkspaceSelector),
+    #[command(
+        group = 2,
+        order = 30,
+        sample = "Self::MoveWindowToWorkspace(WorkspaceSelector::Index(0))"
+    )]
     MoveWindowToWorkspace(WorkspaceSelector),
+    #[command(group = 2, order = 34)]
     CreateWorkspace,
+    #[command(group = 2, label = "Last workspace", order = 33)]
     SwitchToLastWorkspace,
 
+    #[command(group = 5, label = "Show all workspaces", order = 41)]
     ShowMissionControlAll,
+    #[command(group = 5, label = "Show current workspace", order = 42)]
     ShowMissionControlCurrent,
     /// Open Overview on the whole grid at once; again closes it.
+    #[command(group = 5, label = "Show the whole grid", order = 42)]
     ToggleMissionControlWhole,
+    #[command(group = 5, label = "Dismiss overview", order = 43)]
     DismissMissionControl,
+    #[command(group = 0, order = 11)]
     CloseWindow,
 }
 
@@ -369,26 +411,24 @@ impl WmController {
         use self::WmCommand::*;
         use self::WmEvent::*;
 
-        let refresh_overview = matches!(
-            &event,
-            Command(Wm(MoveWindowToWorkspace(_)))
-                | Command(ReactorCommand(_))
-                | Command(ConfiguredLayout(_))
-        );
         // Apps come and go, or the user turns to another app or Space: the
         // moments to check that every running app has its actor.
         let sync = matches!(
             &event,
             SpaceStateUpdated(..) | AppGloballyActivated(_) | AppGloballyDeactivated(_)
         );
-        if let SpaceStateUpdated(state, _) = &event
-            && crate::ui::grid_motion::screens_changed(&state.screens)
-            && let Some(tx) = &self.mission_control_tx
-        {
-            tx.send(mission_control::Event::Dismiss);
-        }
 
         match event {
+            OverviewActivationTarget(target) => {
+                if let Some(tx) = &self.mission_control_tx {
+                    tx.send(mission_control::Event::ActivationTarget(target));
+                }
+            }
+            OverviewChanged => {
+                if let Some(tx) = &self.mission_control_tx {
+                    tx.send(mission_control::Event::RefreshCurrentWorkspace);
+                }
+            }
             SpaceStateUpdated(space_state, converter) => {
                 self.events_tx.send(Event::SpaceStateChanged(space_state.clone()));
                 _ = self
@@ -463,6 +503,8 @@ impl WmController {
                 if let Some(tx) = &self.mission_control_tx {
                     tx.send(mission_control::Event::Configure(
                         new_cfg.settings.ui.mission_control.clone(),
+                        new_cfg.virtual_workspaces.mode
+                            == crate::common::config::WorkspaceMode::Global,
                     ));
                 }
                 if !new_cfg.settings.ui.mission_control.enabled {
@@ -478,7 +520,9 @@ impl WmController {
                 _ = self.input_tx.send(input::Request::SetLowPowerMode(is_low_power_mode));
             }
             KeyboardLayoutChanged => {
-                _ = self.input_tx.send(input::Request::KeyboardLayoutChanged);
+                _ = self.input_tx.send(input::Request::KeyboardLayoutChanged(
+                    self.config.config.settings.ui.mission_control.clone(),
+                ));
             }
             OverviewStep { out } => {
                 if let Some(tx) = &self.mission_control_tx {
@@ -588,9 +632,6 @@ impl WmController {
                     self.handle_event(Command(command));
                 }
             }
-        }
-        if refresh_overview && let Some(tx) = &self.mission_control_tx {
-            tx.send(mission_control::Event::RefreshCurrentWorkspace);
         }
         if sync {
             self.sync_apps(false);

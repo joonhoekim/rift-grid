@@ -12,7 +12,7 @@
 [package]
 edition = "2024"
 name = "cgs"
-version = "0.3.15"
+version = "0.5.3"
 build = "build.rs"
 autolib = false
 autobins = false
@@ -39,17 +39,28 @@ name = "capture_all"
 path = "examples/capture_all.rs"
 
 [[example]]
+name = "interactive_switcher"
+path = "examples/interactive_switcher.rs"
+
+[[example]]
 name = "metal_preview"
 path = "examples/metal_preview.rs"
+
+[[example]]
+name = "switcher"
+path = "examples/switcher.rs"
 
 [[example]]
 name = "tab_bar"
 path = "examples/tab_bar.rs"
 
+[[example]]
+name = "tab_selector"
+path = "examples/tab_selector.rs"
+
 [[test]]
 name = "metal_preview"
 path = "tests/metal_preview.rs"
-harness = false
 
 [[test]]
 name = "native"
@@ -114,6 +125,8 @@ features = [
     "NSButtonCell",
     "NSSwitch",
     "NSSegmentedControl",
+    "NSTabView",
+    "NSTabViewItem",
     "NSSegmentedCell",
     "NSPopUpButton",
     "NSPopUpButtonCell",
@@ -173,6 +186,7 @@ features = [
     "NSUserInterfaceItemIdentification",
     "NSWorkspace",
     "block2",
+    "libc",
     "objc2-core-foundation",
     "objc2-core-graphics",
     "objc2-quartz-core",
@@ -190,11 +204,16 @@ default-features = false
 [dependencies.objc2-core-graphics]
 version = "0.3.2"
 features = [
+    "CGColor",
     "CGContext",
+    "CGBitmapContext",
     "CGColorSpace",
     "CGError",
     "CGGeometry",
+    "CGImage",
+    "CGPath",
     "CGWindow",
+    "CGWindowLevel",
 ]
 default-features = false
 
@@ -260,6 +279,7 @@ features = ["objc2-io-surface"]
 [dependencies.objc2-quartz-core]
 version = "0.3.2"
 features = [
+    "CADisplayLink",
     "CAMetalLayer",
     "CAMetalDisplayLink",
     "CABase",
@@ -268,8 +288,12 @@ features = [
     "CALayer",
     "CATransaction",
     "CAAnimation",
+    "CAGradientLayer",
     "CAMediaTiming",
     "CAMediaTimingFunction",
+    "CATextLayer",
+    "CATransform3D",
+    "CATransformLayer",
     "block2",
     "objc2-core-foundation",
     "objc2-core-graphics",
@@ -296,10 +320,14 @@ default-features = false
 version = "0.1.40"
 default-features = false
 
+[dev-dependencies.multitouch]
+version = "0.3.2"
+
 [dev-dependencies.objc2-app-kit]
 version = "0.3.2"
 features = [
     "NSDraggingItem",
+    "NSBitmapImageRep",
     "libc",
 ]
 default-features = false

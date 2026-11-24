@@ -8,6 +8,10 @@ pub type cid_t = i32;
 pub static G_CONNECTION: LazyLock<cid_t> = LazyLock::new(|| unsafe { SLSMainConnectionID() });
 #[link(name = "SkyLight", kind = "framework")]
 unsafe extern "C" {
+    pub fn SLSWindowSetShadowProperties(
+        wid: u32,
+        properties: *const objc2_core_foundation::CFDictionary,
+    ) -> CGError;
     pub(super) fn SLSMainConnectionID() -> cid_t;
     pub fn SLSNewWindowWithOpaqueShapeAndContext(
         cid: cid_t,
@@ -95,7 +99,21 @@ unsafe extern "C" {
         sid: u32,
         bounds: CGRect,
     );
-    pub fn SLSTransactionCommit(transaction: *mut CFType, asynchronous: u32);
+    pub fn SLSTransactionCommit(transaction: *mut CFType, options: u32);
+    /// Maps screen points to window points (the inverse of the on-screen placement),
+    /// relative to the window origin; perspective is honoured.
+    pub fn SLSTransactionSetWindowTransform3D(
+        transaction: *mut CFType,
+        wid: u32,
+        transform: *const objc2_quartz_core::CATransform3D,
+    );
+    pub fn SLSTransactionSetWindowAlpha(transaction: *mut CFType, wid: u32, alpha: f32);
+    pub fn SLSTransactionOrderWindow(
+        transaction: *mut CFType,
+        wid: u32,
+        order: c_int,
+        relative_to: u32,
+    );
     pub fn SLSSetWindowProperty(
         cid: cid_t,
         wid: u32,

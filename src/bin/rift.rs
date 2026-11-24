@@ -37,7 +37,7 @@ use rift_wm::sys::skylight::{
 };
 use tokio::join;
 
-embed_plist::embed_info_plist!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/Info.plist"));
+embed_plist::embed_info_plist!(concat!(env!("OUT_DIR"), "/Info.plist"));
 
 #[derive(Parser)]
 #[command(name = "rift-grid", version = env!("RIFT_VERSION"))]
@@ -183,7 +183,7 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
 
     if opt.validate {
         let path = restore_file();
-        match LayoutEngine::load(path.clone()) {
+        match LayoutEngine::validate_file(path.clone()) {
             Ok(_) => println!("Master file is valid: {}", path.display()),
             Err(error) => {
                 eprintln!("Could not load master file at {}: {error}", path.display());
@@ -206,25 +206,13 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
                     "Could not restore master file at {}; starting with a fresh layout: {error}",
                     path.display()
                 );
-                LayoutEngine::new(
-                    &config.virtual_workspaces,
-                    &config.settings.layout,
-                    Some(broadcast_tx.clone()),
-                )
+                LayoutEngine::new(&config.virtual_workspaces, &config.settings.layout)
             }
         }
     } else {
-        LayoutEngine::new(
-            &config.virtual_workspaces,
-            &config.settings.layout,
-            Some(broadcast_tx.clone()),
-        )
+        LayoutEngine::new(&config.virtual_workspaces, &config.settings.layout)
     };
-    if let Err(error) = layout.finish_loading(
-        &config.virtual_workspaces,
-        &config.settings.layout,
-        Some(broadcast_tx.clone()),
-    ) {
+    if let Err(error) = layout.finish_loading(&config.virtual_workspaces, &config.settings.layout) {
         eprintln!("Could not apply workspace settings to restored layout: {error}");
         process::exit(1);
     }
@@ -372,11 +360,13 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
     let mission_control = mc_channel.map(|(tx, rx)| {
         MissionControlActor::new(
             config.settings.ui.mission_control.clone(),
+            config.virtual_workspaces.mode == rift_wm::common::config::WorkspaceMode::Global,
             rx,
             tx,
             reactor.clone(),
             mtm,
             input_tx.clone(),
+            stack_line_tx.clone(),
         )
     });
     let mission_control_native = NativeMissionControl::new(events_tx.clone(), mc_native_rx);

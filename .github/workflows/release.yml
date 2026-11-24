@@ -6,10 +6,14 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to rebuild
+        description: Existing release tag to rebuild and publish (e.g. v0.7.2)
         required: true
-        default: v0.7.0
         type: string
+      trigger_docs:
+        description: Also trigger the documentation build
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -18,17 +22,24 @@ concurrency:
   group: rift-release-publish
   cancel-in-progress: false
 
+env:
+  CARGO_TERM_COLOR: always
+  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+  ASSET_BASENAME: rift-universal-macos
+  APP_ASSET_BASENAME: rift-app-universal-macos
+  TAP_REPO: acsandmann/homebrew-tap
+  TAP_FILE_PATH: Formula/rift.rb
+  RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+  RELEASE_REPOSITORY: ${{ github.repository }}
+
 jobs:
-  build-and-publish:
+  build:
+    name: Build (${{ matrix.target }})
     runs-on: macos-26
-    env:
-      CARGO_TERM_COLOR: always
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      ASSET_BASENAME: rift-universal-macos
-      TAP_REPO: acsandmann/homebrew-tap
-      TAP_FILE_PATH: Formula/rift.rb
-      RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
-      RELEASE_REPOSITORY: ${{ github.repository }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
 
     steps:
       - name: Checkout source at release tag
@@ -51,10 +62,10 @@ jobs:
             exit 1
           fi
 
-      - name: Install Rust and targets
+      - name: Install Rust and target
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ matrix.target }}
 
       - name: Verify build toolchain
         run: |
@@ -64,38 +75,163 @@ jobs:
           rustup target list --installed
           sw_vers
 
-      - name: Build release for both architectures
+      - name: Build release
         run: |
           set -euxo pipefail
-          cargo build --release --locked --package rift-wm --bin rift --bin rift-cli --target aarch64-apple-darwin
-          cargo build --release --locked --package rift-wm --bin rift --bin rift-cli --target x86_64-apple-darwin
+          cargo build --release --locked --package rift-wm \
+            --bin rift --bin rift-cli --target "${{ matrix.target }}"
+
+      - name: Bundle architecture binaries
+        run: |
+          set -euxo pipefail
+          mkdir -p artifacts
+          tar -C "target/${{ matrix.target }}/release" \
+            -czf "artifacts/${{ matrix.target }}.tar.gz" rift rift-cli
+
+      - name: Upload architecture binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: rift-${{ matrix.target }}
+          path: artifacts/${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+
+  publish:
+    name: Package and publish universal release
+    needs: build
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout source at release tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Download architecture binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rift-*-apple-darwin
+          path: artifacts
+          merge-multiple: true
 
       - name: Create universal binaries
         run: |
           set -euxo pipefail
           mkdir -p dist
+          for arch in aarch64-apple-darwin x86_64-apple-darwin; do
+            test -s "artifacts/${arch}.tar.gz"
+            mkdir -p "slices/${arch}"
+            tar -xzf "artifacts/${arch}.tar.gz" -C "slices/${arch}"
+          done
           lipo -create \
-            target/aarch64-apple-darwin/release/rift \
-            target/x86_64-apple-darwin/release/rift \
+            slices/aarch64-apple-darwin/rift \
+            slices/x86_64-apple-darwin/rift \
             -output dist/rift
           lipo -create \
-            target/aarch64-apple-darwin/release/rift-cli \
-            target/x86_64-apple-darwin/release/rift-cli \
+            slices/aarch64-apple-darwin/rift-cli \
+            slices/x86_64-apple-darwin/rift-cli \
             -output dist/rift-cli
           strip -x dist/rift dist/rift-cli
+          chmod +x dist/rift dist/rift-cli
+          for bin in dist/rift dist/rift-cli; do
+            for arch in arm64 x86_64; do
+              lipo "$bin" -verify_arch "$arch"
+            done
+          done
 
-      - name: Package tarball
+      - name: Assemble app bundle
+        run: |
+          set -euo pipefail
+          mkdir -p dist/Rift.app/Contents/MacOS
+          cp dist/rift dist/Rift.app/Contents/MacOS/rift
+          sed "s/@VERSION@/${RELEASE_TAG#v}/g" assets/Info.plist > dist/Rift.app/Contents/Info.plist
+          plutil -lint dist/Rift.app/Contents/Info.plist
+          # Both slices must embed the exact same metadata as the enclosing bundle.
+          for arch in arm64 x86_64; do
+            otool -arch "$arch" -P dist/Rift.app/Contents/MacOS/rift | sed -n '/^<?xml/,$p' > "$RUNNER_TEMP/embedded.plist"
+            plutil -convert xml1 -o "$RUNNER_TEMP/bundle.plist" dist/Rift.app/Contents/Info.plist
+            plutil -convert xml1 "$RUNNER_TEMP/embedded.plist"
+            cmp "$RUNNER_TEMP/bundle.plist" "$RUNNER_TEMP/embedded.plist"
+          done
+
+      - name: Import signing certificate
+        uses: apple-actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.RIFT_SIGNING_P12 }}
+          p12-password: ${{ secrets.RIFT_SIGNING_PASSWORD }}
+
+      - name: Trust signing certificate
+        run: |
+          security find-certificate -p signing_temp.keychain \
+            > "$RUNNER_TEMP/rift.crt"
+
+          sudo security add-trusted-cert \
+            -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain \
+            "$RUNNER_TEMP/rift.crt"
+
+      - name: Sign release binaries and bundle
+        run: |
+          set -euo pipefail
+
+          SIGNER=$(openssl x509 -in "$RUNNER_TEMP/rift.crt" \
+            -noout -fingerprint -sha1 |
+            cut -d= -f2 | tr -d ':')
+
+          security find-identity -v -p codesigning \
+            signing_temp.keychain | grep -F "$SIGNER"
+
+          # Separate copies need separate seals; sign independent outputs concurrently.
+          codesign --force --timestamp=none \
+            --sign "$SIGNER" \
+            --identifier git.acsandmann.rift \
+            dist/rift &
+          legacy_pid=$!
+
+          codesign --force --timestamp=none \
+            --sign "$SIGNER" \
+            --identifier git.acsandmann.rift \
+            dist/Rift.app &
+          app_pid=$!
+
+          codesign --force --timestamp=none \
+            --sign "$SIGNER" \
+            --identifier git.acsandmann.rift.cli \
+            dist/rift-cli &
+          cli_pid=$!
+
+          wait "$legacy_pid"
+          wait "$app_pid"
+          wait "$cli_pid"
+          codesign --verify --strict --verbose=2 dist/rift
+          codesign --verify --strict --verbose=2 dist/Rift.app
+          codesign --verify --strict --verbose=2 dist/rift-cli
+          codesign -dr - dist/Rift.app
+
+      - name: Package tarballs
         id: pkg
         run: |
           set -euxo pipefail
           VERSION="${RELEASE_TAG#v}"
-          ASSET="${ASSET_BASENAME}-${VERSION}.tar.gz"
+          LEGACY_ASSET="${ASSET_BASENAME}-${VERSION}.tar.gz"
+          ASSET="${APP_ASSET_BASENAME}-${VERSION}.tar.gz"
           test -s rift.default.toml
           cp rift.default.toml dist/rift.default.toml
-          tar -C dist -czf "$ASSET" rift rift-cli rift.default.toml
+          # Keep the old archive contract for Nix and other binary consumers.
+          tar -C dist -czf "$LEGACY_ASSET" rift rift-cli rift.default.toml &
+          legacy_pid=$!
+          tar -C dist -czf "$ASSET" Rift.app rift-cli rift.default.toml &
+          app_pid=$!
+          wait "$legacy_pid"
+          wait "$app_pid"
+          legacy_sha256=$(shasum -a 256 "$LEGACY_ASSET" | awk '{print $1}')
           sha256=$(shasum -a 256 "$ASSET" | awk '{print $1}')
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "asset=${ASSET}" >> "$GITHUB_OUTPUT"
+          echo "legacy_asset=${LEGACY_ASSET}" >> "$GITHUB_OUTPUT"
+          echo "legacy_sha256=${legacy_sha256}" >> "$GITHUB_OUTPUT"
           echo "sha256=${sha256}" >> "$GITHUB_OUTPUT"
 
       - name: Verify packaged binary versions
@@ -104,16 +240,18 @@ jobs:
         run: |
           set -euo pipefail
           test "$(dist/rift --version)" = "rift ${VERSION}"
+          test "$(dist/Rift.app/Contents/MacOS/rift --version)" = "rift ${VERSION}"
           test "$(dist/rift-cli --version)" = "rift-cli ${VERSION}"
           test -s dist/rift.default.toml
 
-      - name: Replace release asset
+      - name: Replace release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ASSET: ${{ steps.pkg.outputs.asset }}
+          LEGACY_ASSET: ${{ steps.pkg.outputs.legacy_asset }}
         run: |
           set -euo pipefail
-          gh release upload "$RELEASE_TAG" "$ASSET" --clobber --repo "$RELEASE_REPOSITORY"
+          gh release upload "$RELEASE_TAG" "$ASSET" "$LEGACY_ASSET" --clobber --repo "$RELEASE_REPOSITORY"
 
       - name: Checkout Homebrew tap
         uses: actions/checkout@v4
@@ -185,7 +323,7 @@ jobs:
           git -C tap push origin HEAD
 
       - name: Trigger documentation build
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.trigger_docs
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}

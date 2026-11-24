@@ -3,7 +3,7 @@
 
 use super::{Direction, SpaceId, VirtualWorkspaceId, WorkspaceStore};
 pub use crate::common::config::GRID_COUNT;
-use crate::common::config::VirtualWorkspaceSettings;
+use crate::common::config::{VirtualWorkspaceSettings, WorkspaceMode};
 use crate::common::grid_nav;
 
 /// The settings the store works with. When workspaces form grids, each display
@@ -15,6 +15,8 @@ pub(super) fn effective_settings(config: &VirtualWorkspaceSettings) -> VirtualWo
     if columns == 0 {
         return settings;
     }
+    // Grids are a display's own; `grid_displays.rs` gives each grid one display.
+    settings.mode = WorkspaceMode::PerDisplay;
     let cells = columns * columns;
     settings.default_workspace_count = GRID_COUNT * cells;
     settings.workspace_names = (0..settings.default_workspace_count)
@@ -58,13 +60,9 @@ pub(crate) fn grid_neighbor_index(
 }
 
 impl WorkspaceStore {
-    pub fn grid_enabled(&self) -> bool {
-        self.settings.grid_columns > 0
-    }
+    pub fn grid_enabled(&self) -> bool { self.settings.grid_columns > 0 }
 
-    fn cells_per_grid(&self) -> usize {
-        self.settings.grid_columns * self.settings.grid_columns
-    }
+    fn cells_per_grid(&self) -> usize { self.settings.grid_columns * self.settings.grid_columns }
 
     /// The grid (0-based) the workspace at `index` is a cell of.
     pub fn grid_of(&self, index: usize) -> Option<usize> {
@@ -75,7 +73,10 @@ impl WorkspaceStore {
     pub fn grid_cell(&self, index: usize) -> Option<(usize, usize)> {
         self.grid_enabled().then(|| {
             let cell = index % self.cells_per_grid();
-            (cell / self.settings.grid_columns, cell % self.settings.grid_columns)
+            (
+                cell / self.settings.grid_columns,
+                cell % self.settings.grid_columns,
+            )
         })
     }
 
@@ -240,10 +241,12 @@ mod tests {
         // 3 4 5
         // 6 7 8
         let n = |index, dir| grid_neighbor_index(index, 9, 3, dir);
-        assert_eq!(
-            [n(4, Left), n(4, Right), n(4, Up), n(4, Down)],
-            [Some(3), Some(5), Some(1), Some(7)]
-        );
+        assert_eq!([n(4, Left), n(4, Right), n(4, Up), n(4, Down)], [
+            Some(3),
+            Some(5),
+            Some(1),
+            Some(7)
+        ]);
         assert_eq!([n(0, Left), n(0, Up), n(2, Right), n(8, Down)], [None; 4]);
         assert_eq!(n(3, Left), None, "rows do not wrap into each other");
         assert_eq!(n(5, Right), None);
@@ -255,7 +258,10 @@ mod tests {
     #[test]
     fn an_app_rule_grid_is_that_grids_current_cell() {
         use crate::common::config::{LayoutSettings, WorkspaceSelector};
-        let settings = VirtualWorkspaceSettings { grid_columns: 3, ..Default::default() };
+        let settings = VirtualWorkspaceSettings {
+            grid_columns: 3,
+            ..Default::default()
+        };
         let mut store = WorkspaceStore::new_with_config(&settings, &LayoutSettings::default());
         let space = SpaceId::new(5);
         store.ensure_space_initialized(space);
@@ -263,11 +269,23 @@ mod tests {
         let resolve = |store: &WorkspaceStore, selector: Option<&WorkspaceSelector>, grid| {
             store.rule_workspace(space, selector, grid).unwrap()
         };
-        assert_eq!(resolve(&store, None, Some(2)), ids[13], "grid 2's center at first");
+        assert_eq!(
+            resolve(&store, None, Some(2)),
+            ids[13],
+            "grid 2's center at first"
+        );
         store.set_active_workspace(space, ids[10]);
-        assert_eq!(resolve(&store, None, Some(2)), ids[10], "then where grid 2 was left");
+        assert_eq!(
+            resolve(&store, None, Some(2)),
+            ids[10],
+            "then where grid 2 was left"
+        );
         let cell = WorkspaceSelector::Index(0);
-        assert_eq!(resolve(&store, Some(&cell), Some(2)), ids[10], "grid wins over workspace");
+        assert_eq!(
+            resolve(&store, Some(&cell), Some(2)),
+            ids[10],
+            "grid wins over workspace"
+        );
         assert_eq!(resolve(&store, Some(&cell), None), ids[0]);
     }
 
@@ -275,7 +293,10 @@ mod tests {
     fn a_grids_current_cell_follows_its_workspaces_to_a_new_space() {
         use crate::common::config::LayoutSettings;
         use crate::model::WindowStore;
-        let settings = VirtualWorkspaceSettings { grid_columns: 3, ..Default::default() };
+        let settings = VirtualWorkspaceSettings {
+            grid_columns: 3,
+            ..Default::default()
+        };
         let mut store = WorkspaceStore::new_with_config(&settings, &LayoutSettings::default());
         let (old, new) = (SpaceId::new(5), SpaceId::new(6));
         store.ensure_space_initialized(old);
@@ -283,14 +304,21 @@ mod tests {
         let ids = store.workspace_ids(old).to_vec();
         store.set_active_workspace(old, ids[10]);
         store.remap_space(&mut WindowStore::default(), old, new);
-        assert_eq!(store.grid_current_cell(new, 1), Some(ids[10]), "not new's own center");
+        assert_eq!(
+            store.grid_current_cell(new, 1),
+            Some(ids[10]),
+            "not new's own center"
+        );
         assert_eq!(store.grid_current_cell(new, 0), Some(ids[4]));
     }
 
     #[test]
     fn a_remembered_cell_outside_its_grid_is_not_used() {
         use crate::common::config::LayoutSettings;
-        let settings = VirtualWorkspaceSettings { grid_columns: 3, ..Default::default() };
+        let settings = VirtualWorkspaceSettings {
+            grid_columns: 3,
+            ..Default::default()
+        };
         let mut store = WorkspaceStore::new_with_config(&settings, &LayoutSettings::default());
         let space = SpaceId::new(5);
         store.ensure_space_initialized(space);

@@ -27,8 +27,22 @@ impl FloatingManager {
         self.floating_windows.contains(&window_id)
     }
 
-    pub(crate) fn persisted_windows(&self) -> Vec<WindowId> {
-        self.floating_windows.iter().copied().collect()
+    /// Saved floating windows leave the live marker set: they exist as restoration candidates
+    /// until they match a window.
+    pub(crate) fn take_persisted_windows(&mut self) -> BTreeSet<WindowId> {
+        std::mem::take(&mut self.floating_windows)
+    }
+
+    /// The serialized view of `windows`, which are live and pending floating windows alike.
+    pub(crate) fn persisted_view(&self, windows: impl Iterator<Item = WindowId>) -> Self {
+        let floating_windows: BTreeSet<_> = windows.collect();
+        Self {
+            last_floating_focus: self
+                .last_floating_focus
+                .filter(|focus| floating_windows.contains(focus)),
+            floating_windows,
+            ..Self::default()
+        }
     }
 
     pub(crate) fn add_floating(&mut self, window_id: WindowId) {
@@ -127,11 +141,18 @@ impl FloatingManager {
         }
     }
 
-    pub(crate) fn active_flat(&self, space: SpaceId) -> Vec<WindowId> {
+    pub(crate) fn active_windows(&self, space: SpaceId) -> impl Iterator<Item = WindowId> + '_ {
         self.active_floating_windows
             .get(&space)
-            .map(|space_floating| space_floating.values().flatten().copied().collect())
-            .unwrap_or_default()
+            .into_iter()
+            .flat_map(|apps| apps.values().flatten().copied())
+    }
+
+    pub(crate) fn is_active(&self, space: SpaceId, window: WindowId) -> bool {
+        self.active_floating_windows
+            .get(&space)
+            .and_then(|apps| apps.get(&window.pid))
+            .is_some_and(|windows| windows.contains(&window))
     }
 
     pub(crate) fn set_last_focus(&mut self, wid: Option<WindowId>) {
@@ -139,15 +160,6 @@ impl FloatingManager {
     }
 
     pub(crate) fn last_focus(&self) -> Option<WindowId> { self.last_floating_focus }
-
-    pub(crate) fn normalize_persisted_focus(&mut self) {
-        if self
-            .last_floating_focus
-            .is_some_and(|window| !self.floating_windows.contains(&window))
-        {
-            self.last_floating_focus = None;
-        }
-    }
 
     pub(crate) fn remove_all_for_pid(&mut self, pid: pid_t) {
         let _ = self.floating_windows.remove_all_for_pid(pid);
@@ -227,6 +239,6 @@ mod tests {
 
         assert!(!floating.is_floating(provisional_live));
         assert_eq!(floating.fullscreen_kind(provisional_live), None);
-        assert!(!floating.active_flat(space).contains(&provisional_live));
+        assert!(!floating.is_active(space, provisional_live));
     }
 }

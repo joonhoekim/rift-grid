@@ -42,13 +42,19 @@ impl TryFrom<u8> for MouseState {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_MOUSE_STATE: std::cell::Cell<Option<MouseState>> = const { std::cell::Cell::new(None) };
+}
+
 pub fn get_mouse_state() -> Option<MouseState> {
+    #[cfg(test)]
+    if let Some(state) = TEST_MOUSE_STATE.with(|state| state.get()) {
+        return Some(state);
+    }
+
     let down =
-        CGEventSource::button_state(CGEventSourceStateID::HIDSystemState, CGMouseButton::Left)
-            || CGEventSource::button_state(
-                CGEventSourceStateID::HIDSystemState,
-                CGMouseButton::Right,
-            );
+        CGEventSource::button_state(CGEventSourceStateID::HIDSystemState, CGMouseButton::Left);
     Some(if down {
         MouseState::Down
     } else {

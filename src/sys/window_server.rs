@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use cgs::G_CONNECTION;
+use cgs::compositor::{G_CONNECTION, main_connection};
 use nix::libc::{RTLD_DEFAULT, dlsym};
 use objc2_app_kit::NSWindowLevel;
 use objc2_application_services::AXError;
@@ -414,6 +414,14 @@ pub fn mission_control_dock_overlay_visible() -> bool {
         })
 }
 
+/// Read tags without treating a failed query as an empty mask.
+pub fn window_tags(id: WindowServerId) -> Option<u64> {
+    let query = WindowIterator::new(&[id])?;
+    (query.count() == 1)
+        .then(|| query.advance().map(|window| window.tags()))
+        .flatten()
+}
+
 pub fn window_parent(id: WindowServerId) -> Option<WindowServerId> {
     let query = WindowIterator::new(&[id])?;
     if query.count() == 1 {
@@ -436,14 +444,20 @@ pub fn window_is_sticky(id: WindowServerId) -> bool {
     spaces_cf.len() > 1
 }
 
+/// In tests, only what a test set: fixture ids are real windows' ids on the test machine too.
+#[cfg(test)]
 pub fn window_spaces(id: WindowServerId) -> Vec<crate::sys::screen::SpaceId> {
-    #[cfg(test)]
-    if let Some(override_spaces) =
-        TEST_WINDOW_SPACES_OVERRIDE.with(|spaces| spaces.borrow().get(&id.as_u32()).cloned())
-    {
-        return override_spaces.into_iter().map(crate::sys::screen::SpaceId::new).collect();
-    }
+    TEST_WINDOW_SPACE_QUERY_COUNT.with(|count| count.set(count.get() + 1));
+    TEST_WINDOW_SPACES_OVERRIDE
+        .with(|spaces| spaces.borrow().get(&id.as_u32()).cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .map(crate::sys::screen::SpaceId::new)
+        .collect()
+}
 
+#[cfg(not(test))]
+pub fn window_spaces(id: WindowServerId) -> Vec<crate::sys::screen::SpaceId> {
     let cf_windows = cf_array_from_ids(&[id]);
     let space_list_ref = unsafe {
         SLSCopySpacesForWindows(*G_CONNECTION, 0x7, CFRetained::as_ptr(&cf_windows).as_ptr())
@@ -462,8 +476,6 @@ pub fn window_spaces(id: WindowServerId) -> Vec<crate::sys::screen::SpaceId> {
 }
 
 pub fn window_space(id: WindowServerId) -> Option<crate::sys::screen::SpaceId> {
-    #[cfg(test)]
-    TEST_WINDOW_SPACE_QUERY_COUNT.with(|count| count.set(count.get() + 1));
     let spaces = window_spaces(id);
     // SLSCopySpacesForWindows can return multiple space IDs for a window during
     // Mission Control or fullscreen transitions — the window's real home space plus
@@ -476,14 +488,17 @@ pub fn window_space(id: WindowServerId) -> Option<crate::sys::screen::SpaceId> {
         .or_else(|| spaces.into_iter().next())
 }
 
+/// In tests, only what a test set, else what macOS says of a window that does not exist:
+/// ordered out (see `window_spaces`).
+#[cfg(test)]
 pub fn window_ordered_in(id: WindowServerId) -> Option<bool> {
-    #[cfg(test)]
-    if let Some(ordered) = TEST_WINDOW_ORDERED_IN_OVERRIDE
+    TEST_WINDOW_ORDERED_IN_OVERRIDE
         .with(|override_ordered| override_ordered.borrow().get(&id.as_u32()).copied())
-    {
-        return Some(ordered);
-    }
+        .or(Some(false))
+}
 
+#[cfg(not(test))]
+pub fn window_ordered_in(id: WindowServerId) -> Option<bool> {
     let mut ordered: u8 = 0;
     if let Ok(_) = cg_ok(unsafe { SLSWindowIsOrderedIn(*G_CONNECTION, id.as_u32(), &mut ordered) })
     {
@@ -494,6 +509,20 @@ pub fn window_ordered_in(id: WindowServerId) -> Option<bool> {
 }
 
 pub fn window_is_ordered_in(id: WindowServerId) -> bool { window_ordered_in(id).unwrap_or(false) }
+
+/// WindowServer's front-to-back order, including parked windows.
+/// Used only when rebuilding a spatial inventory, never during camera motion.
+pub(crate) fn stacking_order() -> Vec<WindowServerId> {
+    let list = get_windows_raw::<CFDictionary<CFString, CFType>>(
+        CGWindowListOption::OptionAll,
+        kCGNullWindowID,
+    );
+    list.iter()
+        .filter_map(|entry| get_num(&entry, unsafe { objc2_core_graphics::kCGWindowNumber }))
+        .filter_map(|id| u32::try_from(id).ok())
+        .map(WindowServerId::new)
+        .collect()
+}
 
 fn get_windows_raw<T: Type>(
     options: CGWindowListOption,
@@ -547,19 +576,7 @@ pub fn get_windows(ids: &[WindowServerId]) -> Vec<WindowServerInfo> {
 }
 
 pub fn get_window(id: WindowServerId) -> Option<WindowServerInfo> {
-    #[cfg(test)]
-    {
-        return get_windows(&[id]).into_iter().next();
-    }
-
-    #[cfg(not(test))]
-    {
-        let query = WindowIterator::new(&[id])?;
-        if query.count() != 1 || query.advance().is_none() {
-            return None;
-        }
-        return window_info_from_query(&query);
-    }
+    get_window_with_transient(id).map(|(info, _)| info)
 }
 
 fn get_num(dict: &CFDictionary<CFString, CFType>, key: &'static CFString) -> Option<i64> {
@@ -603,6 +620,43 @@ pub fn focus_desktop_window(_screen: &ScreenInfo) -> bool { false }
 #[cfg_attr(test, allow(dead_code))]
 fn window_is_effectively_invisible(alpha: f32, layer: i32) -> bool {
     layer == 0 && alpha <= EFFECTIVELY_INVISIBLE_WINDOW_ALPHA
+}
+
+/// Appearance-only metadata and transient classification from one native query.
+pub(crate) fn get_window_with_transient(id: WindowServerId) -> Option<(WindowServerInfo, bool)> {
+    #[cfg(test)]
+    {
+        return get_windows(&[id]).into_iter().next().map(|info| (info, false));
+    }
+    #[cfg(not(test))]
+    {
+        let query = WindowIterator::new(&[id])?;
+        if query.count() != 1 || query.advance().is_none() {
+            return None;
+        }
+        Some((
+            window_info_from_query(&query)?,
+            native_window_is_transient(
+                SLSWindowTags::from_bits_retain(query.tags()),
+                query.parent_id(),
+            ),
+        ))
+    }
+}
+
+// Tags describe native behavior, not AX roles. In particular DOCUMENT is a
+// style bit, and an attached NSPopover can carry it too.
+fn native_window_is_transient(tags: SLSWindowTags, parent: u32) -> bool {
+    !tags.contains(SLSWindowTags::IGNORE_FOR_EVENTS)
+        && (tags.contains(SLSWindowTags::MODAL)
+            || (parent != 0
+                && tags.contains(SLSWindowTags::ATTACHED)
+                && !tags.contains(SLSWindowTags::PREVENTS_ACTIVATION))
+            || tags.contains(
+                SLSWindowTags::FLOATING
+                    | SLSWindowTags::HIDE_ON_DEACTIVATE
+                    | SLSWindowTags::IGNORES_CYCLE,
+            ))
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -739,6 +793,7 @@ fn tags_match_app_window_role(tags: SLSWindowTags) -> bool {
 }
 
 /// Returns whether the iterator points at a top-level application window.
+#[cfg_attr(test, allow(dead_code))]
 fn iterator_window_suitable(iterator: *mut CFType) -> bool {
     let tags = iterator_window_tags(iterator);
     let parent_wid = unsafe { SLSWindowIteratorGetParentID(iterator) };
@@ -788,7 +843,9 @@ pub fn try_space_window_list_for_connection(
     {
         let _ = (spaces, owner, include_minimized);
         return Some(
-            TEST_SPACE_WINDOW_LIST_OVERRIDE.with(|ids| ids.borrow().clone()).unwrap_or_default(),
+            TEST_SPACE_WINDOW_LIST_OVERRIDE
+                .with(|ids| ids.borrow().clone())
+                .unwrap_or_default(),
         );
     }
 
@@ -953,6 +1010,11 @@ pub fn set_window_ordered_in_override(id: WindowServerId, ordered: Option<bool>)
     });
 }
 
+/// In tests, what macOS says of a window that does not exist (see `window_spaces`).
+#[cfg(test)]
+pub fn app_window_suitability(_id: WindowServerId) -> Option<bool> { Some(false) }
+
+#[cfg(not(test))]
 pub fn app_window_suitability(id: WindowServerId) -> Option<bool> {
     let query = WindowIterator::new(&[id])?;
 
@@ -967,7 +1029,23 @@ pub fn app_window_suitable(id: WindowServerId) -> bool {
     app_window_suitability(id).unwrap_or(false)
 }
 
+/// In tests, a Space's kind is read off its id: below 0x400000000 a user desktop,
+/// 0x400000000..0x800000000 fullscreen. This is a fixture convention, not macOS's rule
+/// (macOS reads the kind from `SLSSpaceGetType`, and an unknown Space is neither kind);
+/// fixture ids are real Spaces' ids too, so asking macOS would depend on the machine.
+#[cfg(test)]
+const TEST_FULLSCREEN_SPACES: std::ops::Range<u64> = 0x400000000..0x800000000;
+
+#[cfg(test)]
+pub fn space_is_user(sid: u64) -> bool { sid < TEST_FULLSCREEN_SPACES.start }
+
+#[cfg(test)]
+pub fn space_is_fullscreen(sid: u64) -> bool { TEST_FULLSCREEN_SPACES.contains(&sid) }
+
+#[cfg(not(test))]
 pub fn space_is_user(sid: u64) -> bool { unsafe { SLSSpaceGetType(*G_CONNECTION, sid) == 0 } }
+
+#[cfg(not(test))]
 pub fn space_is_fullscreen(sid: u64) -> bool { unsafe { SLSSpaceGetType(*G_CONNECTION, sid) == 4 } }
 
 // credit: https://github.com/Hammerspoon/hammerspoon/issues/370#issuecomment-545545468
@@ -996,7 +1074,7 @@ pub fn make_key_window(pid: pid_t, wsid: WindowServerId) -> Result<(), CGError> 
 }
 
 pub fn allow_hide_mouse() -> Result<(), CGError> {
-    let cid = cgs::main_connection();
+    let cid = main_connection();
     let property = CFString::from_str("SetsCursorInBackground");
     let value = CFBoolean::retain(unsafe { kCFBooleanTrue.unwrap_unchecked() });
 
@@ -1020,6 +1098,26 @@ pub unsafe fn switch_space(direction: crate::layout_engine::Direction) {
 #[cfg(test)]
 mod tests {
     use super::{SLSWindowTags, WindowServerId, key_window_in_z_order};
+
+    #[test]
+    fn native_transient_tags_match_observed_appkit_windows() {
+        // Captured on this Mac after an AppKit run-loop turn. These are native
+        // iterator masks, not fixtures produced by the classifier.
+        for (bits, parent, expected) in [
+            (0x0000200100482001, 0, false),  // regular and fixed-size NSWindow
+            (0x00002001004c6002, 0, true),   // hides-on-deactivate floating NSPanel
+            (0x00002001400c2481, 42, true),  // transient NSPopover (also DOCUMENT)
+            (0x00002001000ca082, 42, true),  // NSAlert sheet, without MODAL
+            (0x0000200100482003, 0, false),  // ordinary floating document
+            (0x00002001000ca282, 42, false), // input-transparent attached surface
+            (0x0000000080000000, 0, true),   // standalone modal
+        ] {
+            assert_eq!(
+                super::native_window_is_transient(SLSWindowTags::from_bits_retain(bits), parent),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn zero_window_server_id_is_not_a_window_id() {

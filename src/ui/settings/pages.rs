@@ -1,3 +1,18 @@
+use cgs::app::Application;
+use cgs::collection::SettingsList;
+use cgs::controls::{
+    Button, ChipEdit, LayoutPreview, NumberField, Popup, PreviewAnimation, PreviewWindow,
+    ValueChips,
+};
+use cgs::image::{ImageView, Symbol};
+use cgs::input::{KeyRecorder, ModifierRecorder, Modifiers};
+use cgs::layout::{Disclosure, GroupBox, HStack, Spacer, VStack};
+use cgs::settings::{Section, SettingsPage, SettingsRow, ValidationMessage};
+use cgs::style::Font;
+use cgs::tabs::TabSelector;
+use cgs::text::{Caption, Label, SubsectionTitle};
+use cgs::view::{Metrics, NativeControl, NativeView, WeakView};
+use cgs::{CGPoint, CGRect, CGSize, Insets, Ui};
 use objc2_app_kit::NSAccessibility;
 
 use super::*;
@@ -27,7 +42,6 @@ fn insertion() -> Vec<(&'static str, WindowInsertionPoint)> {
         ("End of layout", WindowInsertionPoint::EndOfTree),
     ]
 }
-fn bool_choices() -> Vec<(&'static str, bool)> { vec![("Enabled", true), ("Disabled", false)] }
 fn arrangement() -> Vec<(&'static str, Orientation)> {
     vec![
         ("Horizontal", Orientation::Horizontal),
@@ -43,7 +57,7 @@ pub(super) fn build(ui: Ui, model: &Rc<Model>, id: Category) -> Page {
         Category::Keyboard => super::commands::keyboard(ui, model),
         Category::Mouse => input(ui, model),
         Category::MenuBar => super::interface::menu_bar(ui, model),
-        Category::Overview => super::grid_pages::overview(ui, model),
+        Category::Overview => super::interface::overview(ui, model),
         Category::StackTabs => super::interface::stack_tabs(ui, model),
         Category::Borders => super::grid_pages::borders(ui, model),
         Category::About => FormBuilder::new(ui, model).finish(about(ui, &model.env)),
@@ -133,23 +147,25 @@ fn about_identity(ui: &Ui) -> VStack {
             &objc2_app_kit::NSFont::systemFontOfSize_weight(28.0, unsafe {
                 objc2_app_kit::NSFontWeightSemibold
             }),
-            &cgs::Color::label(),
+            &cgs::style::Color::label(),
         ))
         .push(centered(
             &format!("Version {}", env!("CARGO_PKG_VERSION")),
             &Font::caption(),
-            &cgs::Color::secondary_label(),
+            &cgs::style::Color::secondary_label(),
         ))
         .keep(preview)
 }
 
 fn about_updates(ui: &Ui, env: &Rc<Env>) -> Section {
-    let status = Rc::new(Label::new(ui, "Not checked yet").wrapping().color(&cgs::Color::label()));
+    let status =
+        Rc::new(Label::new(ui, "Not checked yet").wrapping().color(&cgs::style::Color::label()));
     status.accessibility_label("Update status");
     let icon = Rc::new(ImageView::symbol(ui, "arrow.triangle.2.circlepath").unwrap());
     icon.width(16.0);
     icon.height(16.0);
-    icon.ns_image_view().setContentTintColor(Some(&cgs::Color::secondary_label()));
+    icon.ns_image_view()
+        .setContentTintColor(Some(&cgs::style::Color::secondary_label()));
     icon.ns_view().setAccessibilityElement(false);
     let check = Button::new(ui, "Check for Updates…");
     check.accessibility_label("Check for Updates…");
@@ -161,12 +177,13 @@ fn about_updates(ui: &Ui, env: &Rc<Env>) -> Section {
         let Some(env) = weak_env.upgrade() else { return };
         if let Some(status) = weak_status.upgrade() {
             status.set_text("Checking for updates…");
-            status.ns_text_field().setTextColor(Some(&cgs::Color::label()));
+            status.ns_text_field().setTextColor(Some(&cgs::style::Color::label()));
         }
         if let Some(icon) = weak_icon.upgrade() {
             icon.ns_image_view()
                 .setImage(Symbol::named("arrow.triangle.2.circlepath").as_deref());
-            icon.ns_image_view().setContentTintColor(Some(&cgs::Color::secondary_label()));
+            icon.ns_image_view()
+                .setContentTintColor(Some(&cgs::style::Color::secondary_label()));
         }
         weak_button.set_enabled(false);
         let (status, icon, button) = (weak_status.clone(), weak_icon.clone(), weak_button.clone());
@@ -177,12 +194,12 @@ fn about_updates(ui: &Ui, env: &Rc<Env>) -> Section {
                     Ok(updates::Release::Current) => (
                         "Rift is up to date.".to_owned(),
                         "checkmark.circle",
-                        cgs::Color::secondary_label(),
+                        cgs::style::Color::secondary_label(),
                     ),
                     Ok(updates::Release::Available(version)) => (
                         format!("Version {version} is available."),
                         "arrow.down.circle",
-                        cgs::Color::control_accent(),
+                        cgs::style::Color::control_accent(),
                     ),
                     Err(error) => (
                         error,
@@ -261,7 +278,7 @@ fn about(ui: Ui, env: &Rc<Env>) -> SettingsPage {
     let caption = |text: &str| {
         Label::new(&ui, text)
             .font(&Font::caption())
-            .color(&cgs::Color::secondary_label())
+            .color(&cgs::style::Color::secondary_label())
     };
     let heart = ImageView::symbol(&ui, "heart.fill").unwrap();
     heart.width(11.0);
@@ -459,7 +476,7 @@ pub(super) fn layout_spacing(ui: Ui, model: &Rc<Model>) -> Page {
             move |source, value| set_spacing_gap(source, None, outer, None, value),
         );
         let value = input.unit_field(&ui, "pt");
-        value.width(Metrics::VALUE_FIELD_WIDTH);
+        input.min_width(Metrics::VALUE_FIELD_WIDTH);
         // The bezel hosts the field’s view; keep its Rust owner with the row.
         let control = HStack::new(&ui).spacing(8.0).push(slider.unwrap()).push(value).keep(input);
         simple = simple.row(f.row(title, control, message));
@@ -493,7 +510,7 @@ pub(super) fn layout_spacing(ui: Ui, model: &Rc<Model>) -> Page {
     simple.set_hidden(custom);
     detailed.set_hidden(!custom);
     let (weak_simple, weak_detailed) = (Rc::downgrade(&simple), Rc::downgrade(&detailed));
-    let mode = SegmentedControl::new(&ui, &["Simple", "Custom"]).on_change(move |index| {
+    let mode = TabSelector::new(&ui, &["Simple", "Custom"]).on_change(move |index| {
         if let (Some(simple), Some(detailed)) = (weak_simple.upgrade(), weak_detailed.upgrade()) {
             simple.set_hidden(index != 0);
             detailed.set_hidden(index == 0);
@@ -733,7 +750,7 @@ fn aspect_ratio(f: &mut FormBuilder) -> SettingsRow {
     mode.accessibility_label("Single window aspect ratio");
     mode.set_item_badge(0, Some("Default"));
     let value = field.unit_field(&ui, ": 1");
-    value.width(Metrics::VALUE_FIELD_WIDTH);
+    field.min_width(Metrics::VALUE_FIELD_WIDTH);
     let custom = Rc::new(
         HStack::new(&ui)
             .spacing(8.0)
@@ -911,22 +928,11 @@ fn input(ui: Ui, model: &Rc<Model>) -> Page {
         .description("These gestures navigate the Scrolling layout strip.");
     let mut tuning = Section::new(&ui, "");
     for field in ScrollingGestureSettings::fields() {
-        let row = if field.key == "animate" {
-            let row = f.inherited_popup(
-                field.title,
-                bool_choices(),
-                |s| s.settings.layout.scrolling.gestures.animate,
-                |s| s.settings.layout.scrolling.animate.unwrap_or(true),
-                |s, v| s.settings.layout.scrolling.gestures.animate = v,
-            );
-            Some(f.schema_metadata(row, field, |s| &s.settings.layout.scrolling.gestures))
-        } else {
-            f.schema_field(
-                field,
-                |s| &s.settings.layout.scrolling.gestures,
-                |s| &mut s.settings.layout.scrolling.gestures,
-            )
-        };
+        let row = f.schema_field(
+            field,
+            |s| &s.settings.layout.scrolling.gestures,
+            |s| &mut s.settings.layout.scrolling.gestures,
+        );
         if let Some(row) = row {
             if matches!(field.key, "vertical_tolerance" | "workspace_switch_threshold") {
                 tuning = tuning.row(row);

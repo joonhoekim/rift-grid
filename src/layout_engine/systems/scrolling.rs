@@ -9,6 +9,7 @@ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+use super::{EditResult, Focus, FocusResult, GroupEdit, LayoutEdit, WindowChange, WindowQuery};
 use crate::actor::app::{WindowId, pid_t};
 use crate::common::collections::{HashMap, HashSet};
 use crate::common::config::{
@@ -16,11 +17,10 @@ use crate::common::config::{
     WindowInsertionPoint,
 };
 use crate::layout_engine::systems::constraints::{AxisConstraints, solve_axis_lengths};
-use crate::layout_engine::systems::{
-    LayoutSystem, WindowLayoutConstraints, reconcile_app_membership,
-};
+use crate::layout_engine::systems::{LayoutSystem, WindowLayoutConstraints};
 use crate::layout_engine::utils::compute_tiling_area;
 use crate::layout_engine::{Direction, LayoutId, ResizeOrientation, WindowDropAction};
+use crate::model::hidden_window_placement::HiddenWindowPlacement;
 use crate::sys::geometry::Round;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,29 +35,39 @@ enum ColumnWidth {
     Fixed(f64),
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+struct Row {
+    window: WindowId,
+    height: f64,
+}
+
+#[derive(Serialize, Clone, Debug)]
 struct Column {
     id: ColumnId,
-    windows: Vec<WindowId>,
+    rows: Vec<Row>,
     active_window: usize,
     width: ColumnWidth,
-    height_weights: Vec<f64>,
 }
 
 impl Column {
+    fn windows(&self) -> impl DoubleEndedIterator<Item = &WindowId> + ExactSizeIterator + Clone {
+        self.rows.iter().map(|row| &row.window)
+    }
+
     fn resolved_width(
         &self,
         view: f64,
         gap: f64,
         settings: &ScrollingLayoutSettings,
         constraints: &HashMap<WindowId, WindowLayoutConstraints>,
+        inactive: &HashSet<WindowId>,
     ) -> f64 {
         let ratio = match self.width {
             ColumnWidth::Fixed(width) => return width.max(1.0),
             ColumnWidth::Proportion(ratio) => ratio,
             ColumnWidth::Default => self
-                .windows
-                .first()
+                .windows()
+                .find(|wid| !inactive.contains(*wid))
                 .and_then(|wid| constraints.get(wid))
                 .map(|c| c.locked_width)
                 .filter(|w| settings.preserve_window_sizes && w.is_finite() && *w > 0.0)
@@ -66,7 +76,9 @@ impl Column {
         proportional_width(view, gap, clamp_ratio(ratio, settings))
     }
 
-    fn selected(&self) -> Option<WindowId> { self.windows.get(self.active_window).copied() }
+    fn selected(&self) -> Option<WindowId> {
+        self.rows.get(self.active_window).map(|row| row.window)
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -107,6 +119,19 @@ impl Viewport {
         match self {
             Self::Pending { from, .. } => *from,
             _ => self.offset(),
+        }
+    }
+
+    fn target(&self) -> f64 {
+        match self {
+            Self::Animation(spring) => spring.target,
+            _ => self.offset(),
+        }
+    }
+
+    fn finish(&mut self) {
+        if !matches!(self, Self::Gesture(_)) {
+            *self = Self::Static(self.target());
         }
     }
 
@@ -236,6 +261,7 @@ struct Geometry {
     tiling: CGRect,
     gaps: GapSettings,
     constraints: HashMap<WindowId, WindowLayoutConstraints>,
+    constraint_revision: Option<u64>,
     columns: Vec<ColumnGeometry>,
     frames: Vec<(WindowId, CGRect)>,
     bounds: (f64, f64),
@@ -274,19 +300,9 @@ impl ViewportPresentation {
 
     pub fn animated(&self) -> bool { matches!(self.viewport, Viewport::Animation(_)) }
 
-    pub fn finish(&mut self) {
-        if !self.gesturing() {
-            self.viewport = Viewport::Static(self.target());
-        }
-    }
+    pub fn finish(&mut self) { self.viewport.finish(); }
 
-    pub fn target(&self) -> f64 {
-        match &self.viewport {
-            Viewport::Animation(s) => s.target,
-            Viewport::Pending { target, .. } => *target,
-            _ => self.offset(),
-        }
-    }
+    pub fn target(&self) -> f64 { self.viewport.target() }
 
     pub fn retarget(&mut self, from: f64, velocity: f64, now: Instant) {
         let target = self.target();
@@ -354,9 +370,9 @@ fn translate_frame(
     frame.origin.x += tiling.origin.x - offset;
     if park {
         if frame.max().x <= tiling.origin.x {
-            frame.origin.x = screen.origin.x - frame.size.width;
+            frame.origin.x = screen.origin.x - frame.size.width + HiddenWindowPlacement::REVEAL_PX;
         } else if frame.origin.x >= tiling.max().x {
-            frame.origin.x = screen.max().x;
+            frame.origin.x = screen.max().x - HiddenWindowPlacement::REVEAL_PX;
         }
     }
     frame
@@ -396,13 +412,16 @@ impl Geometry {
     fn build(
         state: &LayoutState,
         settings: &ScrollingLayoutSettings,
+        inactive: &HashSet<WindowId>,
         screen: CGRect,
         constraints: HashMap<WindowId, WindowLayoutConstraints>,
+        constraint_revision: Option<u64>,
         gaps: GapSettings,
     ) -> Self {
         let tiling = compute_tiling_area(screen, &gaps);
-        let mut columns = Vec::with_capacity(state.columns.len());
-        let mut frames = Vec::with_capacity(state.columns.iter().map(|c| c.windows.len()).sum());
+        let mut columns = Vec::with_capacity(state.arrangement.columns.len());
+        let mut frames =
+            Vec::with_capacity(state.arrangement.columns.iter().map(|c| c.rows.len()).sum());
         let constraint = |wid: &WindowId| {
             constraints
                 .get(wid)
@@ -414,9 +433,45 @@ impl Geometry {
                 .normalized()
         };
         let mut x = 0.0;
-        for column in &state.columns {
-            // Expansion is derived geometry; keep the requested width for later.
-            let base = if settings.expand_single_column && state.columns.len() == 1 {
+        let active_columns = if inactive.is_empty() {
+            state.arrangement.columns.len()
+        } else {
+            state
+                .arrangement
+                .columns
+                .iter()
+                .filter(|c| c.windows().any(|w| !inactive.contains(w)))
+                .count()
+        };
+        for column in &state.arrangement.columns {
+            let active_rows = column.rows.iter().filter(|row| !inactive.contains(&row.window));
+            let mut rows = Vec::with_capacity(column.rows.len());
+            let mut min: f64 = 1.0;
+            let mut fixed: f64 = 0.0;
+            let mut max = f64::INFINITY;
+            let mut flexible = false;
+            for row in active_rows.clone() {
+                let c = constraint(&row.window);
+                let fixed_width = c.fixed_for_axis(true);
+                min = min.max(c.min_width);
+                fixed = fixed.max(fixed_width.unwrap_or(0.0));
+                flexible |= fixed_width.is_none();
+                if c.max_width > 0.0 {
+                    max = max.min(c.max_width);
+                }
+                let fixed_height = c.fixed_for_axis(false);
+                rows.push(AxisConstraints {
+                    min: c.min_height,
+                    fixed: fixed_height,
+                    max: (c.max_height > 0.0).then_some(c.max_height),
+                    weight: (row.height - c.min_height).max(0.001),
+                    can_grow: fixed_height.is_none(),
+                });
+            }
+            if rows.is_empty() {
+                continue;
+            }
+            let base = if settings.expand_single_column && active_columns == 1 {
                 tiling.size.width
             } else {
                 column.resolved_width(
@@ -424,21 +479,9 @@ impl Geometry {
                     gaps.inner.horizontal,
                     settings,
                     &constraints,
+                    inactive,
                 )
             };
-            let mut min: f64 = 1.0;
-            let mut fixed: f64 = 0.0;
-            let mut max = f64::INFINITY;
-            let mut flexible = false;
-            for wid in &column.windows {
-                let c = constraint(wid);
-                min = min.max(c.min_width);
-                fixed = fixed.max(c.fixed_for_axis(true).unwrap_or(0.0));
-                flexible |= c.resizable_for_axis(true);
-                if c.max_width > 0.0 {
-                    max = max.min(c.max_width);
-                }
-            }
             let width = if flexible {
                 base.min(max).max(min).max(fixed)
             } else {
@@ -449,30 +492,12 @@ impl Geometry {
                 world_x: x,
                 width,
             });
-            let available = (tiling.size.height
-                - gaps.inner.vertical * column.windows.len().saturating_sub(1) as f64)
-                .max(0.0);
-            let rows: Vec<_> = column
-                .windows
-                .iter()
-                .enumerate()
-                .map(|(row, wid)| {
-                    let c = constraint(wid);
-                    AxisConstraints {
-                        min: c.min_height,
-                        fixed: c.fixed_for_axis(false),
-                        max: (c.max_height > 0.0).then_some(c.max_height),
-                        weight: (column.height_weights.get(row).copied().unwrap_or(1.0)
-                            - c.min_height)
-                            .max(0.001),
-                        can_grow: c.resizable_for_axis(false),
-                    }
-                })
-                .collect();
-            let heights = solve_axis_lengths(&rows, available);
+            let available =
+                (tiling.size.height - gaps.inner.vertical * (rows.len() - 1) as f64).max(0.0);
+            let heights = solve_axis_lengths(rows, available);
             let mut y = tiling.origin.y;
-            for (row, &wid) in column.windows.iter().enumerate() {
-                let height = heights[row];
+            for (row, height) in active_rows.zip(heights) {
+                let wid = row.window;
                 let mut size = CGSize::new(width, height);
                 let c = constraint(&wid);
                 size.width = c.fixed_for_axis(true).unwrap_or(width).max(c.min_width).min(width);
@@ -494,6 +519,7 @@ impl Geometry {
             tiling,
             gaps,
             constraints,
+            constraint_revision,
             columns,
             frames,
             bounds: (0.0, 0.0),
@@ -512,13 +538,24 @@ impl Geometry {
         geometry
     }
 
-    fn matches(
+    fn same_projected_constraints(
         &self,
-        screen: CGRect,
-        constraints: &HashMap<WindowId, WindowLayoutConstraints>,
-        gaps: &GapSettings,
+        current: &HashMap<WindowId, WindowLayoutConstraints>,
     ) -> bool {
-        self.screen == screen && self.constraints == *constraints && self.gaps == *gaps
+        self.frames
+            .iter()
+            .all(|(window, _)| self.constraints.get(window) == current.get(window))
+    }
+
+    fn has_constraints(
+        &self,
+        current: &HashMap<WindowId, WindowLayoutConstraints>,
+        revision: Option<u64>,
+    ) -> bool {
+        match (self.constraint_revision, revision) {
+            (Some(saved), Some(current)) => saved == current,
+            _ => self.constraints == *current,
+        }
     }
 
     fn column(&self, id: ColumnId) -> Option<ColumnGeometry> {
@@ -649,25 +686,41 @@ impl MotionHistory {
     }
 }
 
-#[derive(Deserialize, Clone, Debug, Default)]
-#[serde(from = "StoredLayoutState")]
-struct LayoutState {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+enum FullscreenMode {
+    Screen,
+    WithinGaps,
+}
+
+#[derive(Clone, Debug, Default)]
+struct Arrangement {
     columns: Vec<Column>,
     active_column: usize,
     next_column_id: u64,
-    #[serde(default)]
+    fullscreen: HashMap<WindowId, FullscreenMode>,
+}
+
+enum MoveDestination {
+    NewColumn(usize),
+    Column(usize),
+    Row(usize),
+}
+
+#[derive(Clone, Debug, Default)]
+struct Camera {
     viewport: Viewport,
-    #[serde(skip)]
-    geometry: Option<Geometry>,
-    #[serde(skip)]
     motion: MotionHistory,
-    // Only semantic restoration survives operations; no pending render-time actions.
     transient_restore: Option<ViewBookmark>,
     fullscreen_restore: Option<ViewBookmark>,
-    #[serde(skip)]
     restored_view: Option<ViewBookmark>,
-    fullscreen: HashSet<WindowId>,
-    fullscreen_within_gaps: HashSet<WindowId>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(from = "StoredLayoutState")]
+struct LayoutState {
+    arrangement: Arrangement,
+    camera: Camera,
+    geometry: Option<Geometry>,
 }
 
 // Store the camera relative to its active column as well as its absolute
@@ -676,12 +729,15 @@ struct LayoutState {
 impl Serialize for LayoutState {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut stored = serializer.serialize_struct("LayoutState", 9)?;
-        stored.serialize_field("columns", &self.columns)?;
-        stored.serialize_field("active_column", &self.active_column)?;
-        stored.serialize_field("next_column_id", &self.next_column_id)?;
-        let current = self.viewport.offset();
-        let offset = if matches!(self.viewport, Viewport::Gesture(_) | Viewport::Animation(_)) {
+        let mut stored = serializer.serialize_struct("LayoutState", 8)?;
+        stored.serialize_field("columns", &self.arrangement.columns)?;
+        stored.serialize_field("active_column", &self.arrangement.active_column)?;
+        stored.serialize_field("next_column_id", &self.arrangement.next_column_id)?;
+        let current = self.camera.viewport.offset();
+        let offset = if matches!(
+            self.camera.viewport,
+            Viewport::Gesture(_) | Viewport::Animation(_)
+        ) {
             self.geometry
                 .as_ref()
                 .map_or(current, |g| current.clamp(g.bounds.0, g.bounds.1))
@@ -689,15 +745,15 @@ impl Serialize for LayoutState {
             current
         };
         stored.serialize_field("viewport", &offset)?;
-        let anchor = self.bookmark().or_else(|| self.restored_view.clone()).map(|mut anchor| {
-            anchor.relative_offset += offset - current;
-            anchor
-        });
+        let anchor =
+            self.bookmark().or_else(|| self.camera.restored_view.clone()).map(|mut anchor| {
+                anchor.relative_offset += offset - current;
+                anchor
+            });
         stored.serialize_field("view_anchor", &anchor)?;
-        stored.serialize_field("transient_restore", &self.transient_restore)?;
-        stored.serialize_field("fullscreen_restore", &self.fullscreen_restore)?;
-        stored.serialize_field("fullscreen", &self.fullscreen)?;
-        stored.serialize_field("fullscreen_within_gaps", &self.fullscreen_within_gaps)?;
+        stored.serialize_field("transient_restore", &self.camera.transient_restore)?;
+        stored.serialize_field("fullscreen_restore", &self.camera.fullscreen_restore)?;
+        stored.serialize_field("fullscreen_modes", &self.arrangement.fullscreen)?;
         stored.end()
     }
 }
@@ -715,6 +771,7 @@ struct StoredLayoutState {
     view_anchor: Option<ViewBookmark>,
     transient_restore: Option<ViewBookmark>,
     fullscreen_restore: Option<ViewBookmark>,
+    fullscreen_modes: HashMap<WindowId, FullscreenMode>,
     fullscreen: HashSet<WindowId>,
     fullscreen_within_gaps: HashSet<WindowId>,
     selected: Option<WindowId>,
@@ -727,6 +784,7 @@ struct StoredColumn {
     #[serde(alias = "node_id")]
     id: u64,
     windows: Vec<WindowId>,
+    rows: Vec<Row>,
     active_window: usize,
     width: ColumnWidth,
     height_weights: Vec<f64>,
@@ -748,65 +806,146 @@ impl From<StoredLayoutState> for LayoutState {
         let columns = stored
             .columns
             .into_iter()
-            .filter(|c| !c.windows.is_empty())
-            .map(|mut c| {
+            .filter_map(|mut c| {
+                if c.rows.is_empty() {
+                    c.rows = c
+                        .windows
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, window)| Row {
+                            window,
+                            height: c.height_weights.get(i).copied().unwrap_or(1.0),
+                        })
+                        .collect();
+                }
+                if c.rows.is_empty() {
+                    return None;
+                }
                 if c.id == 0 {
                     c.id = next;
                     next += 2;
                 }
-                c.height_weights.resize(c.windows.len(), 1.0);
                 let width = if c.width_overridden || c.width_offset != 0.0 {
                     ColumnWidth::Proportion(base + c.width_offset)
                 } else {
                     c.width
                 };
-                Column {
+                Some(Column {
                     id: ColumnId(c.id),
-                    active_window: c.active_window.min(c.windows.len() - 1),
-                    windows: c.windows,
+                    active_window: c.active_window.min(c.rows.len() - 1),
+                    rows: c.rows,
                     width,
-                    height_weights: c.height_weights,
-                }
+                })
             })
             .collect::<Vec<_>>();
         let active_column = stored.active_column.min(columns.len().saturating_sub(1));
+        let mut fullscreen = stored.fullscreen_modes;
+        fullscreen.extend(
+            stored
+                .fullscreen_within_gaps
+                .into_iter()
+                .map(|w| (w, FullscreenMode::WithinGaps)),
+        );
+        fullscreen.extend(stored.fullscreen.into_iter().map(|w| (w, FullscreenMode::Screen)));
         let mut state = Self {
-            columns,
-            active_column,
-            next_column_id: next,
-            viewport: stored.viewport,
+            arrangement: Arrangement {
+                columns,
+                active_column,
+                next_column_id: next,
+                fullscreen,
+            },
+            camera: Camera {
+                viewport: stored.viewport,
+                transient_restore: stored.transient_restore,
+                fullscreen_restore: stored.fullscreen_restore,
+                restored_view: stored.view_anchor,
+                ..Camera::default()
+            },
             geometry: None,
-            motion: MotionHistory::default(),
-            transient_restore: stored.transient_restore,
-            fullscreen_restore: stored.fullscreen_restore,
-            restored_view: stored.view_anchor,
-            fullscreen: stored.fullscreen,
-            fullscreen_within_gaps: stored.fullscreen_within_gaps,
         };
         if let Some(window) = stored.selected {
-            state.activate(window);
+            state.arrangement.activate(window);
         }
         state
     }
 }
 
-impl LayoutState {
-    fn selected(&self) -> Option<WindowId> { self.columns.get(self.active_column)?.selected() }
+impl Arrangement {
+    fn selected(&self, inactive: &HashSet<WindowId>) -> Option<WindowId> {
+        let (col, row) = self.selected_location(inactive)?;
+        Some(self.columns[col].rows[row].window)
+    }
 
-    fn selected_location(&self) -> Option<(usize, usize)> {
-        self.columns
-            .get(self.active_column)
-            .map(|c| (self.active_column, c.active_window))
+    fn selected_location(&self, inactive: &HashSet<WindowId>) -> Option<(usize, usize)> {
+        let column = self.columns.get(self.active_column)?;
+        let row = if column.selected().is_some_and(|w| !inactive.contains(&w)) {
+            column.active_window
+        } else {
+            column.windows().position(|w| !inactive.contains(w))?
+        };
+        Some((self.active_column, row))
+    }
+
+    fn select_available_column(
+        &mut self,
+        preferred: Option<ColumnId>,
+        inactive: &HashSet<WindowId>,
+    ) -> Option<ColumnId> {
+        let bookmarked =
+            preferred.and_then(|id| self.columns.iter().position(|column| column.id == id));
+        let candidate = bookmarked
+            .into_iter()
+            .chain(self.active_column..self.columns.len())
+            .chain((0..self.active_column).rev())
+            .find(|&index| self.columns[index].windows().any(|w| !inactive.contains(w)))?;
+        self.active_column = candidate;
+        Some(self.columns[candidate].id)
     }
 
     fn locate(&self, wid: WindowId) -> Option<(usize, usize)> {
         self.columns.iter().enumerate().find_map(|(col, column)| {
-            column.windows.iter().position(|&w| w == wid).map(|row| (col, row))
+            column.windows().position(|&w| w == wid).map(|row| (col, row))
         })
     }
 
-    fn all_windows(&self) -> Vec<WindowId> {
-        self.columns.iter().flat_map(|c| c.windows.iter().copied()).collect()
+    fn move_destination(
+        &self,
+        (col, row): (usize, usize),
+        direction: Direction,
+        inactive: &HashSet<WindowId>,
+    ) -> Option<MoveDestination> {
+        let horizontal = matches!(direction, Direction::Left | Direction::Right);
+        let rows = &self.columns[col].rows;
+        if horizontal && rows.len() > 1 {
+            return Some(MoveDestination::NewColumn(
+                col + usize::from(direction == Direction::Right),
+            ));
+        }
+        let (index, len) = if horizontal {
+            (col, self.columns.len())
+        } else {
+            (row, rows.len())
+        };
+        let participates = |candidate: &usize| {
+            if horizontal {
+                self.columns[*candidate].windows().any(|w| !inactive.contains(w))
+            } else {
+                !inactive.contains(&rows[*candidate].window)
+            }
+        };
+        let target = match direction {
+            Direction::Left | Direction::Up => (0..index).rev().find(participates),
+            Direction::Right | Direction::Down => (index + 1..len).find(participates),
+        }?;
+        Some(if horizontal {
+            MoveDestination::Column(target)
+        } else {
+            MoveDestination::Row(target)
+        })
+    }
+
+    fn windows(&self) -> impl Iterator<Item = WindowId> + '_ {
+        self.columns.iter().flat_map(|c| c.windows().copied())
     }
 
     fn activate(&mut self, wid: WindowId) -> bool {
@@ -818,200 +957,35 @@ impl LayoutState {
         true
     }
 
-    fn restore_fullscreen_view(&mut self) -> bool {
-        let fullscreen = self.columns.get(self.active_column).is_some_and(|column| {
-            column.windows.iter().any(|wid| {
-                self.fullscreen.contains(wid) || self.fullscreen_within_gaps.contains(wid)
-            })
-        });
-        !fullscreen && self.fullscreen_restore.take().is_some_and(|bookmark| self.restore(bookmark))
-    }
-
-    fn prepare_geometry(
-        &mut self,
-        settings: &ScrollingLayoutSettings,
-        screen: CGRect,
-        constraints: &HashMap<WindowId, WindowLayoutConstraints>,
-        gaps: &GapSettings,
-    ) {
-        if self.geometry.as_ref().is_some_and(|g| g.matches(screen, constraints, gaps)) {
-            return;
-        }
-        let bookmark = self.restored_view.take().or_else(|| self.bookmark());
-        let initial = matches!(self.viewport, Viewport::Uninitialized);
-        if settings.preserve_window_sizes {
-            let tiling = compute_tiling_area(screen, gaps);
-            for column in &mut self.columns {
-                if matches!(column.width, ColumnWidth::Default)
-                    && column.windows.len() == 1
-                    && constraints
-                        .get(&column.windows[0])
-                        .map(|c| c.locked_width)
-                        .is_some_and(|w| w.is_finite() && w > 0.0)
-                {
-                    column.width = ColumnWidth::Fixed(column.resolved_width(
-                        tiling.size.width,
-                        gaps.inner.horizontal,
-                        settings,
-                        constraints,
-                    ));
-                }
-            }
-        }
-        self.geometry = Some(Geometry::build(
-            self,
-            settings,
-            screen,
-            constraints.clone(),
-            gaps.clone(),
-        ));
-        if let Some(bookmark) = bookmark
-            && let Some(column) = self.geometry.as_ref().unwrap().column(bookmark.column)
-        {
-            let old = self.viewport.offset();
-            self.viewport.rebase(column.world_x + bookmark.relative_offset - old);
-        }
-        self.reconcile_camera_bounds();
-        if initial {
-            self.viewport = Viewport::Static(0.0);
-            if self.columns.len() == 1 {
-                let g = self.geometry.as_ref().unwrap();
-                self.viewport = Viewport::Static(g.anchor_offset(0, settings.alignment));
-            } else {
-                self.reveal(settings);
-            }
-            self.viewport = Viewport::Static(self.viewport.offset());
-        }
-    }
-
-    fn reconcile_camera_bounds(&mut self) {
-        if let (Viewport::Animation(spring), Some(g)) = (&mut self.viewport, &self.geometry) {
-            let target = spring.target.clamp(g.bounds.0, g.bounds.1);
-            if target != spring.target {
-                let now = Instant::now().max(spring.sampled);
-                let (_, velocity) = spring.position_velocity(now);
-                spring.from = spring.current;
-                spring.velocity = velocity;
-                spring.target = target;
-                spring.started = now;
-                spring.sampled = now;
-            }
-        }
-    }
-
-    fn bookmark(&self) -> Option<ViewBookmark> {
-        let id = self.columns.get(self.active_column)?.id;
-        let x = self.geometry.as_ref()?.column(id)?.world_x;
-        Some(ViewBookmark {
-            column: id,
-            relative_offset: self.viewport.offset() - x,
-        })
-    }
-
-    fn restore(&mut self, bookmark: ViewBookmark) -> bool {
-        let Some(index) = self.columns.iter().position(|c| c.id == bookmark.column) else {
-            return false;
-        };
-        self.active_column = index;
-        if let Some(g) = &self.geometry
-            && let Some(column) = g.column(bookmark.column)
-        {
-            let view = g.tiling.size.width;
-            self.viewport.set_target(fit_offset(
-                column.world_x + bookmark.relative_offset,
-                view,
-                column,
-            ));
-        }
-        true
-    }
-
-    fn reveal(&mut self, settings: &ScrollingLayoutSettings) {
-        let Some(g) = &self.geometry else {
-            return;
-        };
-        let Some(&column) = g.columns.get(self.active_column) else {
-            return;
-        };
-        let offset = if settings.focus_navigation_style == ScrollingFocusNavigationStyle::Anchored {
-            g.anchor_offset(self.active_column, settings.alignment)
-        } else {
-            let target = match &self.viewport {
-                Viewport::Animation(s) => s.target,
-                _ => self.viewport.offset(),
-            };
-            fit_offset(target, g.tiling.size.width, column)
-        };
-        if matches!(&self.viewport, Viewport::Animation(s) if s.target == offset) {
-            return;
-        }
-        self.viewport.set_target(offset);
-    }
-
-    /// All topology/sizing edits use this transaction. With screen_x = world_x -
-    /// camera, the camera changes by NEW world_x - OLD world_x. Rebase the free
-    /// gesture as well, without losing its recent velocity samples.
-    fn mutate<R>(
-        &mut self,
-        settings: &ScrollingLayoutSettings,
-        edit: impl FnOnce(&mut Self) -> R,
-    ) -> R {
-        let window = self.selected();
-        let id = self.columns.get(self.active_column).map(|c| c.id);
-        let old_x = id.and_then(|id| self.geometry.as_ref()?.column(id)).map(|c| c.world_x);
-        let result = edit(self);
-        if let Some(old) = self.geometry.take() {
-            self.geometry = Some(Geometry::build(
-                self,
-                settings,
-                old.screen,
-                old.constraints,
-                old.gaps,
-            ));
-            let anchor = window
-                .and_then(|wid| self.locate(wid))
-                .map(|(col, _)| self.columns[col].id)
-                .or_else(|| id.filter(|id| self.columns.iter().any(|c| c.id == *id)));
-            if let (Some(old_x), Some(new)) =
-                (old_x, anchor.and_then(|id| self.geometry.as_ref()?.column(id)))
-            {
-                self.viewport.rebase(new.world_x - old_x);
-            }
-        }
-        self.reconcile_camera_bounds();
-        if self.columns.is_empty() {
-            self.viewport = Viewport::Static(0.0);
-        }
-        result
-    }
-
     fn new_column(&mut self, index: usize, wid: WindowId, width: ColumnWidth, weight: f64) {
         self.next_column_id = self.next_column_id.max(2);
         let id = ColumnId(self.next_column_id);
         self.next_column_id += 2; // Even container IDs never collide with odd window IDs.
         self.columns.insert(index.min(self.columns.len()), Column {
             id,
-            windows: vec![wid],
+            rows: vec![Row { window: wid, height: weight }],
             active_window: 0,
             width,
-            height_weights: vec![weight],
         });
         self.activate(wid);
     }
 
     /// Detach without destroying sizing/fullscreen metadata; shared by every transfer.
-    fn detach(&mut self, wid: WindowId) -> Option<(ColumnWidth, f64)> {
+    fn detach(
+        &mut self,
+        wid: WindowId,
+        inactive: &HashSet<WindowId>,
+    ) -> Option<(ColumnWidth, f64)> {
         let (col, row) = self.locate(wid)?;
-        let selected = self.selected();
+        let selected = self.selected(inactive);
         let column = &mut self.columns[col];
         let width = column.width;
-        column.windows.remove(row);
-        let weight = column.height_weights.remove(row);
+        let weight = column.rows.remove(row).height;
         if row < column.active_window {
             column.active_window -= 1;
         }
-        column.active_window = column.active_window.min(column.windows.len().saturating_sub(1));
-        if column.windows.is_empty() {
+        column.active_window = column.active_window.min(column.rows.len().saturating_sub(1));
+        if column.rows.is_empty() {
             self.columns.remove(col);
             if col < self.active_column {
                 self.active_column -= 1;
@@ -1024,11 +998,17 @@ impl LayoutState {
         Some((width, weight))
     }
 
-    fn transfer(&mut self, source: WindowId, target: WindowId, action: WindowDropAction) -> bool {
+    fn transfer(
+        &mut self,
+        source: WindowId,
+        target: WindowId,
+        action: WindowDropAction,
+        inactive: &HashSet<WindowId>,
+    ) -> bool {
         if source == target || self.locate(source).is_none() || self.locate(target).is_none() {
             return false;
         }
-        let (width, weight) = self.detach(source).unwrap();
+        let (width, weight) = self.detach(source, inactive).unwrap();
         let (col, row) = self.locate(target).unwrap();
         match action {
             WindowDropAction::Stack | WindowDropAction::Insert(Direction::Up | Direction::Down) => {
@@ -1037,8 +1017,7 @@ impl LayoutState {
                 if row <= column.active_window {
                     column.active_window += 1;
                 }
-                column.windows.insert(row, source);
-                column.height_weights.insert(row, weight);
+                column.rows.insert(row, Row { window: source, height: weight });
             }
             WindowDropAction::Insert(direction @ (Direction::Left | Direction::Right)) => {
                 self.new_column(
@@ -1055,20 +1034,262 @@ impl LayoutState {
     }
 }
 
+impl LayoutState {
+    fn fullscreen_frame(&self, geometry: &Geometry, window: WindowId) -> Option<CGRect> {
+        Some(match self.arrangement.fullscreen.get(&window)? {
+            FullscreenMode::Screen => geometry.screen,
+            FullscreenMode::WithinGaps => geometry.tiling,
+        })
+    }
+
+    fn restore_fullscreen_view(&mut self) -> bool {
+        let fullscreen =
+            self.arrangement
+                .columns
+                .get(self.arrangement.active_column)
+                .is_some_and(|column| {
+                    column.windows().any(|wid| self.arrangement.fullscreen.contains_key(wid))
+                });
+        !fullscreen
+            && self
+                .camera
+                .fullscreen_restore
+                .take()
+                .is_some_and(|bookmark| self.restore(bookmark))
+    }
+
+    fn prepare_geometry(
+        &mut self,
+        settings: &ScrollingLayoutSettings,
+        inactive: &HashSet<WindowId>,
+        screen: CGRect,
+        constraints: &HashMap<WindowId, WindowLayoutConstraints>,
+        revision: Option<u64>,
+        gaps: &GapSettings,
+    ) {
+        let same_constraints =
+            self.geometry.as_ref().is_some_and(|g| g.has_constraints(constraints, revision));
+        if let Some(g) = self.geometry.as_mut()
+            && g.screen == screen
+            && g.gaps == *gaps
+            && (same_constraints
+                || (!settings.preserve_window_sizes && g.same_projected_constraints(constraints)))
+        {
+            if !same_constraints {
+                // Edits may introduce a member before the next engine projection.
+                g.constraints.clone_from(constraints);
+            }
+            g.constraint_revision = revision;
+            return;
+        }
+        if self.camera.restored_view.is_none() {
+            self.camera.restored_view = self.bookmark();
+        }
+        let initial = matches!(self.camera.viewport, Viewport::Uninitialized);
+        if settings.preserve_window_sizes {
+            let tiling = compute_tiling_area(screen, gaps);
+            for column in &mut self.arrangement.columns {
+                if matches!(column.width, ColumnWidth::Default)
+                    && column.rows.len() == 1
+                    && !inactive.contains(&column.rows[0].window)
+                    && constraints
+                        .get(&column.rows[0].window)
+                        .map(|c| c.locked_width)
+                        .is_some_and(|w| w.is_finite() && w > 0.0)
+                {
+                    column.width = ColumnWidth::Fixed(column.resolved_width(
+                        tiling.size.width,
+                        gaps.inner.horizontal,
+                        settings,
+                        constraints,
+                        inactive,
+                    ));
+                }
+            }
+        }
+        let mut snapshot = self.geometry.take().map(|g| g.constraints).unwrap_or_default();
+        if !same_constraints {
+            snapshot.clone_from(constraints);
+        }
+        self.geometry = Some(Geometry::build(
+            self,
+            settings,
+            inactive,
+            screen,
+            snapshot,
+            revision,
+            gaps.clone(),
+        ));
+        self.apply_restored_view();
+        self.reconcile_camera_bounds();
+        if initial {
+            self.camera.viewport = Viewport::Static(0.0);
+            if self.geometry.as_ref().unwrap().columns.len() == 1 {
+                let g = self.geometry.as_ref().unwrap();
+                self.camera.viewport = Viewport::Static(g.anchor_offset(0, settings.alignment));
+            } else {
+                self.reveal(settings);
+            }
+            self.camera.viewport = Viewport::Static(self.camera.viewport.offset());
+        }
+    }
+
+    fn apply_restored_view(&mut self) {
+        let (Some(bookmark), Some(geometry)) = (&self.camera.restored_view, &self.geometry) else {
+            return;
+        };
+        if let Some(column) = geometry.column(bookmark.column) {
+            let offset = self.camera.viewport.offset();
+            self.camera.viewport.rebase(column.world_x + bookmark.relative_offset - offset);
+            self.camera.restored_view = None;
+        } else {
+            // A dormant column has no geometry. Keep its bookmark for readmission,
+            // and use the available strip bounds for the current projection.
+            let offset = self.camera.viewport.offset().clamp(geometry.bounds.0, geometry.bounds.1);
+            self.camera.viewport = Viewport::Static(offset);
+            if !self.arrangement.columns.iter().any(|column| column.id == bookmark.column) {
+                self.camera.restored_view = None;
+            }
+        }
+    }
+
+    fn reconcile_camera_bounds(&mut self) {
+        if let (Viewport::Animation(spring), Some(g)) = (&mut self.camera.viewport, &self.geometry)
+        {
+            let target = spring.target.clamp(g.bounds.0, g.bounds.1);
+            if target != spring.target {
+                let now = Instant::now().max(spring.sampled);
+                let (_, velocity) = spring.position_velocity(now);
+                spring.from = spring.current;
+                spring.velocity = velocity;
+                spring.target = target;
+                spring.started = now;
+                spring.sampled = now;
+            }
+        }
+    }
+
+    fn bookmark(&self) -> Option<ViewBookmark> {
+        let id = self.arrangement.columns.get(self.arrangement.active_column)?.id;
+        let x = self.geometry.as_ref()?.column(id)?.world_x;
+        Some(ViewBookmark {
+            column: id,
+            relative_offset: self.camera.viewport.offset() - x,
+        })
+    }
+
+    fn restore(&mut self, bookmark: ViewBookmark) -> bool {
+        let Some(index) = self.arrangement.columns.iter().position(|c| c.id == bookmark.column)
+        else {
+            return false;
+        };
+        self.arrangement.active_column = index;
+        if let Some(g) = &self.geometry
+            && let Some(column) = g.column(bookmark.column)
+        {
+            let view = g.tiling.size.width;
+            self.camera.viewport.set_target(fit_offset(
+                column.world_x + bookmark.relative_offset,
+                view,
+                column,
+            ));
+        }
+        true
+    }
+
+    fn reveal(&mut self, settings: &ScrollingLayoutSettings) {
+        let Some(g) = &self.geometry else {
+            return;
+        };
+        let Some(column) = self
+            .arrangement
+            .columns
+            .get(self.arrangement.active_column)
+            .and_then(|c| g.column(c.id))
+        else {
+            return;
+        };
+        let offset = if settings.focus_navigation_style == ScrollingFocusNavigationStyle::Anchored {
+            g.anchor_offset(
+                g.columns.iter().position(|c| c.id == column.id).unwrap(),
+                settings.alignment,
+            )
+        } else {
+            let target = match &self.camera.viewport {
+                Viewport::Animation(s) => s.target,
+                _ => self.camera.viewport.offset(),
+            };
+            fit_offset(target, g.tiling.size.width, column)
+        };
+        if matches!(&self.camera.viewport, Viewport::Animation(s) if s.target == offset) {
+            return;
+        }
+        self.camera.viewport.set_target(offset);
+    }
+
+    /// All topology/sizing edits use this transaction. With screen_x = world_x -
+    /// camera, the camera changes by NEW world_x - OLD world_x. Rebase the free
+    /// gesture as well, without losing its recent velocity samples.
+    fn mutate<R>(
+        &mut self,
+        settings: &ScrollingLayoutSettings,
+        inactive: &HashSet<WindowId>,
+        edit: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let window = self.arrangement.selected(inactive);
+        let id = self.arrangement.columns.get(self.arrangement.active_column).map(|c| c.id);
+        let old_x = id.and_then(|id| self.geometry.as_ref()?.column(id)).map(|c| c.world_x);
+        let result = edit(self);
+        if let Some(old) = self.geometry.take() {
+            self.geometry = Some(Geometry::build(
+                self,
+                settings,
+                inactive,
+                old.screen,
+                old.constraints,
+                old.constraint_revision,
+                old.gaps,
+            ));
+            let anchor = window
+                .and_then(|wid| self.arrangement.locate(wid))
+                .map(|(col, _)| self.arrangement.columns[col].id)
+                .or_else(|| id.filter(|id| self.arrangement.columns.iter().any(|c| c.id == *id)));
+            if let (Some(old_x), Some(new)) =
+                (old_x, anchor.and_then(|id| self.geometry.as_ref()?.column(id)))
+            {
+                self.camera.viewport.rebase(new.world_x - old_x);
+            }
+            self.apply_restored_view();
+        }
+        self.reconcile_camera_bounds();
+        if self.arrangement.columns.is_empty() {
+            self.camera.viewport = Viewport::Static(0.0);
+        }
+        result
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct ScrollingLayoutSystem {
+    #[serde(skip)]
+    inactive: HashSet<WindowId>,
     layouts: slotmap::SlotMap<LayoutId, LayoutState>,
     #[serde(skip)]
     pub(super) settings: ScrollingLayoutSettings,
 }
 
 impl ScrollingLayoutSystem {
-    fn selected_mut(
-        layouts: &mut slotmap::SlotMap<LayoutId, LayoutState>,
+    pub(super) fn initialize_dormant_windows(&mut self, windows: Vec<WindowId>) {
+        self.inactive.extend(windows);
+    }
+
+    fn selected_mut<'a>(
+        layouts: &'a mut slotmap::SlotMap<LayoutId, LayoutState>,
         layout: LayoutId,
-    ) -> Option<(&mut LayoutState, usize, usize)> {
+        inactive: &HashSet<WindowId>,
+    ) -> Option<(&'a mut LayoutState, usize, usize)> {
         let state = layouts.get_mut(layout)?;
-        let (column, row) = state.selected_location()?;
+        let (column, row) = state.arrangement.selected_location(inactive)?;
         Some((state, column, row))
     }
 
@@ -1079,10 +1300,14 @@ impl ScrollingLayoutSystem {
     }
 
     pub fn update_settings(&mut self, settings: &ScrollingLayoutSettings) {
-        self.settings = settings.clone();
-        self.settings.per_display.clear();
+        let mut settings = settings.clone();
+        settings.per_display.clear();
+        if self.settings == settings {
+            return;
+        }
+        self.settings = settings;
         for state in self.layouts.values_mut() {
-            state.mutate(&self.settings, |_| {});
+            state.mutate(&self.settings, &self.inactive, |_| {});
         }
     }
 
@@ -1094,7 +1319,7 @@ impl ScrollingLayoutSystem {
         self.settings.min_column_width_ratio = min;
         self.settings.max_column_width_ratio = max;
         for state in self.layouts.values_mut() {
-            state.mutate(&self.settings, |_| {});
+            state.mutate(&self.settings, &self.inactive, |_| {});
         }
     }
 
@@ -1110,21 +1335,25 @@ impl ScrollingLayoutSystem {
         let Some(state) = self.layouts.get_mut(layout) else {
             return;
         };
-        if state.locate(wid).is_some() {
+        if state.arrangement.locate(wid).is_some() {
             return;
         }
         let bookmark = state.bookmark();
-        state.mutate(&self.settings, |state| {
+        state.camera.restored_view = None;
+        state.mutate(&self.settings, &self.inactive, |state| {
             let index = if self.settings.base.window_insertion_point.unwrap_or_default()
                 == WindowInsertionPoint::EndOfTree
             {
-                state.columns.len()
+                state.arrangement.columns.len()
             } else {
-                state.selected_location().map_or(0, |(col, _)| col + 1)
+                state
+                    .arrangement
+                    .selected_location(&self.inactive)
+                    .map_or(0, |(col, _)| col + 1)
             };
-            state.new_column(index, wid, ColumnWidth::Default, 1.0);
+            state.arrangement.new_column(index, wid, ColumnWidth::Default, 1.0);
         });
-        state.transient_restore = bookmark;
+        state.camera.transient_restore = bookmark;
         state.reveal(&self.settings);
     }
 
@@ -1132,33 +1361,64 @@ impl ScrollingLayoutSystem {
         state: &mut LayoutState,
         settings: &ScrollingLayoutSettings,
         wid: WindowId,
+        inactive: &HashSet<WindowId>,
     ) {
-        let Some((col, _)) = state.locate(wid) else {
+        let Some((col, _)) = state.arrangement.locate(wid) else {
             return;
         };
-        let active_removed = state.selected() == Some(wid);
-        let column_removed = state.columns[col].windows.len() == 1;
+        let active_removed = state.arrangement.selected(inactive) == Some(wid);
+        let column_removed = state.arrangement.columns[col].rows.len() == 1;
         let restore = if active_removed && column_removed {
-            state.transient_restore.take()
+            state.camera.transient_restore.take()
         } else {
             None
         };
-        let was_fullscreen =
-            state.fullscreen.remove(&wid) | state.fullscreen_within_gaps.remove(&wid);
-        state.mutate(settings, |state| {
-            state.detach(wid);
+        let was_fullscreen = state.arrangement.fullscreen.remove(&wid).is_some();
+        let selected_column = state.mutate(settings, inactive, |state| {
+            state.arrangement.detach(wid, inactive);
+            if active_removed {
+                state.arrangement.select_available_column(
+                    restore.as_ref().map(|bookmark| bookmark.column),
+                    inactive,
+                )
+            } else {
+                None
+            }
         });
-        let restored = restore.is_some_and(|bookmark| state.restore(bookmark));
+        let restored = restore
+            .filter(|bookmark| Some(bookmark.column) == selected_column)
+            .is_some_and(|bookmark| state.restore(bookmark));
         let restored_fullscreen = was_fullscreen && state.restore_fullscreen_view();
         if active_removed && !restored && !restored_fullscreen {
             state.reveal(settings);
         }
         if state
+            .camera
             .transient_restore
             .as_ref()
-            .is_some_and(|b| !state.columns.iter().any(|c| c.id == b.column))
+            .is_some_and(|b| !state.arrangement.columns.iter().any(|c| c.id == b.column))
         {
-            state.transient_restore = None;
+            state.camera.transient_restore = None;
+        }
+    }
+
+    pub(crate) fn prepare(
+        &mut self,
+        layout: LayoutId,
+        screen: CGRect,
+        constraints: &HashMap<WindowId, WindowLayoutConstraints>,
+        revision: Option<u64>,
+        gaps: &GapSettings,
+    ) {
+        if let Some(state) = self.layouts.get_mut(layout) {
+            state.prepare_geometry(
+                &self.settings,
+                &self.inactive,
+                screen,
+                constraints,
+                revision,
+                gaps,
+            );
         }
     }
 
@@ -1167,17 +1427,37 @@ impl ScrollingLayoutSystem {
         layout: LayoutId,
         screen: CGRect,
         constraints: &HashMap<WindowId, WindowLayoutConstraints>,
+        revision: Option<u64>,
         gaps: &GapSettings,
         park: bool,
     ) -> Vec<(WindowId, CGRect)> {
         let Some(state) = self.layouts.get(layout) else {
             return Vec::new();
         };
-        if let Some(g) = state.geometry.as_ref().filter(|g| g.matches(screen, constraints, gaps)) {
+        if let Some(g) = &state.geometry
+            && g.screen == screen
+            && g.gaps == *gaps
+            && (g.has_constraints(constraints, revision)
+                || (!self.settings.preserve_window_sizes
+                    && g.same_projected_constraints(constraints)))
+        {
             return Self::translate_frames(state, g, park).collect();
         }
-        let mut fallback = state.clone();
-        fallback.prepare_geometry(&self.settings, screen, constraints, gaps);
+        let mut camera = state.camera.clone();
+        camera.restored_view = camera.restored_view.or_else(|| state.bookmark());
+        let mut fallback = LayoutState {
+            arrangement: state.arrangement.clone(),
+            camera,
+            geometry: None,
+        };
+        fallback.prepare_geometry(
+            &self.settings,
+            &self.inactive,
+            screen,
+            constraints,
+            revision,
+            gaps,
+        );
         Self::translate_frames(&fallback, fallback.geometry.as_ref().unwrap(), park).collect()
     }
 
@@ -1186,17 +1466,21 @@ impl ScrollingLayoutSystem {
         g: &'a Geometry,
         park: bool,
     ) -> impl Iterator<Item = (WindowId, CGRect)> + 'a {
-        let offset = state.viewport.offset();
-        g.frames.iter().map(move |&(wid, mut frame)| {
-            frame = translate_frame(frame, offset, g.tiling, g.screen, park);
-            frame = frame.round();
-            if state.fullscreen.contains(&wid) {
-                frame = g.screen;
-            } else if state.fullscreen_within_gaps.contains(&wid) {
-                frame = g.tiling;
-            }
+        let offset = state.camera.viewport.offset();
+        g.frames.iter().map(move |&(wid, frame)| {
+            let frame = state.fullscreen_frame(g, wid).unwrap_or_else(|| {
+                translate_frame(frame, offset, g.tiling, g.screen, park).round()
+            });
             (wid, frame)
         })
+    }
+
+    pub(crate) fn finish_viewport(&mut self, layout: LayoutId) {
+        if let Some(state) = self.layouts.get_mut(layout)
+            && state.geometry.is_some()
+        {
+            state.camera.viewport.finish();
+        }
     }
 
     pub(crate) fn presentation(
@@ -1205,10 +1489,10 @@ impl ScrollingLayoutSystem {
     ) -> Option<(ViewportPresentation, Vec<(WindowId, CGRect, bool)>)> {
         let state = self.layouts.get(layout)?;
         let g = state.geometry.as_ref()?;
-        let mut motion = state.motion.clone();
+        let mut motion = state.camera.motion.clone();
         motion.samples.reserve(64_usize.saturating_sub(motion.samples.len()));
         let camera = ViewportPresentation {
-            viewport: state.viewport.clone(),
+            viewport: state.camera.viewport.clone(),
             motion: Arc::new(Mutex::new(motion)),
             bounds: g.bounds,
             width: g.tiling.size.width,
@@ -1219,13 +1503,9 @@ impl ScrollingLayoutSystem {
             .frames
             .iter()
             .map(|&(wid, frame)| {
-                if state.fullscreen.contains(&wid) {
-                    (wid, g.screen, true)
-                } else if state.fullscreen_within_gaps.contains(&wid) {
-                    (wid, g.tiling, true)
-                } else {
-                    (wid, frame.round(), false)
-                }
+                state
+                    .fullscreen_frame(g, wid)
+                    .map_or_else(|| (wid, frame.round(), false), |frame| (wid, frame, true))
             })
             .collect();
         Some((camera, frames))
@@ -1233,14 +1513,14 @@ impl ScrollingLayoutSystem {
 
     pub(crate) fn commit_presented_viewport(&mut self, layout: LayoutId, p: &PresentedViewport) {
         if let Some(state) = self.layouts.get_mut(layout) {
-            state.viewport = if p.gesturing {
+            state.camera.viewport = if p.gesturing {
                 Viewport::Gesture(p.offset)
             } else if p.offset != p.target {
                 Viewport::Animation(CameraSpring::new(p.offset, p.target, p.velocity, p.timestamp))
             } else {
                 Viewport::Static(p.offset)
             };
-            state.motion = p.motion.lock().clone();
+            state.camera.motion = p.motion.lock().clone();
         }
     }
 
@@ -1251,10 +1531,14 @@ impl ScrollingLayoutSystem {
         }
         let state = self.layouts.get_mut(layout)?;
         let g = state.geometry.as_ref()?;
-        let column = g.columns.get(state.active_column)?;
+        let column = state
+            .arrangement
+            .columns
+            .get(state.arrangement.active_column)
+            .and_then(|c| g.column(c.id))?;
         let step = column.width + g.gaps.inner.horizontal;
-        let raw = state.viewport.offset() + delta * step;
-        state.viewport.set_target(raw.clamp(g.bounds.0, g.bounds.1));
+        let raw = state.camera.viewport.offset() + delta * step;
+        state.camera.viewport.set_target(raw.clamp(g.bounds.0, g.bounds.1));
         if raw < g.bounds.0 {
             Some((Direction::Left, (g.bounds.0 - raw) / step))
         } else if raw > g.bounds.1 {
@@ -1267,9 +1551,10 @@ impl ScrollingLayoutSystem {
     pub fn viewport_gesture_available(&self, layout: LayoutId) -> bool {
         self.layouts.get(layout).is_some_and(|state| {
             state.geometry.is_some()
-                && state.selected().is_some_and(|wid| {
-                    !state.fullscreen.contains(&wid) && !state.fullscreen_within_gaps.contains(&wid)
-                })
+                && state
+                    .arrangement
+                    .selected(&self.inactive)
+                    .is_some_and(|wid| !state.arrangement.fullscreen.contains_key(&wid))
         })
     }
 
@@ -1278,15 +1563,15 @@ impl ScrollingLayoutSystem {
             return false;
         }
         let state = &mut self.layouts[layout];
-        state.transient_restore = None;
-        if matches!(state.viewport, Viewport::Gesture(_)) {
+        state.camera.transient_restore = None;
+        if matches!(state.camera.viewport, Viewport::Gesture(_)) {
             return false;
         }
-        state.motion.overscroll = 0.0;
-        state.motion.samples.clear();
-        state.motion.samples.reserve(64);
-        state.viewport.sample(now, 1.0);
-        state.viewport = Viewport::Gesture(state.viewport.offset());
+        state.camera.motion.overscroll = 0.0;
+        state.camera.motion.samples.clear();
+        state.camera.motion.samples.reserve(64);
+        state.camera.viewport.sample(now, 1.0);
+        state.camera.viewport = Viewport::Gesture(state.camera.viewport.offset());
         true
     }
 
@@ -1301,11 +1586,11 @@ impl ScrollingLayoutSystem {
             return None;
         }
         let state = self.layouts.get_mut(layout)?;
-        let Viewport::Gesture(offset) = &mut state.viewport else {
+        let Viewport::Gesture(offset) = &mut state.camera.viewport else {
             return None;
         };
         let g = state.geometry.as_ref()?;
-        state.motion.update(offset, g.bounds, delta, timestamp)
+        state.camera.motion.update(offset, g.bounds, delta, timestamp)
     }
 
     /// Normalize only at the layout boundary, using cached working geometry.
@@ -1327,17 +1612,17 @@ impl ScrollingLayoutSystem {
         animate: bool,
     ) -> Option<ViewportRelease> {
         let state = self.layouts.get_mut(layout)?;
-        let Viewport::Gesture(offset) = state.viewport else {
+        let Viewport::Gesture(offset) = state.camera.viewport else {
             return None;
         };
-        if !state.motion.push(0.0, timestamp) {
+        if !state.camera.motion.push(0.0, timestamp) {
             return None;
         }
-        let velocity = state.motion.velocity();
+        let velocity = state.camera.motion.velocity();
         let projected = offset - velocity / (1000.0 * 0.997_f64.ln());
         let release = self.settle(layout, projected, velocity, true)?;
         if animate {
-            self.layouts[layout].viewport = Viewport::Animation(CameraSpring::new(
+            self.layouts[layout].camera.viewport = Viewport::Animation(CameraSpring::new(
                 release.from_offset,
                 release.offset,
                 release.velocity,
@@ -1350,13 +1635,16 @@ impl ScrollingLayoutSystem {
     /// Settle where cancellation occurred, with no artificial fling or focus change.
     pub fn cancel_viewport_gesture(&mut self, layout: LayoutId) {
         if let Some(state) = self.layouts.get_mut(layout)
-            && matches!(state.viewport, Viewport::Gesture(_) | Viewport::Animation(_))
+            && matches!(
+                state.camera.viewport,
+                Viewport::Gesture(_) | Viewport::Animation(_)
+            )
         {
-            let offset = state.viewport.offset();
+            let offset = state.camera.viewport.offset();
             let offset =
                 state.geometry.as_ref().map_or(offset, |g| offset.clamp(g.bounds.0, g.bounds.1));
-            state.viewport = Viewport::Static(offset);
-            state.motion = MotionHistory::default();
+            state.camera.viewport = Viewport::Static(offset);
+            state.camera.motion = MotionHistory::default();
         }
     }
 
@@ -1366,7 +1654,7 @@ impl ScrollingLayoutSystem {
             .get(layout)
             .and_then(|state| {
                 let g = state.geometry.as_ref()?;
-                Some(state.motion.overscroll / g.tiling.size.width)
+                Some(state.camera.motion.overscroll / g.tiling.size.width)
             })
             .unwrap_or(0.0)
     }
@@ -1380,7 +1668,7 @@ impl ScrollingLayoutSystem {
     ) -> Option<ViewportRelease> {
         let state = self.layouts.get_mut(layout)?;
         let g = state.geometry.as_ref()?;
-        let from_offset = state.viewport.offset();
+        let from_offset = state.camera.viewport.offset();
         let niri = self.settings.focus_navigation_style == ScrollingFocusNavigationStyle::Niri;
         let snap = g.snaps.iter().min_by(|a, b| {
             (a.offset - projected)
@@ -1391,8 +1679,16 @@ impl ScrollingLayoutSystem {
                         // Niri sorts snaps by position before nearest-point selection.
                         a.offset.total_cmp(&b.offset)
                     } else {
-                        (gesture_release && a.column != state.active_column)
-                            .cmp(&(gesture_release && b.column != state.active_column))
+                        (gesture_release
+                            && g.columns[a.column].id
+                                != state.arrangement.columns[state.arrangement.active_column].id)
+                            .cmp(
+                                &(gesture_release
+                                    && g.columns[b.column].id
+                                        != state.arrangement.columns
+                                            [state.arrangement.active_column]
+                                            .id),
+                            )
                     }
                 })
         })?;
@@ -1419,14 +1715,16 @@ impl ScrollingLayoutSystem {
             };
         }
         let offset = snap.offset;
-        if index != state.active_column {
-            state.fullscreen_restore = None;
+        let canonical_index =
+            state.arrangement.columns.iter().position(|c| c.id == g.columns[index].id)?;
+        if canonical_index != state.arrangement.active_column {
+            state.camera.fullscreen_restore = None;
         }
-        state.active_column = index;
-        state.transient_restore = None;
-        state.viewport.set_target(offset);
+        state.arrangement.active_column = canonical_index;
+        state.camera.transient_restore = None;
+        state.camera.viewport.set_target(offset);
         Some(ViewportRelease {
-            window: state.selected()?,
+            window: state.arrangement.selected(&self.inactive)?,
             offset,
             from_offset,
             velocity,
@@ -1434,7 +1732,7 @@ impl ScrollingLayoutSystem {
     }
 
     pub fn snap_to_nearest_column(&mut self, layout: LayoutId) -> Option<WindowId> {
-        let offset = self.layouts.get(layout)?.viewport.offset();
+        let offset = self.layouts.get(layout)?.camera.viewport.offset();
         self.settle(layout, offset, 0.0, false).map(|release| release.window)
     }
 
@@ -1443,14 +1741,19 @@ impl ScrollingLayoutSystem {
             return;
         };
         if let Some(g) = &state.geometry
-            && let Some(column) = g.columns.get(state.active_column)
+            && let Some(column) = state
+                .arrangement
+                .columns
+                .get(state.arrangement.active_column)
+                .and_then(|c| g.column(c.id))
         {
-            state.viewport.set_target(centered_offset(g.tiling.size.width, *column));
+            state.camera.viewport.set_target(centered_offset(g.tiling.size.width, column));
         }
     }
 
     pub fn switch_preset_column_width(&mut self, layout: LayoutId, backwards: bool) -> bool {
-        let Some((state, col, _)) = Self::selected_mut(&mut self.layouts, layout) else {
+        let Some((state, col, _)) = Self::selected_mut(&mut self.layouts, layout, &self.inactive)
+        else {
             return false;
         };
         let presets = self
@@ -1463,7 +1766,7 @@ impl ScrollingLayoutSystem {
             return false;
         };
         // The requested proportion remembers the preset even when geometry is constrained.
-        let known = match state.columns[col].width {
+        let known = match state.arrangement.columns[col].width {
             ColumnWidth::Proportion(ratio) => {
                 presets.clone().position(|preset| (ratio - preset).abs() <= 1e-6)
             }
@@ -1477,7 +1780,7 @@ impl ScrollingLayoutSystem {
             let Some(g) = &state.geometry else {
                 return false;
             };
-            let Some(column) = g.columns.get(col) else {
+            let Some(column) = g.column(state.arrangement.columns[col].id) else {
                 return false;
             };
             let resolved = |ratio| {
@@ -1498,11 +1801,12 @@ impl ScrollingLayoutSystem {
                 presets.clone().find(|&r| column.width + 1.0 < resolved(r)).unwrap_or(first)
             }
         };
-        if matches!(state.columns[col].width, ColumnWidth::Proportion(r) if r == target) {
+        if matches!(state.arrangement.columns[col].width, ColumnWidth::Proportion(r) if r == target)
+        {
             return false;
         }
-        state.mutate(&self.settings, |state| {
-            state.columns[col].width = ColumnWidth::Proportion(target);
+        state.mutate(&self.settings, &self.inactive, |state| {
+            state.arrangement.columns[col].width = ColumnWidth::Proportion(target);
         });
         state.reveal(&self.settings);
         true
@@ -1512,27 +1816,29 @@ impl ScrollingLayoutSystem {
         let Some(state) = self.layouts.get_mut(layout) else {
             return Vec::new();
         };
-        let Some(wid) = state.selected() else {
+        let Some(wid) = state.arrangement.selected(&self.inactive) else {
             return Vec::new();
         };
-        let fullscreen = state.fullscreen.remove(&wid);
-        let gaps = state.fullscreen_within_gaps.remove(&wid);
-        let was_same = if within_gaps { gaps } else { fullscreen };
-        if was_same {
+        let mode = if within_gaps {
+            FullscreenMode::WithinGaps
+        } else {
+            FullscreenMode::Screen
+        };
+        if state.arrangement.fullscreen.remove(&wid) == Some(mode) {
             state.restore_fullscreen_view();
         } else {
-            if state.fullscreen_restore.is_none() {
-                state.fullscreen_restore = state.bookmark();
+            if state.camera.fullscreen_restore.is_none() {
+                state.camera.fullscreen_restore = state.bookmark();
             }
-            if within_gaps {
-                state.fullscreen_within_gaps.insert(wid);
-            } else {
-                state.fullscreen.insert(wid);
-            }
-            if let Some(column) =
-                state.geometry.as_ref().and_then(|g| g.columns.get(state.active_column))
-            {
-                state.viewport.set_target(column.world_x);
+            state.arrangement.fullscreen.insert(wid, mode);
+            if let Some(column) = state.geometry.as_ref().and_then(|g| {
+                state
+                    .arrangement
+                    .columns
+                    .get(state.arrangement.active_column)
+                    .and_then(|c| g.column(c.id))
+            }) {
+                state.camera.viewport.set_target(column.world_x);
             }
         }
         vec![wid]
@@ -1540,17 +1846,66 @@ impl ScrollingLayoutSystem {
 }
 
 impl LayoutSystem for ScrollingLayoutSystem {
+    fn has_windows_for_app(&self, layout: LayoutId, pid: pid_t) -> bool {
+        self.layouts.get(layout).is_some_and(|state| {
+            state
+                .arrangement
+                .columns
+                .iter()
+                .any(|column| column.windows().any(|window| window.pid == pid))
+        })
+    }
+
+    fn window_participates(&self, window: WindowId) -> bool { !self.inactive.contains(&window) }
+
+    fn set_window_participation(&mut self, window: WindowId, participates: bool) -> bool {
+        let changed = super::update_participation(&mut self.inactive, window, participates);
+        if !changed {
+            return false;
+        }
+        // Before the first projection, discovery order must not replace the saved selection.
+        for state in self.layouts.values_mut().filter(|state| {
+            (!participates || state.geometry.is_some())
+                && state.arrangement.locate(window).is_some()
+        }) {
+            let previous_column = state.arrangement.active_column;
+            state.mutate(&self.settings, &self.inactive, |state| {
+                if state.camera.restored_view.is_none()
+                    && state.arrangement.selected(&self.inactive).is_none()
+                {
+                    state.arrangement.select_available_column(
+                        state.camera.transient_restore.as_ref().map(|bookmark| bookmark.column),
+                        &self.inactive,
+                    );
+                }
+            });
+            if state.arrangement.active_column != previous_column {
+                let selected_column = state.arrangement.columns[state.arrangement.active_column].id;
+                let restored = state
+                    .camera
+                    .transient_restore
+                    .take()
+                    .filter(|bookmark| bookmark.column == selected_column)
+                    .is_some_and(|bookmark| state.restore(bookmark));
+                if !restored {
+                    state.reveal(&self.settings);
+                }
+            }
+        }
+        true
+    }
+
     fn create_layout(&mut self) -> LayoutId { self.layouts.insert(LayoutState::default()) }
 
     fn contains_layout(&self, layout: LayoutId) -> bool { self.layouts.contains_key(layout) }
 
     fn clone_layout(&mut self, layout: LayoutId) -> LayoutId {
         let mut state = self.layouts.get(layout).cloned().unwrap_or_default();
-        if let Viewport::Pending { target, .. } = state.viewport {
-            state.viewport = Viewport::Static(target);
-        } else if matches!(state.viewport, Viewport::Animation(_)) {
-            let offset = state.viewport.offset();
-            state.viewport = Viewport::Static(
+        if let Viewport::Pending { target, .. } = state.camera.viewport {
+            state.camera.viewport = Viewport::Static(target);
+        } else if matches!(state.camera.viewport, Viewport::Animation(_)) {
+            let offset = state.camera.viewport.offset();
+            state.camera.viewport = Viewport::Static(
                 state.geometry.as_ref().map_or(offset, |g| offset.clamp(g.bounds.0, g.bounds.1)),
             );
         }
@@ -1559,44 +1914,568 @@ impl LayoutSystem for ScrollingLayoutSystem {
 
     fn remove_layout(&mut self, layout: LayoutId) { self.layouts.remove(layout); }
 
-    fn draw_tree(&self, layout: LayoutId) -> String {
+    fn prepare_layout(
+        &mut self,
+        layout: LayoutId,
+        screen: CGRect,
+        constraints: &HashMap<WindowId, WindowLayoutConstraints>,
+        gaps: &GapSettings,
+    ) {
+        self.prepare(layout, screen, constraints, None, gaps);
+    }
+
+    fn calculate_layout(
+        &self,
+        layout: LayoutId,
+        screen: CGRect,
+        _stack_offset: f64,
+        constraints: &HashMap<WindowId, WindowLayoutConstraints>,
+        gaps: &GapSettings,
+        _stack_line: crate::common::config::StackLineReserve,
+    ) -> Vec<(WindowId, CGRect)> {
+        self.calculate_frames(layout, screen, constraints, None, gaps, true)
+    }
+
+    fn selected_window(&self, layout: LayoutId) -> Option<WindowId> {
+        self.layouts.get(layout)?.arrangement.selected(&self.inactive)
+    }
+
+    fn window_in_direction(&self, layout: LayoutId, direction: Direction) -> Option<WindowId> {
+        let state = self.layouts.get(layout)?;
+        let (col, row) = state.arrangement.selected_location(&self.inactive)?;
+        let selected = |column: &Column| {
+            column
+                .selected()
+                .filter(|w| !self.inactive.contains(w))
+                .or_else(|| column.windows().copied().find(|w| !self.inactive.contains(w)))
+        };
+        match direction {
+            Direction::Left => state.arrangement.columns[..col].iter().rev().find_map(selected),
+            Direction::Right => state.arrangement.columns[col + 1..].iter().find_map(selected),
+            Direction::Up => state.arrangement.columns[col].rows[..row]
+                .iter()
+                .map(|row| &row.window)
+                .rev()
+                .copied()
+                .find(|w| !self.inactive.contains(w)),
+            Direction::Down => state.arrangement.columns[col].rows[row + 1..]
+                .iter()
+                .map(|row| &row.window)
+                .copied()
+                .find(|w| !self.inactive.contains(w)),
+        }
+    }
+
+    fn contains_window(&self, layout: LayoutId, wid: WindowId) -> bool {
+        self.layouts
+            .get(layout)
+            .is_some_and(|state| state.arrangement.locate(wid).is_some())
+    }
+
+    fn has_any_fullscreen_node(&self, layout: LayoutId) -> bool {
+        self.layouts
+            .get(layout)
+            .is_some_and(|s| s.arrangement.fullscreen.keys().any(|w| !self.inactive.contains(w)))
+    }
+
+    fn parent_of_selection_is_stacked(&self, layout: LayoutId) -> bool {
+        self.layouts
+            .get(layout)
+            .and_then(|s| s.arrangement.columns.get(s.arrangement.active_column))
+            .is_some_and(|c| c.rows.len() > 1)
+    }
+
+    fn windows(&self, layout: LayoutId, query: WindowQuery) -> Vec<WindowId> {
+        match query {
+            WindowQuery::All | WindowQuery::Visible => self
+                .layouts
+                .get(layout)
+                .into_iter()
+                .flat_map(|state| state.arrangement.windows())
+                .filter(|&window| {
+                    matches!(query, WindowQuery::All) || self.window_participates(window)
+                })
+                .collect(),
+            WindowQuery::Selection => self.visible_windows_under_selection(layout),
+            WindowQuery::Stack(_) => Vec::new(),
+        }
+    }
+
+    fn focus(&mut self, layout: LayoutId, focus: Focus) -> FocusResult {
+        match focus {
+            Focus::Select(window) => FocusResult::selection(self.select_window(layout, window)),
+            Focus::Ascend => {
+                FocusResult::selection({ self.move_focus(layout, Direction::Up).0.is_some() })
+            }
+            Focus::Descend => {
+                FocusResult::selection({ self.move_focus(layout, Direction::Down).0.is_some() })
+            }
+            Focus::Direction(direction) => {
+                FocusResult::movement(self.move_focus(layout, direction))
+            }
+        }
+    }
+
+    fn update(&mut self, change: WindowChange<'_>) {
+        match change {
+            WindowChange::Add(layout, window, _) => self.insert(layout, window),
+            WindowChange::Remove(window) | WindowChange::RemoveAndRebalance(window) => {
+                self.inactive.remove(&window);
+                for state in self.layouts.values_mut() {
+                    Self::remove_from_state(state, &self.settings, window, &self.inactive);
+                }
+            }
+            WindowChange::Replace(from, to) => {
+                super::replace_participation(&mut self.inactive, from, to);
+                for state in self
+                    .layouts
+                    .values_mut()
+                    .filter(|state| state.arrangement.locate(from).is_some())
+                {
+                    state.mutate(&self.settings, &self.inactive, |state| {
+                        for column in &mut state.arrangement.columns {
+                            for window in column.rows.iter_mut().map(|row| &mut row.window) {
+                                if *window == from {
+                                    *window = to;
+                                }
+                            }
+                        }
+                        if let Some(mode) = state.arrangement.fullscreen.remove(&from) {
+                            state.arrangement.fullscreen.insert(to, mode);
+                        }
+                    });
+                }
+            }
+            WindowChange::CloseApp(pid) => {
+                self.inactive.retain(|w| w.pid != pid);
+                for state in self.layouts.values_mut() {
+                    let closing: Vec<_> =
+                        state.arrangement.windows().filter(|w| w.pid == pid).collect();
+                    for wid in closing {
+                        Self::remove_from_state(state, &self.settings, wid, &self.inactive);
+                    }
+                }
+            }
+            WindowChange::Resize {
+                layout,
+                window,
+                old,
+                new,
+                screen,
+                gaps,
+            } => {
+                let wid = window;
+                let old_frame = old;
+                let new_frame = new;
+
+                if !self.window_participates(wid) {
+                    return;
+                }
+                let Some(state) = self.layouts.get_mut(layout) else {
+                    return;
+                };
+                let Some((col, row)) = state.arrangement.locate(wid) else {
+                    return;
+                };
+                let width_changed = (new_frame.size.width - old_frame.size.width).abs() > 0.5;
+                let height_changed = (new_frame.size.height - old_frame.size.height).abs() > 0.5;
+                if !width_changed && !height_changed {
+                    return;
+                }
+                let tiling = compute_tiling_area(screen, gaps);
+                state.mutate(&self.settings, &self.inactive, |state| {
+                    // Display moves can resize only the height. Keep the requested width
+                    // (including preserved pixel widths) unless the width actually changed.
+                    if width_changed {
+                        state.arrangement.columns[col].width =
+                            ColumnWidth::Proportion(clamp_ratio(
+                                width_ratio(
+                                    tiling.size.width,
+                                    gaps.inner.horizontal,
+                                    new_frame.size.width,
+                                ),
+                                &self.settings,
+                            ));
+                    }
+                    let column = &mut state.arrangement.columns[col];
+                    if height_changed && column.rows.len() > 1 {
+                        let total = (tiling.size.height
+                            - gaps.inner.vertical * column.rows.len().saturating_sub(1) as f64)
+                            .max(1.0);
+                        set_height_share(
+                            column,
+                            row,
+                            (new_frame.size.height / total).clamp(0.05, 0.95),
+                            total,
+                        );
+                    }
+                });
+            }
+        }
+    }
+
+    fn edit_layout(&mut self, layout: LayoutId, edit: LayoutEdit) -> EditResult {
+        match edit {
+            LayoutEdit::Move {
+                direction,
+                has_display_neighbor: _,
+            } => EditResult::from(self.move_selection(layout, direction)),
+            LayoutEdit::Fullscreen { within_gaps } => {
+                EditResult::Raise(self.toggle_fullscreen(layout, within_gaps))
+            }
+            LayoutEdit::Swap(a, b) => EditResult::from(self.swap_windows(layout, a, b)),
+            LayoutEdit::Drop { source, target, action } => {
+                EditResult::from(self.apply_target_drop(layout, source, target, action))
+            }
+            LayoutEdit::Group(GroupEdit::Join(direction)) => {
+                EditResult::from(self.join_selection_with_direction(layout, direction))
+            }
+            LayoutEdit::Group(GroupEdit::ConsumeOrExpel(direction)) => {
+                if !matches!(direction, Direction::Left | Direction::Right) {
+                    return EditResult::Unchanged;
+                }
+                EditResult::from(if self.parent_of_selection_is_stacked(layout) {
+                    self.move_selection(layout, direction)
+                } else {
+                    self.join_selection_with_direction(layout, direction)
+                })
+            }
+            LayoutEdit::Group(GroupEdit::Stack(orientation)) => EditResult::Raise({
+                let _orientation = orientation;
+
+                let Some((state, col, _)) =
+                    Self::selected_mut(&mut self.layouts, layout, &self.inactive)
+                else {
+                    return EditResult::Raise(Vec::new());
+                };
+                let target = if col + 1 < state.arrangement.columns.len() {
+                    col + 1
+                } else if col > 0 {
+                    col - 1
+                } else {
+                    return EditResult::Raise(Vec::new());
+                };
+                let moved =
+                    state.arrangement.columns[target].windows().copied().collect::<Vec<_>>();
+                let selected = state.arrangement.selected(&self.inactive).unwrap();
+                state.camera.transient_restore = None;
+                state.mutate(&self.settings, &self.inactive, |state| {
+                    let mut neighbor = state.arrangement.columns.remove(target);
+                    let column = &mut state.arrangement.columns[col - usize::from(target < col)];
+                    column.rows.append(&mut neighbor.rows);
+                    state.arrangement.activate(selected);
+                });
+                moved
+            }),
+            LayoutEdit::Group(GroupEdit::Unstack(orientation)) => EditResult::Raise({
+                let _orientation = orientation;
+
+                let Some((state, col, _)) =
+                    Self::selected_mut(&mut self.layouts, layout, &self.inactive)
+                else {
+                    return EditResult::Raise(Vec::new());
+                };
+                let selected = state.arrangement.selected(&self.inactive).unwrap();
+                let moved: Vec<_> = state.arrangement.columns[col]
+                    .windows()
+                    .copied()
+                    .filter(|w| *w != selected)
+                    .collect();
+                state.camera.transient_restore = None;
+                state.mutate(&self.settings, &self.inactive, |state| {
+                    for (index, &wid) in moved.iter().enumerate() {
+                        let (width, weight) =
+                            state.arrangement.detach(wid, &self.inactive).unwrap();
+                        state.arrangement.new_column(col + 1 + index, wid, width, weight);
+                    }
+                    state.arrangement.activate(selected);
+                });
+                moved
+            }),
+            LayoutEdit::Group(GroupEdit::Unjoin) => EditResult::from(
+                self.parent_of_selection_is_stacked(layout)
+                    && self.move_selection(layout, Direction::Right),
+            ),
+            LayoutEdit::Resize { amount, orientation } => {
+                if !amount.is_finite() {
+                    return EditResult::Unchanged;
+                }
+                let Some((state, col, row)) =
+                    Self::selected_mut(&mut self.layouts, layout, &self.inactive)
+                else {
+                    return EditResult::Unchanged;
+                };
+                let vertical = orientation == ResizeOrientation::Vertical
+                    || (orientation == ResizeOrientation::Smart
+                        && state.arrangement.columns[col].rows.len() > 1);
+                state.mutate(&self.settings, &self.inactive, |state| {
+                    let column = &mut state.arrangement.columns[col];
+                    if vertical {
+                        if column.rows.len() > 1 {
+                            let total: f64 = column.rows.iter().map(|row| row.height).sum();
+                            let share =
+                                (column.rows[row].height / total + amount).clamp(0.05, 0.95);
+                            set_height_share(column, row, share, total.max(10_000.0));
+                        }
+                    } else {
+                        let ratio = state
+                            .geometry
+                            .as_ref()
+                            .and_then(|g| {
+                                g.column(column.id).map(|c| {
+                                    width_ratio(
+                                        g.tiling.size.width,
+                                        g.gaps.inner.horizontal,
+                                        c.width,
+                                    )
+                                })
+                            })
+                            .unwrap_or(match column.width {
+                                ColumnWidth::Proportion(r) => r,
+                                _ => self.settings.column_width_ratio,
+                            });
+                        column.width =
+                            ColumnWidth::Proportion(clamp_ratio(ratio + amount, &self.settings));
+                    }
+                });
+                if !vertical {
+                    state.reveal(&self.settings);
+                };
+                EditResult::Changed
+            }
+            _ => EditResult::Unsupported,
+        }
+    }
+}
+
+impl ScrollingLayoutSystem {
+    fn visible_windows_under_selection(&self, layout: LayoutId) -> Vec<WindowId> {
+        self.layouts
+            .get(layout)
+            .and_then(|s| s.arrangement.columns.get(s.arrangement.active_column))
+            .map(|c| c.windows().copied().filter(|w| self.window_participates(*w)).collect())
+            .unwrap_or_default()
+    }
+
+    fn move_focus(
+        &mut self,
+        layout: LayoutId,
+        direction: Direction,
+    ) -> (Option<WindowId>, Vec<WindowId>) {
+        let Some(wid) = self.window_in_direction(layout, direction) else {
+            return (None, Vec::new());
+        };
+        self.select_window(layout, wid);
+        (Some(wid), self.visible_windows_under_selection(layout))
+    }
+
+    fn select_window(&mut self, layout: LayoutId, wid: WindowId) -> bool {
+        if !self.window_participates(wid) {
+            return false;
+        }
+        let Some(state) = self.layouts.get_mut(layout) else {
+            return false;
+        };
+        if state.arrangement.selected(&self.inactive) == Some(wid) {
+            return true;
+        }
+        if !state.arrangement.activate(wid) {
+            return false;
+        }
+        state.camera.restored_view = None;
+        state.camera.transient_restore = None;
+        if state.camera.fullscreen_restore.as_ref().is_some_and(|b| {
+            b.column != state.arrangement.columns[state.arrangement.active_column].id
+        }) {
+            state.camera.fullscreen_restore = None;
+        }
+        state.reveal(&self.settings);
+        true
+    }
+
+    fn swap_windows(&mut self, layout: LayoutId, a: WindowId, b: WindowId) -> bool {
+        if !self.window_participates(a) || !self.window_participates(b) {
+            return false;
+        }
+        let Some(state) = self.layouts.get_mut(layout) else {
+            return false;
+        };
+        let (Some((ac, ar)), Some((bc, br))) =
+            (state.arrangement.locate(a), state.arrangement.locate(b))
+        else {
+            return false;
+        };
+        state.mutate(&self.settings, &self.inactive, |state| {
+            let selected = state.arrangement.selected(&self.inactive);
+            let a = state.arrangement.columns[ac].rows[ar];
+            let b = state.arrangement.columns[bc].rows[br];
+            state.arrangement.columns[ac].rows[ar] = b;
+            state.arrangement.columns[bc].rows[br] = a;
+            if let Some(wid) = selected {
+                state.arrangement.activate(wid);
+            }
+        });
+        true
+    }
+
+    fn apply_target_drop(
+        &mut self,
+        layout: LayoutId,
+        source: WindowId,
+        target: WindowId,
+        action: WindowDropAction,
+    ) -> bool {
+        if !self.window_participates(source) || !self.window_participates(target) {
+            return false;
+        }
+        if let WindowDropAction::Move(direction) = action {
+            return self.select_window(layout, source) && self.move_selection(layout, direction);
+        }
+        if action == WindowDropAction::Swap {
+            return self.swap_windows(layout, source, target);
+        }
+        let Some(state) = self.layouts.get_mut(layout) else {
+            return false;
+        };
+        state.camera.transient_restore = None;
+        state.mutate(&self.settings, &self.inactive, |s| {
+            s.arrangement.transfer(source, target, action, &self.inactive)
+        })
+    }
+
+    pub(in crate::layout_engine) fn can_move_window(
+        &self,
+        layout: LayoutId,
+        window: WindowId,
+        direction: Direction,
+    ) -> bool {
+        self.window_participates(window)
+            && self.layouts.get(layout).is_some_and(|state| {
+                state.arrangement.locate(window).is_some_and(|slot| {
+                    state.arrangement.move_destination(slot, direction, &self.inactive).is_some()
+                })
+            })
+    }
+
+    fn move_selection(&mut self, layout: LayoutId, direction: Direction) -> bool {
+        let Some(state) = self.layouts.get_mut(layout) else {
+            return false;
+        };
+        let Some((col, row)) = state.arrangement.selected_location(&self.inactive) else {
+            return false;
+        };
+        let Some(destination) =
+            state.arrangement.move_destination((col, row), direction, &self.inactive)
+        else {
+            return false;
+        };
+        state.camera.transient_restore = None;
+        let viewport = (!matches!(destination, MoveDestination::Row(_)))
+            .then(|| state.camera.viewport.clone());
+        state.mutate(&self.settings, &self.inactive, |state| {
+            let arrangement = &mut state.arrangement;
+            match destination {
+                MoveDestination::NewColumn(target) => {
+                    let window = arrangement.columns[col].rows[row].window;
+                    let (width, weight) = arrangement.detach(window, &self.inactive).unwrap();
+                    arrangement.new_column(target, window, width, weight);
+                }
+                MoveDestination::Column(target) => {
+                    arrangement.columns.swap(col, target);
+                    arrangement.active_column = target;
+                }
+                MoveDestination::Row(target) => {
+                    let column = &mut arrangement.columns[col];
+                    column.rows.swap(row, target);
+                    column.active_window = target;
+                }
+            }
+        });
+        if let Some(viewport) = viewport {
+            state.camera.viewport = viewport;
+            state.reconcile_camera_bounds();
+            state.reveal(&self.settings);
+        }
+        true
+    }
+
+    fn join_selection_with_direction(&mut self, layout: LayoutId, direction: Direction) -> bool {
+        if !matches!(direction, Direction::Left | Direction::Right) {
+            return false;
+        }
+        let Some(target) = self.window_in_direction(layout, direction) else {
+            return false;
+        };
+        let Some(source) = self.selected_window(layout) else {
+            return false;
+        };
+        self.apply_target_drop(layout, source, target, WindowDropAction::Stack)
+    }
+}
+
+fn set_height_share(column: &mut Column, row: usize, share: f64, scale: f64) {
+    let other: f64 = column
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != row)
+        .map(|(_, r)| r.height)
+        .sum();
+    let others = column.rows.len().saturating_sub(1).max(1) as f64;
+    for (index, r) in column.rows.iter_mut().enumerate() {
+        r.height = if index == row {
+            share * scale
+        } else if other > 0.0 {
+            (1.0 - share) * scale * r.height / other
+        } else {
+            (1.0 - share) * scale / others
+        };
+    }
+}
+
+impl ScrollingLayoutSystem {
+    pub(crate) fn draw_tree(&self, layout: LayoutId) -> String {
         let Some(state) = self.layouts.get(layout) else {
             return String::new();
         };
         state
+            .arrangement
             .columns
             .iter()
             .enumerate()
             .map(|(index, col)| {
-                format!(
-                    "Column {index}: {:?} active={}\n",
-                    col.windows, col.active_window
-                )
+                format!("Column {index}: {:?} active={}\n", col.rows, col.active_window)
             })
             .collect()
     }
 
-    fn container_tree(&self, layout: LayoutId) -> rift_protocol::ContainerTreeNode {
+    pub(crate) fn container_tree(&self, layout: LayoutId) -> rift_protocol::ContainerTreeNode {
         let state = self.layouts.get(layout).expect("unknown scrolling layout");
+        let selected = state.arrangement.selected(&self.inactive);
         let children = state
+            .arrangement
             .columns
             .iter()
             .map(|column| {
                 let windows = column
-                    .windows
+                    .rows
                     .iter()
-                    .enumerate()
-                    .map(|(index, &window)| rift_protocol::ContainerTreeNode {
-                        node_id: (((window.pid as u32 as u64) << 32) | u64::from(window.idx.get()))
+                    .map(|&Row { window, height }| {
+                        let fullscreen = state.arrangement.fullscreen.get(&window);
+                        rift_protocol::ContainerTreeNode {
+                            node_id: (((window.pid as u32 as u64) << 32)
+                                | u64::from(window.idx.get()))
                             .rotate_left(1)
-                            | 1,
-                        node_type: rift_protocol::ContainerNodeType::Window,
-                        weight: Some(column.height_weights.get(index).copied().unwrap_or(1.0)),
-                        window_id: Some(window.into()),
-                        is_selected: state.selected() == Some(window),
-                        is_fullscreen: state.fullscreen.contains(&window),
-                        is_fullscreen_within_gaps: state.fullscreen_within_gaps.contains(&window),
-                        ..Default::default()
+                                | 1,
+                            node_type: rift_protocol::ContainerNodeType::Window,
+                            weight: Some(height),
+                            window_id: Some(window.into()),
+                            is_selected: selected == Some(window),
+                            is_fullscreen: fullscreen == Some(&FullscreenMode::Screen),
+                            is_fullscreen_within_gaps: fullscreen
+                                == Some(&FullscreenMode::WithinGaps),
+                            ..Default::default()
+                        }
                     })
                     .collect();
                 rift_protocol::ContainerTreeNode {
@@ -1616,494 +2495,9 @@ impl LayoutSystem for ScrollingLayoutSystem {
         }
     }
 
-    /// Environmental changes are explicit mutations, never side effects of frame reads.
-    fn prepare_layout(
-        &mut self,
-        layout: LayoutId,
-        screen: CGRect,
-        constraints: &HashMap<WindowId, WindowLayoutConstraints>,
-        gaps: &GapSettings,
-    ) {
-        let Some(state) = self.layouts.get_mut(layout) else {
-            return;
-        };
-        state.prepare_geometry(&self.settings, screen, constraints, gaps);
-    }
-
-    fn calculate_layout(
-        &self,
-        layout: LayoutId,
-        screen: CGRect,
-        _stack_offset: f64,
-        constraints: &HashMap<WindowId, WindowLayoutConstraints>,
-        gaps: &GapSettings,
-        _stack_line: crate::common::config::StackLineReserve,
-    ) -> Vec<(WindowId, CGRect)> {
-        self.calculate_frames(layout, screen, constraints, gaps, true)
-    }
-
-    fn selected_window(&self, layout: LayoutId) -> Option<WindowId> {
-        self.layouts.get(layout)?.selected()
-    }
-
-    fn all_windows_in_layout(&self, layout: LayoutId) -> Vec<WindowId> {
-        self.layouts.get(layout).map(LayoutState::all_windows).unwrap_or_default()
-    }
-
-    fn window_slot(&self, layout: LayoutId, window: WindowId) -> Option<Vec<usize>> {
-        let (col, row) = self.layouts.get(layout)?.locate(window)?;
+    pub(crate) fn window_slot(&self, layout: LayoutId, window: WindowId) -> Option<Vec<usize>> {
+        let (col, row) = self.layouts.get(layout)?.arrangement.locate(window)?;
         Some(vec![col, row])
-    }
-
-    fn visible_windows_in_layout(&self, layout: LayoutId) -> Vec<WindowId> {
-        self.all_windows_in_layout(layout)
-    }
-
-    fn visible_windows_under_selection(&self, layout: LayoutId) -> Vec<WindowId> {
-        self.layouts
-            .get(layout)
-            .and_then(|s| s.columns.get(s.active_column))
-            .map(|c| c.windows.clone())
-            .unwrap_or_default()
-    }
-
-    fn ascend_selection(&mut self, layout: LayoutId) -> bool {
-        self.move_focus(layout, Direction::Up).0.is_some()
-    }
-
-    fn descend_selection(&mut self, layout: LayoutId) -> bool {
-        self.move_focus(layout, Direction::Down).0.is_some()
-    }
-
-    fn move_focus(
-        &mut self,
-        layout: LayoutId,
-        direction: Direction,
-    ) -> (Option<WindowId>, Vec<WindowId>) {
-        let Some(wid) = self.window_in_direction(layout, direction) else {
-            return (None, Vec::new());
-        };
-        self.select_window(layout, wid);
-        (Some(wid), self.visible_windows_under_selection(layout))
-    }
-
-    fn window_in_direction(&self, layout: LayoutId, direction: Direction) -> Option<WindowId> {
-        let state = self.layouts.get(layout)?;
-        let (col, row) = state.selected_location()?;
-        match direction {
-            Direction::Left => state.columns.get(col.checked_sub(1)?)?.selected(),
-            Direction::Right => state.columns.get(col + 1)?.selected(),
-            Direction::Up => state.columns[col].windows.get(row.checked_sub(1)?).copied(),
-            Direction::Down => state.columns[col].windows.get(row + 1).copied(),
-        }
-    }
-
-    fn add_window_after_selection(&mut self, layout: LayoutId, wid: WindowId) {
-        self.insert(layout, wid);
-    }
-
-    fn replace_window(&mut self, from: WindowId, to: WindowId) {
-        for state in self.layouts.values_mut() {
-            state.mutate(&self.settings, |state| {
-                for column in &mut state.columns {
-                    for window in &mut column.windows {
-                        if *window == from {
-                            *window = to;
-                        }
-                    }
-                }
-                if state.fullscreen.remove(&from) {
-                    state.fullscreen.insert(to);
-                }
-                if state.fullscreen_within_gaps.remove(&from) {
-                    state.fullscreen_within_gaps.insert(to);
-                }
-            });
-        }
-    }
-
-    fn remove_window(&mut self, wid: WindowId) {
-        for state in self.layouts.values_mut() {
-            Self::remove_from_state(state, &self.settings, wid);
-        }
-    }
-
-    fn remove_windows_for_app(&mut self, pid: pid_t) {
-        for state in self.layouts.values_mut() {
-            for wid in state.all_windows().into_iter().filter(|w| w.pid == pid) {
-                Self::remove_from_state(state, &self.settings, wid);
-            }
-        }
-    }
-
-    fn set_windows_for_app(&mut self, layout: LayoutId, pid: pid_t, desired: Vec<WindowId>) {
-        let current = self.windows_for_app(layout, pid);
-        let delta = reconcile_app_membership(pid, current, desired);
-        if let Some(state) = self.layouts.get_mut(layout) {
-            for wid in delta.removals {
-                Self::remove_from_state(state, &self.settings, wid);
-            }
-        }
-        for wid in delta.additions {
-            self.insert(layout, wid);
-        }
-    }
-
-    fn contains_window(&self, layout: LayoutId, wid: WindowId) -> bool {
-        self.layouts.get(layout).is_some_and(|state| state.locate(wid).is_some())
-    }
-
-    fn select_window(&mut self, layout: LayoutId, wid: WindowId) -> bool {
-        let Some(state) = self.layouts.get_mut(layout) else {
-            return false;
-        };
-        if state.selected() == Some(wid) {
-            return true;
-        }
-        if !state.activate(wid) {
-            return false;
-        }
-        state.transient_restore = None;
-        if state
-            .fullscreen_restore
-            .as_ref()
-            .is_some_and(|b| b.column != state.columns[state.active_column].id)
-        {
-            state.fullscreen_restore = None;
-        }
-        state.reveal(&self.settings);
-        true
-    }
-
-    fn on_window_resized(
-        &mut self,
-        layout: LayoutId,
-        wid: WindowId,
-        _old_frame: CGRect,
-        new_frame: CGRect,
-        screen: CGRect,
-        gaps: &GapSettings,
-    ) {
-        let Some(state) = self.layouts.get_mut(layout) else {
-            return;
-        };
-        let Some((col, row)) = state.locate(wid) else {
-            return;
-        };
-        let tiling = compute_tiling_area(screen, gaps);
-        state.mutate(&self.settings, |state| {
-            state.columns[col].width = ColumnWidth::Proportion(clamp_ratio(
-                width_ratio(tiling.size.width, gaps.inner.horizontal, new_frame.size.width),
-                &self.settings,
-            ));
-            let column = &mut state.columns[col];
-            if column.windows.len() > 1 {
-                let total = (tiling.size.height
-                    - gaps.inner.vertical * column.windows.len().saturating_sub(1) as f64)
-                    .max(1.0);
-                set_height_share(
-                    column,
-                    row,
-                    (new_frame.size.height / total).clamp(0.05, 0.95),
-                    total,
-                );
-            }
-        });
-    }
-
-    fn swap_windows(&mut self, layout: LayoutId, a: WindowId, b: WindowId) -> bool {
-        let Some(state) = self.layouts.get_mut(layout) else {
-            return false;
-        };
-        let (Some((ac, ar)), Some((bc, br))) = (state.locate(a), state.locate(b)) else {
-            return false;
-        };
-        state.mutate(&self.settings, |state| {
-            let selected = state.selected();
-            let aw = state.columns[ac].height_weights[ar];
-            let bw = state.columns[bc].height_weights[br];
-            state.columns[ac].windows[ar] = b;
-            state.columns[bc].windows[br] = a;
-            state.columns[ac].height_weights[ar] = bw;
-            state.columns[bc].height_weights[br] = aw;
-            if let Some(wid) = selected {
-                state.activate(wid);
-            }
-        });
-        true
-    }
-
-    fn apply_target_drop(
-        &mut self,
-        layout: LayoutId,
-        source: WindowId,
-        target: WindowId,
-        action: WindowDropAction,
-    ) -> bool {
-        if let WindowDropAction::Move(direction) = action {
-            return self.select_window(layout, source) && self.move_selection(layout, direction);
-        }
-        if action == WindowDropAction::Swap {
-            return self.swap_windows(layout, source, target);
-        }
-        let Some(state) = self.layouts.get_mut(layout) else {
-            return false;
-        };
-        state.transient_restore = None;
-        state.mutate(&self.settings, |s| s.transfer(source, target, action))
-    }
-
-    fn move_selection(&mut self, layout: LayoutId, direction: Direction) -> bool {
-        let Some(state) = self.layouts.get_mut(layout) else {
-            return false;
-        };
-        state.transient_restore = None;
-        let horizontal = matches!(direction, Direction::Left | Direction::Right);
-        let viewport = horizontal.then(|| state.viewport.clone());
-        let moved = state.mutate(&self.settings, |state| {
-            let Some((col, row)) = state.selected_location() else {
-                return false;
-            };
-            if horizontal && state.columns[col].windows.len() > 1 {
-                let wid = state.selected().unwrap();
-                let (width, weight) = state.detach(wid).unwrap();
-                state.new_column(
-                    col + usize::from(direction == Direction::Right),
-                    wid,
-                    width,
-                    weight,
-                );
-                return true;
-            }
-            let (index, len) = if horizontal {
-                (col, state.columns.len())
-            } else {
-                (row, state.columns[col].windows.len())
-            };
-            let target = match direction {
-                Direction::Left | Direction::Up => index.checked_sub(1),
-                Direction::Right | Direction::Down => (index + 1 < len).then_some(index + 1),
-            };
-            let Some(target) = target else {
-                return false;
-            };
-            if horizontal {
-                state.columns.swap(col, target);
-                state.active_column = target;
-            } else {
-                let column = &mut state.columns[col];
-                column.windows.swap(row, target);
-                column.height_weights.swap(row, target);
-                column.active_window = target;
-            }
-            true
-        });
-        if let Some(viewport) = viewport {
-            state.viewport = viewport;
-            state.reconcile_camera_bounds();
-            if moved {
-                state.reveal(&self.settings);
-            }
-        }
-        moved
-    }
-
-    fn move_selection_to_layout_after_selection(&mut self, from: LayoutId, to: LayoutId) {
-        if from == to || !self.layouts.contains_key(to) {
-            return;
-        }
-        let Some(wid) = self.selected_window(from) else {
-            return;
-        };
-        let fullscreen = self.layouts[from].fullscreen.remove(&wid);
-        let within_gaps = self.layouts[from].fullscreen_within_gaps.remove(&wid);
-        self.layouts[from].transient_restore = None;
-        let fullscreen_restore = self.layouts[from].fullscreen_restore.clone();
-        let (width, weight) = self.layouts[from].mutate(&self.settings, |s| s.detach(wid)).unwrap();
-        if !self.layouts[from].restore_fullscreen_view() {
-            self.layouts[from].reveal(&self.settings);
-        }
-        self.layouts[to].mutate(&self.settings, |s| {
-            let index = s.selected_location().map_or(0, |(col, _)| col + 1);
-            s.new_column(index, wid, width, weight);
-            if fullscreen {
-                s.fullscreen.insert(wid);
-            }
-            if within_gaps {
-                s.fullscreen_within_gaps.insert(wid);
-            }
-            s.fullscreen_restore =
-                fullscreen_restore.filter(|_| fullscreen || within_gaps).map(|bookmark| {
-                    ViewBookmark {
-                        column: s.columns[s.active_column].id,
-                        relative_offset: bookmark.relative_offset,
-                    }
-                });
-        });
-        self.layouts[to].reveal(&self.settings);
-    }
-
-    fn toggle_fullscreen_of_selection(&mut self, layout: LayoutId) -> Vec<WindowId> {
-        self.toggle_fullscreen(layout, false)
-    }
-
-    fn toggle_fullscreen_within_gaps_of_selection(&mut self, layout: LayoutId) -> Vec<WindowId> {
-        self.toggle_fullscreen(layout, true)
-    }
-
-    fn has_any_fullscreen_node(&self, layout: LayoutId) -> bool {
-        self.layouts
-            .get(layout)
-            .is_some_and(|s| !s.fullscreen.is_empty() || !s.fullscreen_within_gaps.is_empty())
-    }
-
-    fn join_selection_with_direction(&mut self, layout: LayoutId, direction: Direction) {
-        if !matches!(direction, Direction::Left | Direction::Right) {
-            return;
-        }
-        let Some(target) = self.window_in_direction(layout, direction) else {
-            return;
-        };
-        let Some(source) = self.selected_window(layout) else {
-            return;
-        };
-        self.apply_target_drop(layout, source, target, WindowDropAction::Stack);
-    }
-
-    fn consume_or_expel_selection(&mut self, layout: LayoutId, direction: Direction) {
-        if !matches!(direction, Direction::Left | Direction::Right) {
-            return;
-        }
-        if self.parent_of_selection_is_stacked(layout) {
-            self.move_selection(layout, direction);
-        } else {
-            self.join_selection_with_direction(layout, direction);
-        }
-    }
-
-    fn apply_stacking_to_parent_of_selection(
-        &mut self,
-        layout: LayoutId,
-        _orientation: crate::common::config::StackDefaultOrientation,
-    ) -> Vec<WindowId> {
-        let Some((state, col, _)) = Self::selected_mut(&mut self.layouts, layout) else {
-            return Vec::new();
-        };
-        let target = if col + 1 < state.columns.len() {
-            col + 1
-        } else if col > 0 {
-            col - 1
-        } else {
-            return Vec::new();
-        };
-        let moved = state.columns[target].windows.clone();
-        let selected = state.selected().unwrap();
-        state.transient_restore = None;
-        state.mutate(&self.settings, |state| {
-            let mut neighbor = state.columns.remove(target);
-            let column = &mut state.columns[col - usize::from(target < col)];
-            column.windows.append(&mut neighbor.windows);
-            column.height_weights.append(&mut neighbor.height_weights);
-            state.activate(selected);
-        });
-        moved
-    }
-
-    fn unstack_parent_of_selection(
-        &mut self,
-        layout: LayoutId,
-        _orientation: crate::common::config::StackDefaultOrientation,
-    ) -> Vec<WindowId> {
-        let Some((state, col, _)) = Self::selected_mut(&mut self.layouts, layout) else {
-            return Vec::new();
-        };
-        let selected = state.selected().unwrap();
-        let moved: Vec<_> =
-            state.columns[col].windows.iter().copied().filter(|w| *w != selected).collect();
-        state.transient_restore = None;
-        state.mutate(&self.settings, |state| {
-            for (index, &wid) in moved.iter().enumerate() {
-                let (width, weight) = state.detach(wid).unwrap();
-                state.new_column(col + 1 + index, wid, width, weight);
-            }
-            state.activate(selected);
-        });
-        moved
-    }
-
-    fn parent_of_selection_is_stacked(&self, layout: LayoutId) -> bool {
-        self.layouts
-            .get(layout)
-            .and_then(|s| s.columns.get(s.active_column))
-            .is_some_and(|c| c.windows.len() > 1)
-    }
-
-    fn unjoin_selection(&mut self, layout: LayoutId) {
-        if self.parent_of_selection_is_stacked(layout) {
-            self.move_selection(layout, Direction::Right);
-        }
-    }
-
-    fn resize_selection_by(
-        &mut self,
-        layout: LayoutId,
-        amount: f64,
-        orientation: ResizeOrientation,
-    ) {
-        if !amount.is_finite() {
-            return;
-        }
-        let Some((state, col, row)) = Self::selected_mut(&mut self.layouts, layout) else {
-            return;
-        };
-        let vertical = orientation == ResizeOrientation::Vertical
-            || (orientation == ResizeOrientation::Smart && state.columns[col].windows.len() > 1);
-        state.mutate(&self.settings, |state| {
-            let column = &mut state.columns[col];
-            if vertical {
-                if column.windows.len() > 1 {
-                    let total: f64 = column.height_weights.iter().sum();
-                    let share = (column.height_weights[row] / total + amount).clamp(0.05, 0.95);
-                    set_height_share(column, row, share, total.max(10_000.0));
-                }
-            } else {
-                let ratio = state
-                    .geometry
-                    .as_ref()
-                    .and_then(|g| {
-                        g.columns.get(col).map(|c| {
-                            width_ratio(g.tiling.size.width, g.gaps.inner.horizontal, c.width)
-                        })
-                    })
-                    .unwrap_or(match column.width {
-                        ColumnWidth::Proportion(r) => r,
-                        _ => self.settings.column_width_ratio,
-                    });
-                column.width = ColumnWidth::Proportion(clamp_ratio(ratio + amount, &self.settings));
-            }
-        });
-        if !vertical {
-            state.reveal(&self.settings);
-        }
-    }
-}
-
-fn set_height_share(column: &mut Column, row: usize, share: f64, scale: f64) {
-    let other: f64 = column
-        .height_weights
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| *i != row)
-        .map(|(_, w)| w)
-        .sum();
-    for (index, weight) in column.height_weights.iter_mut().enumerate() {
-        *weight = if index == row {
-            share * scale
-        } else if other > 0.0 {
-            (1.0 - share) * scale * *weight / other
-        } else {
-            (1.0 - share) * scale / column.windows.len().saturating_sub(1).max(1) as f64
-        };
     }
 }
 #[cfg(test)]
@@ -2126,7 +2520,6 @@ pub(crate) mod tests {
             .into_iter()
     }
     use super::*;
-    use crate::common::config::{ScrollingWidthOverride, StackDefaultOrientation};
 
     fn wid(index: u32) -> WindowId { WindowId::new(1, index) }
 
@@ -2150,7 +2543,7 @@ pub(crate) mod tests {
             let mut system = ScrollingLayoutSystem::new(&settings);
             let layout = system.create_layout();
             for index in 1..=count {
-                system.add_window_after_selection(layout, wid(index));
+                system.update(WindowChange::Add(layout, wid(index), None));
             }
             if count > 0 {
                 system.select_window(layout, wid(1));
@@ -2177,6 +2570,7 @@ pub(crate) mod tests {
                 self.layout,
                 self.screen,
                 &self.constraints,
+                None,
                 &self.gaps,
                 false,
             )
@@ -2192,326 +2586,17 @@ pub(crate) mod tests {
 
         fn selected(&self) -> Option<WindowId> { self.system.selected_window(self.layout) }
 
-        fn focus(&mut self, direction: Direction) -> Option<WindowId> {
-            self.system.move_focus(self.layout, direction).0
-        }
-
         fn drop(&mut self, source: u32, target: u32, action: WindowDropAction) {
-            assert!(self.system.apply_window_drop(self.layout, wid(source), wid(target), action));
+            assert!(
+                self.system
+                    .edit(self.layout, LayoutEdit::Drop {
+                        source: wid(source),
+                        target: wid(target),
+                        action: action
+                    })
+                    .changed()
+            );
         }
-    }
-
-    #[test]
-    fn unarranged_frame_queries_reveal_selection_without_moving_on_activation() {
-        let mut f = Fixture::new(0);
-        f.layout = f.system.create_layout();
-        for index in 1..=4 {
-            f.system.add_window_after_selection(f.layout, wid(index));
-        }
-        let query = |f: &Fixture| {
-            f.system.calculate_frames(f.layout, f.screen, &f.constraints, &f.gaps, false)
-        };
-        let before = query(&f);
-        let selected = before.iter().find(|(w, _)| *w == wid(4)).unwrap().1;
-        assert!(selected.origin.x >= 0.0 && selected.max().x <= 1000.0);
-        assert_eq!(query(&f), before);
-        f.prepare();
-        assert_eq!(query(&f), before);
-
-        let wider = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(1400.0, 800.0));
-        f.screen = wider;
-        let resized = query(&f);
-        f.prepare();
-        assert_eq!(query(&f), resized);
-    }
-
-    #[test]
-    fn preset_width_cycles_and_effective_width_search() {
-        for (width, backwards, expected) in [
-            (
-                ColumnWidth::Proportion(1.0 / 3.0),
-                false,
-                &[500.0, 667.0, 333.0][..],
-            ),
-            (ColumnWidth::Default, false, &[667.0][..]),
-            (ColumnWidth::Proportion(0.25), false, &[333.0][..]),
-            (ColumnWidth::Proportion(0.42), false, &[500.0][..]),
-            (ColumnWidth::Proportion(0.60), false, &[667.0][..]),
-            (ColumnWidth::Fixed(420.0), false, &[500.0][..]),
-            (ColumnWidth::Fixed(800.0), false, &[333.0][..]),
-            (ColumnWidth::Fixed(499.5), false, &[667.0][..]),
-            (ColumnWidth::Fixed(498.9), false, &[500.0][..]),
-            (
-                ColumnWidth::Proportion(1.0 / 3.0),
-                true,
-                &[667.0, 500.0, 333.0][..],
-            ),
-            (ColumnWidth::Fixed(420.0), true, &[333.0][..]),
-            (ColumnWidth::Fixed(200.0), true, &[667.0][..]),
-        ] {
-            let mut f = Fixture::new(1);
-            f.system.layouts[f.layout].mutate(&f.system.settings, |s| s.columns[0].width = width);
-            for &pixels in expected {
-                assert!(f.system.switch_preset_column_width(f.layout, backwards));
-                assert_eq!(f.frame(1).size.width, pixels);
-            }
-        }
-        let mut f = Fixture::new(1);
-        f.system.settings.preset_column_widths = vec![0.7, f64::NAN, 0.3, 0.5, 0.0];
-        for pixels in [700.0, 300.0, 500.0] {
-            assert!(f.system.switch_preset_column_width(f.layout, false));
-            assert_eq!(f.frame(1).size.width, pixels);
-        }
-        f.system.settings.preset_column_widths = vec![0.33333, 0.66667];
-        for pixels in [667.0, 333.0, 667.0, 333.0] {
-            assert!(f.system.switch_preset_column_width(f.layout, false));
-            assert_eq!(f.frame(1).size.width, pixels);
-        }
-        f.system.settings.preset_column_widths = vec![-1.0, f64::INFINITY];
-        assert!(!f.system.switch_preset_column_width(f.layout, false));
-    }
-
-    #[test]
-    fn semantic_presets_advance_despite_constrained_geometry() {
-        let mut f = Fixture::new(1);
-        f.constraints.insert(wid(1), WindowLayoutConstraints {
-            is_resizable: true,
-            max_width: 450.0,
-            ..Default::default()
-        });
-        f.system.resize_selection_by(f.layout, -0.08, ResizeOrientation::Horizontal);
-        f.prepare();
-        for ratio in [0.5, 2.0 / 3.0] {
-            assert!(f.system.switch_preset_column_width(f.layout, false));
-            assert!(matches!(f.system.layouts[f.layout].columns[0].width,
-                ColumnWidth::Proportion(r) if (r - ratio).abs() < 1e-6));
-            assert_eq!(f.frame(1).size.width, 450.0);
-        }
-        for (start, target) in [(0.5000005, 2.0 / 3.0), (0.500002, 0.5)] {
-            f.system.layouts[f.layout].mutate(&f.system.settings, |s| {
-                s.columns[0].width = ColumnWidth::Proportion(start);
-            });
-            assert!(f.system.switch_preset_column_width(f.layout, false));
-            assert!(matches!(f.system.layouts[f.layout].columns[0].width,
-                ColumnWidth::Proportion(r) if (r - target).abs() < 1e-6));
-        }
-    }
-
-    #[test]
-    fn preset_width_preserves_stack_selection_and_fullscreen_restore() {
-        let mut f = Fixture::new(2);
-        f.drop(2, 1, WindowDropAction::Stack);
-        f.system.resize_selection_by(f.layout, 0.1, ResizeOrientation::Vertical);
-        f.gaps.inner.horizontal = 20.0;
-        let before = f.frames();
-        let weights = f.system.layouts[f.layout].columns[0].height_weights.clone();
-        for _ in 0..3 {
-            assert!(f.system.switch_preset_column_width(f.layout, false));
-        }
-        assert_eq!(f.frames(), before); // Same membership, row heights and gap-aware half width.
-        assert_eq!(f.frame(1).size.width, 490.0);
-        assert_eq!(f.selected(), Some(wid(2)));
-        assert_eq!(f.system.layouts[f.layout].columns[0].height_weights, weights);
-        for within_gaps in [false, true] {
-            f.system.toggle_fullscreen(f.layout, within_gaps);
-            assert!(f.system.switch_preset_column_width(f.layout, false));
-            assert_eq!(f.frame(2), f.screen);
-            f.system.toggle_fullscreen(f.layout, within_gaps);
-            assert_eq!(f.frame(2).size.width, 660.0);
-            assert_eq!(f.selected(), Some(wid(2)));
-            for _ in 0..2 {
-                assert!(f.system.switch_preset_column_width(f.layout, false));
-            }
-        }
-        assert!(f.system.begin_viewport_gesture(f.layout, Instant::now()));
-        assert!(f.system.switch_preset_column_width(f.layout, false));
-        assert_eq!(f.selected(), Some(wid(2)));
-        assert_eq!(
-            f.system.update_viewport_gesture(f.layout, 10.0, Duration::ZERO),
-            None
-        );
-    }
-
-    #[test]
-    fn single_column_expansion_restores_width_across_topology_and_settings_changes() {
-        let mut f = Fixture::new(1);
-        f.gaps.outer.left = 20.0;
-        f.gaps.outer.right = 30.0;
-        let mut settings = f.system.settings.clone();
-        settings.expand_single_column = true;
-        f.system.update_settings(&settings);
-        assert_eq!(f.frame(1).size.width, 950.0);
-        assert_eq!(f.frame(1).origin.x, 20.0);
-
-        // A preset chosen while expanded survives the temporary geometry override.
-        assert!(f.system.switch_preset_column_width(f.layout, false));
-        assert_eq!(f.frame(1).size.width, 950.0);
-        f.system.add_window_after_selection(f.layout, wid(2));
-        assert_eq!(f.frame(1).size.width, 317.0);
-        assert_eq!(f.frame(2).size.width, 475.0);
-
-        // Multiple windows in one column still expand, retaining vertical layout.
-        f.drop(2, 1, WindowDropAction::Stack);
-        assert_eq!(f.frame(1).size, CGSize::new(950.0, 400.0));
-        assert_eq!(f.frame(2).size, CGSize::new(950.0, 400.0));
-        f.system.remove_window(wid(2));
-        assert_eq!(f.frame(1).size, CGSize::new(950.0, 800.0));
-
-        settings.expand_single_column = false;
-        f.system.update_settings(&settings);
-        assert_eq!(f.frame(1).size.width, 317.0);
-    }
-
-    #[test]
-    fn single_column_expansion_respects_window_width_constraints() {
-        for (constraints, width) in [
-            (
-                WindowLayoutConstraints {
-                    is_resizable: true,
-                    max_width: 600.0,
-                    ..Default::default()
-                },
-                600.0,
-            ),
-            (
-                WindowLayoutConstraints {
-                    locked_width: 350.0,
-                    ..Default::default()
-                },
-                350.0,
-            ),
-        ] {
-            let mut f = Fixture::new(1);
-            let mut settings = f.system.settings.clone();
-            settings.expand_single_column = true;
-            f.system.update_settings(&settings);
-            f.constraints.insert(wid(1), constraints);
-            assert_eq!(f.frame(1).size.width, width);
-        }
-    }
-
-    #[test]
-    fn half_width_single_column_and_visible_focus_do_not_expand_or_shift() {
-        let mut f = Fixture::new(1);
-        assert_eq!(f.frame(1).size.width, 500.0);
-        f.system.add_window_after_selection(f.layout, wid(2));
-        let before = f.frames();
-        f.focus(Direction::Left);
-        assert_eq!(f.frames(), before);
-        f.focus(Direction::Right);
-        assert_eq!(f.frames(), before);
-        assert_eq!(f.frame(1).origin.x, 0.0);
-        assert_eq!(f.frame(2).origin.x, 500.0);
-    }
-
-    #[test]
-    fn half_width_columns_include_inner_gaps_in_their_share() {
-        let mut f = Fixture::new(2);
-        f.gaps.inner.horizontal = 20.0;
-        let before = f.frames();
-        assert_eq!(f.frame(1).size.width, 490.0);
-        assert_eq!(f.frame(2).origin.x, 510.0);
-        f.focus(Direction::Right);
-        assert_eq!(f.frames(), before);
-        f.focus(Direction::Left);
-        assert_eq!(f.frames(), before);
-    }
-
-    #[test]
-    fn unequal_and_clipped_columns_reveal_with_minimum_camera_motion() {
-        let mut f = Fixture::new(3);
-        f.select(2);
-        f.system.resize_selection_by(f.layout, -0.1, ResizeOrientation::Horizontal);
-        let before = f.frames();
-        f.select(1);
-        f.select(2);
-        assert_eq!(f.frames(), before);
-        assert_eq!(f.frame(3).origin.x, 900.0);
-        f.focus(Direction::Right);
-        assert_eq!(f.frame(3).origin.x, 500.0);
-        assert_eq!(f.frame(1).origin.x, -400.0);
-        f.focus(Direction::Left);
-        assert_eq!(f.frame(1).origin.x, -400.0);
-        f.focus(Direction::Left);
-        assert_eq!(f.frame(1).origin.x, 0.0);
-    }
-
-    #[test]
-    fn columns_remember_independent_active_rows() {
-        let mut f = Fixture::new(6);
-        for (source, target) in [(2, 1), (4, 3), (5, 4)] {
-            f.drop(source, target, WindowDropAction::Stack);
-        }
-        f.select(2);
-        assert_eq!(f.focus(Direction::Right), Some(wid(5)));
-        assert_eq!(f.focus(Direction::Right), Some(wid(6)));
-        assert_eq!(f.focus(Direction::Left), Some(wid(5)));
-        assert_eq!(f.focus(Direction::Up), Some(wid(4)));
-        assert_eq!(f.focus(Direction::Left), Some(wid(2)));
-        assert_eq!(f.focus(Direction::Right), Some(wid(4)));
-        f.system.remove_window(wid(3));
-        assert_eq!(f.selected(), Some(wid(4)));
-        f.system.remove_window(wid(4));
-        assert_eq!(f.selected(), Some(wid(5)));
-    }
-
-    #[test]
-    fn horizontal_reorder_preserves_camera_and_vertical_reorder_preserves_stack() {
-        let mut f = Fixture::new(3);
-        f.select(2);
-        f.frames();
-        let offset = f.system.layouts[f.layout].viewport.start_offset();
-        assert!(f.system.move_selection(f.layout, Direction::Right));
-        assert_eq!(f.system.window_slot(f.layout, wid(2)), Some(vec![2, 0]));
-        assert_eq!(f.system.window_slot(f.layout, wid(3)), Some(vec![1, 0]));
-        assert_eq!(f.system.layouts[f.layout].viewport.start_offset(), offset);
-        f.drop(2, 3, WindowDropAction::Stack);
-        let before = f.frame(2);
-        assert!(f.system.move_selection(f.layout, Direction::Up));
-        assert_eq!(f.system.window_slot(f.layout, wid(2)), Some(vec![1, 0]));
-        assert_eq!(f.frame(2).size, before.size);
-        assert_eq!(f.selected(), Some(wid(2)));
-    }
-
-    #[test]
-    fn insert_remove_and_preceding_resize_rebase_the_active_column() {
-        let mut f = Fixture::new(4);
-        f.select(3);
-        let x = f.frame(3).origin.x;
-        // Move an inactive window before the active one via the shared drop path.
-        f.drop(4, 1, WindowDropAction::Insert(Direction::Left));
-        assert_eq!(f.frame(3).origin.x, x);
-        f.select(3);
-        f.system.on_window_resized(
-            f.layout,
-            wid(4),
-            CGRect::ZERO,
-            CGRect::new(CGPoint::ZERO, CGSize::new(700.0, 800.0)),
-            f.screen,
-            &f.gaps,
-        );
-        assert_eq!(f.frame(3).origin.x, x);
-        f.system.remove_window(wid(4));
-        assert_eq!(f.frame(3).origin.x, x);
-    }
-
-    #[test]
-    fn removing_a_transient_active_column_restores_the_previous_view() {
-        let mut f = Fixture::new(3);
-        f.select(2);
-        f.system.center_selected_column(f.layout);
-        let before = f.frames();
-        f.system.add_window_after_selection(f.layout, wid(4));
-        assert_eq!(f.selected(), Some(wid(4)));
-        f.system.remove_window(wid(4));
-        assert_eq!(f.selected(), Some(wid(2)));
-        assert_eq!(f.frames(), before);
-        f.system.add_window_after_selection(f.layout, wid(5));
-        f.select(3); // Intentional focus change cancels transient restoration.
-        let before = f.frame(3);
-        f.system.remove_window(wid(5));
-        assert_eq!(f.selected(), Some(wid(3)));
-        assert_eq!(f.frame(3), before);
     }
 
     #[test]
@@ -2519,21 +2604,38 @@ pub(crate) mod tests {
         for direction in [Direction::Left, Direction::Right] {
             let mut f = Fixture::new(2);
             f.select(1);
-            f.system.resize_selection_by(f.layout, -0.1, ResizeOrientation::Horizontal);
+            f.system
+                .edit(f.layout, LayoutEdit::Resize {
+                    amount: -0.1,
+                    orientation: ResizeOrientation::Horizontal,
+                })
+                .discard();
             let destination_id = f.system.container_tree(f.layout).children[0].node_id;
             f.select(2);
-            f.system.consume_or_expel_selection(f.layout, Direction::Left);
+            f.system
+                .edit(
+                    f.layout,
+                    LayoutEdit::Group(GroupEdit::ConsumeOrExpel(Direction::Left)),
+                )
+                .discard();
             assert_eq!(f.selected(), Some(wid(2)));
             assert_eq!(f.frame(2).size.width, 400.0);
             assert_eq!(
                 f.system.container_tree(f.layout).children[0].node_id,
                 destination_id
             );
-            f.system.resize_selection_by(f.layout, 0.2, ResizeOrientation::Vertical);
-            let offset = f.system.layouts[f.layout].viewport.start_offset();
-            f.system.consume_or_expel_selection(f.layout, direction);
+            f.system
+                .edit(f.layout, LayoutEdit::Resize {
+                    amount: 0.2,
+                    orientation: ResizeOrientation::Vertical,
+                })
+                .discard();
+            let offset = f.system.layouts[f.layout].camera.viewport.start_offset();
+            f.system
+                .edit(f.layout, LayoutEdit::Group(GroupEdit::ConsumeOrExpel(direction)))
+                .discard();
             assert_eq!(f.selected(), Some(wid(2)));
-            assert_eq!(f.system.layouts[f.layout].viewport.start_offset(), offset);
+            assert_eq!(f.system.layouts[f.layout].camera.viewport.start_offset(), offset);
             assert_eq!(f.frame(2).size.width, 400.0);
             let tree = f.system.container_tree(f.layout);
             let expelled = tree
@@ -2562,394 +2664,15 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn removing_the_original_window_does_not_change_column_identity() {
-        let mut f = Fixture::new(2);
-        let id = f.system.container_tree(f.layout).children[0].node_id;
-        f.drop(2, 1, WindowDropAction::Stack);
-        f.system.remove_window(wid(1));
-        assert_eq!(f.system.container_tree(f.layout).children[0].node_id, id);
-        assert_eq!(f.selected(), Some(wid(2)));
-        f.system.replace_window(wid(2), wid(3));
-        assert_eq!(f.selected(), Some(wid(3)));
-        assert_eq!(f.system.container_tree(f.layout).children[0].node_id, id);
-    }
-
-    #[test]
-    fn resize_preserves_its_left_edge_when_selection_still_fits() {
+    fn removing_selected_column_skips_suspended_neighbor() {
         let mut f = Fixture::new(3);
-        f.select(2);
-        f.system.center_selected_column(f.layout);
-        let before = f.frames();
-        f.system.resize_selection_by(f.layout, 0.1, ResizeOrientation::Horizontal);
-        assert_eq!(f.frame(1), before[0].1);
-        assert_eq!(f.frame(2).origin.x, before[1].1.origin.x);
-        assert_eq!(f.frame(2).size.width, 600.0);
-        assert_eq!(f.frame(3).origin.x, 850.0);
-    }
+        f.select(3);
+        f.system.set_window_participation(wid(2), false);
 
-    #[test]
-    fn center_is_a_camera_operation_and_ordinary_focus_resumes() {
-        let mut f = Fixture::new(3);
-        f.select(2);
-        f.system.center_selected_column(f.layout);
-        assert_eq!(f.frame(2).origin.x, 250.0);
-        f.select(2);
-        assert_eq!(f.frame(2).origin.x, 250.0);
-        f.system.center_selected_column(f.layout); // Idempotent, never toggles a mode.
-        assert_eq!(f.frame(2).origin.x, 250.0);
-        f.focus(Direction::Right);
-        assert_eq!(f.frame(3).origin.x, 500.0);
-        f.focus(Direction::Left);
-        assert_eq!(f.frame(2).origin.x, 0.0);
-    }
+        f.system.update(WindowChange::Remove(wid(3)));
 
-    #[test]
-    fn fullscreen_restores_camera_and_reconciles_preceding_removal() {
-        for within_gaps in [false, true] {
-            let mut f = Fixture::new(3);
-            f.gaps.outer.left = 10.0;
-            f.gaps.outer.right = 10.0;
-            f.prepare();
-            f.select(2);
-            f.system.center_selected_column(f.layout);
-            let before = f.frame(2);
-            if within_gaps {
-                f.system.toggle_fullscreen_within_gaps_of_selection(f.layout);
-            } else {
-                f.system.toggle_fullscreen_of_selection(f.layout);
-            }
-            assert_eq!(
-                f.frame(2),
-                if within_gaps {
-                    compute_tiling_area(f.screen, &f.gaps)
-                } else {
-                    f.screen
-                }
-            );
-            f.system.remove_window(wid(1));
-            if within_gaps {
-                f.system.toggle_fullscreen_within_gaps_of_selection(f.layout);
-            } else {
-                f.system.toggle_fullscreen_of_selection(f.layout);
-            }
-            assert_eq!(f.frame(2), before);
-        }
-
-        let mut f = Fixture::new(2);
-        f.drop(2, 1, WindowDropAction::Stack);
-        f.system.center_selected_column(f.layout);
-        let x = f.frame(2).origin.x;
-        f.system.toggle_fullscreen_of_selection(f.layout);
-        f.select(1);
-        f.system.toggle_fullscreen_of_selection(f.layout);
-        f.system.remove_window(wid(2)); // Another fullscreen tile is still in the column.
-        f.system.toggle_fullscreen_of_selection(f.layout);
-        assert_eq!(f.frame(1).origin.x, x);
-
-        f.system.toggle_fullscreen_of_selection(f.layout);
-        f.system.resize_selection_by(f.layout, 0.3, ResizeOrientation::Horizontal);
-        f.system.toggle_fullscreen_of_selection(f.layout);
-        assert_eq!(f.frame(1).origin.x, 200.0); // Reconcile the saved view with the enlarged tile.
-    }
-
-    #[test]
-    fn width_height_and_axis_specific_constraints_remain_independent() {
-        // Primary owner for the previous separate min/max/fixed-axis regressions.
-        for (width, height, constraints) in [
-            (500.0, 800.0, WindowLayoutConstraints {
-                is_resizable: true,
-                min_width: 500.0,
-                min_height: 350.0,
-                ..Default::default()
-            }),
-            (300.0, 800.0, WindowLayoutConstraints {
-                is_resizable: true,
-                max_width: 300.0,
-                ..Default::default()
-            }),
-            (1400.0, 400.0, WindowLayoutConstraints {
-                locked_width: 1400.0,
-                locked_height: 400.0,
-                ..Default::default()
-            }),
-            (1400.0, 800.0, WindowLayoutConstraints {
-                is_resizable: true,
-                min_width: 1400.0,
-                ..Default::default()
-            }),
-        ] {
-            let mut f = Fixture::new(1);
-            f.constraints.insert(wid(1), constraints);
-            assert_eq!(f.frame(1).size, CGSize::new(width, height));
-        }
-        let mut f = Fixture::new(2);
-        f.drop(2, 1, WindowDropAction::Stack);
-        f.constraints.insert(wid(1), WindowLayoutConstraints {
-            locked_width: 700.0,
-            locked_height: 400.0,
-            min_width: 700.0,
-            max_width: 700.0,
-            ..Default::default()
-        });
-        f.constraints.insert(wid(2), WindowLayoutConstraints {
-            is_resizable: true,
-            max_width: 500.0,
-            min_height: 350.0,
-            ..Default::default()
-        });
-        assert_eq!(f.frame(1).size, CGSize::new(700.0, 400.0));
-        assert_eq!(f.frame(2).size, CGSize::new(500.0, 400.0));
-
-        let mut f = Fixture::new(2);
-        f.constraints.insert(wid(1), WindowLayoutConstraints {
-            locked_width: 350.0,
-            is_resizable: false,
-            ..Default::default()
-        });
-        let before = f.frames();
-        assert_eq!(f.frame(2).origin.x, 350.0);
-        f.focus(Direction::Right);
-        assert_eq!(f.frames(), before);
-    }
-
-    #[test]
-    fn preserved_width_and_display_defaults_obey_explicit_resize_bounds() {
-        let mut f = Fixture::new(2);
-        let mut settings = f.system.settings.clone();
-        settings.preserve_window_sizes = true;
-        settings.per_display.insert("display".into(), ScrollingWidthOverride {
-            column_width_ratio: Some(0.6),
-            min_column_width_ratio: Some(0.3),
-            max_column_width_ratio: Some(0.7),
-        });
-        f.system.update_settings(&settings);
-        f.constraints.insert(wid(1), WindowLayoutConstraints {
-            is_resizable: true,
-            locked_width: 400.0,
-            ..Default::default()
-        });
-        assert_eq!(f.frame(1).size.width, 400.0);
-        f.system.update_width_settings(settings.widths_for_display(Some("display")));
-        assert_eq!(f.frame(1).size.width, 400.0);
-        assert_eq!(f.frame(2).size.width, 600.0);
-        f.select(1);
-        for (delta, expected) in [(0.1, 500.0), (1.0, 700.0), (-1.0, 300.0)] {
-            f.system.resize_selection_by(f.layout, delta, ResizeOrientation::Horizontal);
-            assert_eq!(f.frame(1).size.width, expected);
-        }
-    }
-
-    #[test]
-    fn smart_and_vertical_resize_preserve_width_and_actual_row_heights() {
-        for orientation in [ResizeOrientation::Vertical, ResizeOrientation::Smart] {
-            let mut f = Fixture::new(2);
-            f.drop(2, 1, WindowDropAction::Stack);
-            f.system.resize_selection_by(f.layout, 0.1, orientation);
-            assert_eq!(f.frame(2).size, CGSize::new(500.0, 480.0));
-            assert_eq!(f.frame(1).size.height, 320.0);
-            let new = CGRect::new(CGPoint::ZERO, CGSize::new(500.0, 600.0));
-            let old = f.frame(2);
-            f.system.on_window_resized(f.layout, wid(2), old, new, f.screen, &f.gaps);
-            assert_eq!(f.frame(2).size.height, 600.0);
-            assert_eq!(f.frame(1).size.height, 200.0);
-        }
-    }
-
-    #[test]
-    fn anchored_alignments_and_single_column_placement_remain_supported() {
-        for (alignment, middle, single) in [
-            (ScrollingAlignment::Left, 0.0, 0.0),
-            (ScrollingAlignment::Center, 250.0, 250.0),
-            (ScrollingAlignment::Right, 500.0, 500.0),
-        ] {
-            let mut f = Fixture::new(3);
-            let mut settings = f.system.settings.clone();
-            settings.alignment = alignment;
-            settings.focus_navigation_style = ScrollingFocusNavigationStyle::Anchored;
-            f.system.update_settings(&settings);
-            for (index, x) in [(2, middle), (3, 500.0), (1, 0.0)] {
-                f.select(index);
-                assert_eq!(f.frame(index).origin.x, x);
-                f.system.begin_viewport_gesture(f.layout, Instant::now());
-                f.system.update_viewport_gesture(f.layout, 20.0, Duration::from_millis(10));
-                let release = f
-                    .system
-                    .end_viewport_gesture(f.layout, Duration::from_millis(210), false)
-                    .unwrap();
-                assert_eq!(release.window, wid(index), "alignment={alignment:?}");
-                assert_eq!(f.frame(index).origin.x, x);
-            }
-            let mut system = ScrollingLayoutSystem::new(&settings);
-            let layout = system.create_layout();
-            system.add_window_after_selection(layout, wid(1));
-            system.prepare_layout(layout, f.screen, &f.constraints, &f.gaps);
-            assert_eq!(
-                presented_frames(&system, layout).next().unwrap().1.origin.x,
-                single
-            );
-        }
-    }
-
-    #[test]
-    fn gesture_changes_focus_only_once_after_lift() {
-        for (start, travel, target, window) in [
-            (1, 150.0, 0.0, 2),
-            (2, 250.0, 0.0, 2), // Equidistant snaps choose the earlier position, even with active focus.
-            (1, 900.0, 1000.0, 4),
-            (1, 2000.0, 1000.0, 4),
-        ] {
-            let mut f = Fixture::new(4);
-            f.select(start);
-            f.prepare();
-            assert!(f.system.begin_viewport_gesture(f.layout, Instant::now()));
-            f.system.update_viewport_gesture(f.layout, travel, Duration::from_millis(10));
-            assert_eq!(f.selected(), Some(wid(start)));
-            let release = f
-                .system
-                .end_viewport_gesture(f.layout, Duration::from_millis(210), false)
-                .unwrap();
-            assert_eq!(release.offset, target);
-            assert_eq!(release.window, wid(window));
-            assert_eq!(f.selected(), Some(wid(window)));
-            assert!(
-                f.system
-                    .end_viewport_gesture(f.layout, Duration::from_millis(220), false)
-                    .is_none()
-            );
-        }
-    }
-
-    #[test]
-    fn release_velocity_projects_momentum_and_idle_release_stays_nearby() {
-        let mut offsets = Vec::new();
-        for (drag_ms, idle_ms, pause_ms) in [(30, 0, 0), (300, 0, 0), (30, 200, 0), (10, 0, 300)] {
-            let mut f = Fixture::new(4);
-            f.system.begin_viewport_gesture(f.layout, Instant::now());
-            f.system.update_viewport_gesture(f.layout, 0.0, Duration::from_millis(pause_ms));
-            for i in 1..=6 {
-                f.system.update_viewport_gesture(
-                    f.layout,
-                    200.0 / 6.0,
-                    Duration::from_millis(pause_ms + i * drag_ms / 6),
-                );
-                assert_eq!(f.selected(), Some(wid(1)));
-            }
-            let release = f
-                .system
-                .end_viewport_gesture(
-                    f.layout,
-                    Duration::from_millis(pause_ms + drag_ms + idle_ms),
-                    false,
-                )
-                .unwrap();
-            offsets.push(release.offset);
-            if idle_ms > 0 {
-                assert_eq!(release.velocity, 0.0);
-                assert_eq!(release.offset, 0.0);
-            }
-        }
-        assert!(offsets[0] > offsets[1]);
-        assert!(offsets[0] > offsets[2]);
-        assert!(
-            offsets[3] > offsets[1],
-            "a pause before a flick must not dilute its velocity"
-        );
-    }
-
-    #[test]
-    fn release_respects_navigation_style_and_preserves_flick_momentum() {
-        for style in [
-            ScrollingFocusNavigationStyle::Niri,
-            ScrollingFocusNavigationStyle::Anchored,
-        ] {
-            for ((distance, speed), target) in [
-                (240.0, 75.0),
-                (300.0, 75.0),
-                (240.0, 400.0),
-                (300.0, 400.0),
-                (500.0, 1000.0),
-                (240.0, 3000.0),
-            ]
-            .into_iter()
-            .zip([500.0, 500.0, 500.0, 500.0, 1000.0, 1000.0])
-            {
-                let mut f = Fixture::new(4);
-                let mut settings = f.system.settings.clone();
-                settings.focus_navigation_style = style;
-                f.system.update_settings(&settings);
-                f.system.begin_viewport_gesture(f.layout, Instant::now());
-                f.system.update_viewport_gesture(f.layout, 0.0, Duration::ZERO);
-                let steps = (distance / (speed * 0.01)) as u64;
-                for i in 1..=steps {
-                    f.system.update_viewport_gesture(
-                        f.layout,
-                        speed * 0.01,
-                        Duration::from_millis(i * 10),
-                    );
-                }
-                let release = f
-                    .system
-                    .end_viewport_gesture(f.layout, Duration::from_millis(steps * 10), false)
-                    .unwrap();
-                assert!(
-                    (release.offset - target).abs() < 0.001,
-                    "style={style:?}, distance={distance}, speed={speed}, offset={}",
-                    release.offset
-                );
-                assert!(release.velocity > 0.0, "slow release must not discard velocity");
-            }
-        }
-    }
-
-    #[test]
-    fn niri_release_snaps_variable_width_columns_and_both_oversized_edges() {
-        for (widths, travel, target, selected) in [
-            ([300.0, 700.0, 400.0], 260.0, 300.0, 2),
-            ([300.0, 700.0, 400.0], 370.0, 400.0, 3),
-            ([500.0, 1400.0, 500.0], 540.0, 500.0, 2),
-            ([500.0, 1400.0, 500.0], 860.0, 900.0, 2),
-        ] {
-            let mut f = Fixture::new(3);
-            for (i, width) in widths.into_iter().enumerate() {
-                f.constraints.insert(wid(i as u32 + 1), WindowLayoutConstraints {
-                    locked_width: width,
-                    ..Default::default()
-                });
-            }
-            f.prepare();
-            assert!(f.system.begin_viewport_gesture(f.layout, Instant::now()));
-            f.system.update_viewport_gesture(f.layout, travel, Duration::from_millis(10));
-            assert_eq!(f.selected(), Some(wid(1)));
-            let release = f
-                .system
-                .end_viewport_gesture(f.layout, Duration::from_millis(210), false)
-                .unwrap();
-            assert_eq!(release.from_offset, travel);
-            assert_eq!(release.offset, target);
-            assert_eq!(release.window, wid(selected));
-        }
-    }
-
-    #[test]
-    fn niri_flick_selects_the_furthest_visible_column_in_each_direction() {
-        for (start, delta, target, selected) in [(1, 20.0, 1000.0, 4), (4, -20.0, 0.0, 1)] {
-            let mut f = Fixture::new(4);
-            f.select(start);
-            f.prepare();
-            assert!(f.system.begin_viewport_gesture(f.layout, Instant::now()));
-            f.system.update_viewport_gesture(f.layout, 0.0, Duration::ZERO);
-            for i in 1..=6 {
-                f.system.update_viewport_gesture(f.layout, delta, Duration::from_millis(i * 10));
-                assert_eq!(f.selected(), Some(wid(start)));
-            }
-            let release = f
-                .system
-                .end_viewport_gesture(f.layout, Duration::from_millis(60), false)
-                .unwrap();
-            assert_eq!(release.offset, target);
-            assert_eq!(release.window, wid(selected));
-            assert_eq!(release.velocity.signum(), delta.signum());
-        }
+        assert_eq!(f.selected(), Some(wid(1)));
+        assert_eq!(f.frame(1).origin.x, f.screen.origin.x);
     }
 
     #[test]
@@ -2959,7 +2682,7 @@ pub(crate) mod tests {
         f.system.begin_viewport_gesture(f.layout, Instant::now());
         f.system.update_viewport_gesture(f.layout, 30.0, Duration::from_millis(10));
         let x = f.frame(3).origin.x;
-        f.system.remove_window(wid(1));
+        f.system.update(WindowChange::Remove(wid(1)));
         assert_eq!(f.frame(3).origin.x, x);
         assert_eq!(f.selected(), Some(wid(3)));
         f.system.update_viewport_gesture(f.layout, 20.0, Duration::from_millis(20));
@@ -2976,73 +2699,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn native_parking_uses_physical_edges_and_logical_geometry_keeps_rows() {
-        let mut f = Fixture::new(5);
-        f.screen.origin = CGPoint::new(1200.0, -200.0);
-        f.gaps.outer.left = 20.0;
-        f.gaps.outer.right = 20.0;
-        f.gaps.inner.horizontal = 17.0;
-        f.gaps.inner.vertical = 11.0;
-        f.drop(5, 4, WindowDropAction::Stack);
-        f.select(1);
-        let logical = f.frames();
-        let native: Vec<_> = presented_frames(&f.system, f.layout).collect();
-        for index in 0..3 {
-            assert!((logical[index + 1].1.origin.x - logical[index].1.max().x - 17.0).abs() <= 1.0);
-        }
-        assert_eq!(logical[3].1.origin.x, logical[4].1.origin.x);
-        assert!((logical[4].1.origin.y - logical[3].1.max().y - 11.0).abs() <= 1.0);
-        assert_eq!(native[3].1.origin.x, f.screen.max().x);
-        assert!(logical[3].1.origin.x > native[3].1.origin.x);
-        assert_eq!(presented_frames(&f.system, f.layout).collect::<Vec<_>>(), native);
-    }
-
-    #[test]
-    fn drop_swap_stack_and_unstack_share_the_same_structural_operations() {
-        let mut f = Fixture::new(3);
-        f.drop(2, 1, WindowDropAction::Insert(Direction::Down));
-        assert_eq!(f.system.window_slot(f.layout, wid(2)), Some(vec![0, 1]));
-        f.drop(3, 2, WindowDropAction::Swap);
-        assert_eq!(f.selected(), Some(wid(2)));
-        assert_eq!(f.system.window_slot(f.layout, wid(2)), Some(vec![1, 0]));
-        let moved = f
-            .system
-            .apply_stacking_to_parent_of_selection(f.layout, StackDefaultOrientation::Vertical);
-        assert_eq!(moved, vec![wid(1), wid(3)]);
-        assert_eq!(f.selected(), Some(wid(2)));
-        let x = f.frame(2).origin.x;
-        f.system
-            .unstack_parent_of_selection(f.layout, StackDefaultOrientation::Vertical);
-        assert_eq!(f.frame(2).origin.x, x);
-        assert_eq!(f.system.all_windows_in_layout(f.layout), vec![
-            wid(2),
-            wid(1),
-            wid(3)
-        ]);
-    }
-
-    #[test]
-    fn app_reconciliation_honors_reloaded_insertion_policy() {
-        for insertion in [
-            WindowInsertionPoint::NextToSelection,
-            WindowInsertionPoint::EndOfTree,
-        ] {
-            let mut f = Fixture::new(2);
-            let mut settings = f.system.settings.clone();
-            settings.base.window_insertion_point = Some(insertion);
-            f.system.update_settings(&settings);
-            f.system.set_windows_for_app(f.layout, 1, vec![wid(1), wid(2), wid(3)]);
-            let expected = if insertion == WindowInsertionPoint::EndOfTree {
-                vec![wid(1), wid(2), wid(3)]
-            } else {
-                vec![wid(1), wid(3), wid(2)]
-            };
-            assert_eq!(f.system.all_windows_in_layout(f.layout), expected);
-        }
-    }
-
-    #[test]
-    fn persistence_clone_and_cross_layout_transfer_preserve_column_state() {
+    fn persistence_and_clone_preserve_column_state() {
         let mut f = Fixture::new(3);
         f.drop(2, 1, WindowDropAction::Stack);
         f.select(2);
@@ -3062,7 +2719,7 @@ pub(crate) mod tests {
         f.system.center_selected_column(clone);
         let old_x = f
             .system
-            .calculate_frames(clone, f.screen, &f.constraints, &f.gaps, false)
+            .calculate_frames(clone, f.screen, &f.constraints, None, &f.gaps, false)
             .into_iter()
             .find(|(w, _)| *w == wid(3))
             .unwrap()
@@ -3075,7 +2732,7 @@ pub(crate) mod tests {
         let wider = CGRect::new(CGPoint::ZERO, CGSize::new(1600.0, 800.0));
         resized_restore.prepare_layout(clone, wider, &f.constraints, &f.gaps);
         let new_x = resized_restore
-            .calculate_frames(clone, wider, &f.constraints, &f.gaps, false)
+            .calculate_frames(clone, wider, &f.constraints, None, &f.gaps, false)
             .into_iter()
             .find(|(w, _)| *w == wid(3))
             .unwrap()
@@ -3084,36 +2741,12 @@ pub(crate) mod tests {
             .x;
         assert_eq!(new_x, old_x);
 
-        let destination = f.system.create_layout();
-        f.system.move_selection_to_layout_after_selection(f.layout, destination);
-        assert_eq!(f.system.selected_window(destination), Some(wid(2)));
-        assert_eq!(f.selected(), Some(wid(1)));
-        assert!(!f.system.contains_window(f.layout, wid(2)));
-        f.system.add_window_after_selection(f.layout, wid(4));
+        f.system.update(WindowChange::Add(f.layout, wid(4), None));
         let ids: Vec<_> =
             f.system.container_tree(f.layout).children.iter().map(|c| c.node_id).collect();
         assert_ne!(ids[0], ids[1]);
     }
 
-    #[test]
-    fn empty_short_strip_and_invalid_input_never_produce_invalid_frames() {
-        for count in 0..=2 {
-            let mut f = Fixture::new(count);
-            f.system.scroll_by_delta(f.layout, f64::NAN);
-            f.system.scroll_by_delta(f.layout, 100.0);
-            f.system.snap_to_nearest_column(f.layout);
-            for (_, frame) in f.frames() {
-                assert!(frame.origin.x.is_finite());
-                assert!(frame.size.width > 0.0);
-            }
-            for index in 1..=count {
-                f.system.remove_window(wid(index));
-            }
-            assert_eq!(f.selected(), None);
-            assert!(presented_frames(&f.system, f.layout).next().is_none());
-            assert!(!f.system.begin_viewport_gesture(f.layout, Instant::now()));
-        }
-    }
     #[test]
     fn old_scrolling_snapshots_migrate_identity_sizing_and_selected_row() {
         let first = ron::to_string(&wid(1)).unwrap();
@@ -3132,445 +2765,7 @@ pub(crate) mod tests {
             presented_frames(&system, layout).next().unwrap().1.size.width,
             600.0
         );
-        system.add_window_after_selection(layout, wid(3));
+        system.update(WindowChange::Add(layout, wid(3), None));
         assert_ne!(system.container_tree(layout).children[1].node_id, 42);
-    }
-    #[test]
-    fn gesture_edges_reverse_while_remaining_bounded() {
-        for direction in [-1.0, 1.0] {
-            let mut f = Fixture::new(4);
-            let bounds = f.system.layouts[f.layout].geometry.as_ref().unwrap().bounds;
-            let edge = if direction < 0.0 { bounds.0 } else { bounds.1 };
-            f.system.layouts[f.layout].viewport = Viewport::Static(edge);
-            assert!(f.system.begin_viewport_gesture(f.layout, Instant::now()));
-            let before = f.frame(1).origin.x;
-            for (time, delta, excess) in [(10, 200.0, 0.2), (20, -75.0, 0.125), (30, -125.0, 0.0)] {
-                assert_eq!(
-                    f.system.update_viewport_gesture(
-                        f.layout,
-                        direction * delta,
-                        Duration::from_millis(time),
-                    ),
-                    Some(0.0)
-                );
-                assert_eq!(f.frame(1).origin.x, before);
-                assert!((f.system.gesture_overscroll(f.layout) - direction * excess).abs() < 1e-9);
-                assert_eq!(f.system.layouts[f.layout].motion.velocity(), 0.0);
-            }
-            assert_eq!(
-                f.system.update_viewport_gesture(
-                    f.layout,
-                    -direction * 40.0,
-                    Duration::from_millis(40),
-                ),
-                Some(-direction * 40.0)
-            );
-            assert_eq!(f.frame(1).origin.x, before + direction * 40.0);
-            assert_eq!(f.system.gesture_overscroll(f.layout), 0.0);
-            assert_eq!(f.system.layouts[f.layout].motion.velocity().signum(), -direction);
-        }
-    }
-    #[test]
-    fn niri_projection_selects_near_medium_and_far_snaps_in_both_directions() {
-        for direction in [-1.0, 1.0] {
-            for (speed, extra) in [(75.0_f64, 0.0), (400.0, 500.0), (2000.0, 1000.0)] {
-                let mut f = Fixture::new(8);
-                f.system.layouts[f.layout].viewport = Viewport::Static(1500.0);
-                f.system.begin_viewport_gesture(f.layout, Instant::now());
-                f.system.update_viewport_gesture(f.layout, 0.0, Duration::ZERO);
-                let steps = (200.0 / (speed * 0.01)).ceil() as u64;
-                for i in 1..=steps {
-                    f.system.update_viewport_gesture(
-                        f.layout,
-                        direction * 200.0 / steps as f64,
-                        Duration::from_millis(i * 10),
-                    );
-                }
-                let release = f
-                    .system
-                    .end_viewport_gesture(f.layout, Duration::from_millis(steps * 10), false)
-                    .unwrap();
-                assert_eq!(release.offset, 1500.0 + direction * extra);
-                assert_eq!(release.velocity.signum(), direction);
-                assert!((release.from_offset - (1500.0 + direction * 200.0)).abs() < 1e-8);
-            }
-        }
-    }
-
-    #[test]
-    fn recent_motion_discards_idle_time_and_rejects_backwards_timestamps() {
-        let mut history = MotionHistory::default();
-        history.push(0.0, Duration::ZERO);
-        history.push(10.0, Duration::from_millis(10));
-        history.push(10.0, Duration::from_millis(20));
-        assert_eq!(history.velocity(), 1000.0);
-        assert!(!history.push(900.0, Duration::from_millis(19)));
-        assert_eq!(history.velocity(), 1000.0);
-        history.push(0.0, Duration::from_millis(171));
-        assert_eq!(history.velocity(), 0.0);
-        for i in 18..=30 {
-            history.push(0.0, Duration::from_millis(i * 10));
-        }
-        history.push(10.0, Duration::from_millis(310));
-        history.push(10.0, Duration::from_millis(320));
-        history.push(0.0, Duration::from_millis(320));
-        assert_eq!(
-            history.velocity(),
-            1000.0,
-            "fresh flick excludes preceding stationary time"
-        );
-
-        let mut f = Fixture::new(4);
-        f.system.begin_viewport_gesture(f.layout, Instant::now());
-        f.system.update_viewport_gesture(f.layout, 20.0, Duration::from_millis(20));
-        assert!(
-            f.system
-                .update_viewport_gesture(f.layout, 900.0, Duration::from_millis(19))
-                .is_none()
-        );
-        assert_eq!(f.system.layouts[f.layout].viewport.offset(), 20.0);
-    }
-
-    #[test]
-    fn normalized_motion_and_overscroll_use_working_width_with_outer_gaps() {
-        let mut f = Fixture::new(4);
-        f.gaps.outer.left = 100.0;
-        f.gaps.outer.right = 50.0;
-        f.prepare();
-        f.system.begin_viewport_gesture(f.layout, Instant::now());
-        let from = f.system.layouts[f.layout].viewport.offset();
-        // The input actor applies sensitivity 4 to quarter-pad travel.
-        assert_eq!(
-            f.system.update_viewport_gesture_normalized(
-                f.layout,
-                0.25 * 4.0,
-                Duration::from_millis(10)
-            ),
-            Some(850.0)
-        );
-        assert_eq!(f.system.layouts[f.layout].viewport.offset(), from + 850.0);
-        assert_eq!(
-            f.system
-                .update_viewport_gesture_normalized(f.layout, 0.25, Duration::from_millis(20)),
-            Some(0.0)
-        );
-        assert_eq!(
-            f.system.gesture_overscroll(f.layout),
-            0.25,
-            "workspace handoff uses working widths even with outer gaps"
-        );
-    }
-
-    #[test]
-    fn release_camera_spring_interrupts_continuously_and_finishes_exactly() {
-        for (animate, direction) in [(false, -1.0), (false, 1.0), (true, -1.0), (true, 1.0)] {
-            let mut f = Fixture::new(8);
-            let from = if direction > 0.0 { 0.0 } else { 3000.0 };
-            f.system.layouts[f.layout].viewport = Viewport::Static(from);
-            f.system.begin_viewport_gesture(f.layout, Instant::now());
-            f.system.update_viewport_gesture(f.layout, 0.0, Duration::ZERO);
-            f.system.update_viewport_gesture(
-                f.layout,
-                direction * 150.0,
-                Duration::from_millis(50),
-            );
-            f.system.update_viewport_gesture(
-                f.layout,
-                direction * 150.0,
-                Duration::from_millis(100),
-            );
-            let release = f
-                .system
-                .end_viewport_gesture(f.layout, Duration::from_millis(100), animate)
-                .unwrap();
-            assert_eq!(release.offset, 1500.0);
-            if !animate {
-                assert_eq!(f.system.layouts[f.layout].viewport.offset(), 1500.0);
-                let (mut p, _) = f.system.presentation(f.layout).unwrap();
-                assert!(!p.sample(Instant::now(), 1.0));
-                continue;
-            }
-            assert_eq!(
-                f.system.layouts[f.layout].viewport.offset(),
-                from + direction * 300.0
-            );
-            let Viewport::Animation(spring) = &f.system.layouts[f.layout].viewport else {
-                panic!("release spring")
-            };
-            let started = spring.started;
-            let (mut p, _) = f.system.presentation(f.layout).unwrap();
-            let mut previous = from + direction * 300.0;
-            for ms in [1, 10, 40, 80] {
-                assert!(p.sample(started + Duration::from_millis(ms), 1.0));
-                let current = p.offset();
-                assert!(
-                    (current - previous) * direction > 0.0
-                        && (release.offset - current) * direction > 0.0
-                );
-                if ms == 1 {
-                    assert!((current - previous - direction * 3.0).abs() < 0.5);
-                }
-                previous = current;
-            }
-            let now = started + Duration::from_millis(80);
-            f.system.commit_presented_viewport(f.layout, &p.snapshot(now));
-            f.system.begin_viewport_gesture(f.layout, now);
-            assert_eq!(f.system.layouts[f.layout].viewport.offset(), previous);
-            f.system.update_viewport_gesture(
-                f.layout,
-                direction * 20.0,
-                Duration::from_millis(110),
-            );
-            assert_eq!(
-                f.system.layouts[f.layout].viewport.offset(),
-                previous + direction * 20.0
-            );
-            let second = f
-                .system
-                .end_viewport_gesture(f.layout, Duration::from_millis(310), true)
-                .unwrap();
-            assert_eq!(second.from_offset, previous + direction * 20.0);
-            let (mut p, _) = f.system.presentation(f.layout).unwrap();
-            assert!(!p.sample(Instant::now() + Duration::from_secs(2), 1.0));
-            f.system.commit_presented_viewport(f.layout, &p.snapshot(Instant::now()));
-            assert!(
-                matches!(f.system.layouts[f.layout].viewport, Viewport::Static(x) if x == second.offset)
-            );
-        }
-    }
-
-    #[test]
-    fn queued_focus_targets_preserve_the_start_across_column_removal() {
-        let mut f = Fixture::new(4);
-        f.system.select_window(f.layout, wid(3));
-        f.system.select_window(f.layout, wid(4));
-        let (p, _) = f.system.presentation(f.layout).unwrap();
-        assert_eq!((p.offset(), p.target()), (0.0, 1000.0));
-        let snapshot = p.snapshot(Instant::now());
-        assert_eq!((snapshot.offset, snapshot.target), (0.0, 1000.0));
-
-        // Removing an earlier column moves both positions by its width.
-        f.system.remove_window(wid(1));
-        let frames = f.frames();
-        assert_eq!(
-            frames.iter().find(|(id, _)| *id == wid(4)).unwrap().1.origin.x,
-            500.0
-        );
-        let (mut p, _) = f.system.presentation(f.layout).unwrap();
-        assert_eq!((p.offset(), p.target()), (-500.0, 500.0));
-
-        // Animation disabled and layout cloning both keep the requested layout.
-        let clone = f.system.clone_layout(f.layout);
-        let (cloned, _) = f.system.presentation(clone).unwrap();
-        assert_eq!((cloned.offset(), cloned.target()), (500.0, 500.0));
-        p.finish();
-        f.system.commit_presented_viewport(f.layout, &p.snapshot(Instant::now()));
-        assert_eq!((p.offset(), p.target()), (500.0, 500.0));
-        assert_eq!(f.frames(), frames);
-    }
-
-    #[test]
-    fn focus_during_camera_motion_uses_the_semantic_target() {
-        let mut f = Fixture::new(4);
-        let state = &mut f.system.layouts[f.layout];
-        state.activate(wid(3));
-        state.viewport = Viewport::Animation(CameraSpring::new(0.0, 500.0, 0.0, Instant::now()));
-        f.system.select_window(f.layout, wid(2));
-        let state = &f.system.layouts[f.layout];
-        assert_eq!(state.selected(), Some(wid(2)));
-        assert!(matches!(&state.viewport, Viewport::Animation(s) if s.target == 500.0));
-        let (mut p, _) = f.system.presentation(f.layout).unwrap();
-        p.finish();
-        f.system.commit_presented_viewport(f.layout, &p.snapshot(Instant::now()));
-        assert_eq!(f.system.layouts[f.layout].viewport.offset(), 500.0);
-    }
-
-    #[test]
-    fn camera_retarget_and_rebase_preserve_position_and_velocity() {
-        let f = Fixture::new(4);
-        let (mut p, frames) = f.system.presentation(f.layout).unwrap();
-        let start = Instant::now();
-        p.viewport = Viewport::Static(800.0);
-        p.retarget(100.0, 150.0, start);
-        let now = start + Duration::from_millis(30);
-        p.sample(now, 1.0);
-        let (position, velocity) = p.position_velocity(now);
-        assert!(velocity > 0.0);
-        p.viewport = Viewport::Static(900.0);
-        p.retarget(position, velocity, now);
-        let Viewport::Animation(spring) = &p.viewport else {
-            panic!("spring")
-        };
-        let (next_position, next_velocity) = spring.position_velocity(now);
-        assert!((position - next_position).abs() < 1e-9);
-        assert!((velocity - next_velocity).abs() < 1e-9);
-        let (_, world, fixed) = frames[0];
-        let before_rebase = p.frame_at_offset(world, fixed, 2.0, p.offset());
-        p.viewport.rebase(40.0);
-        let mut rebased_world = world;
-        rebased_world.origin.x += 40.0;
-        assert_eq!(
-            p.frame_at_offset(rebased_world, fixed, 2.0, p.offset()),
-            before_rebase
-        );
-        let Viewport::Animation(spring) = &p.viewport else {
-            panic!("spring")
-        };
-        let (rebased_position, rebased_velocity) = spring.position_velocity(now);
-        assert!((rebased_position - position - 40.0).abs() < 1e-9);
-        assert!((rebased_velocity - velocity).abs() < 1e-9);
-        assert!(!p.sample(now + Duration::from_secs(2), 1.0));
-        assert_eq!(p.offset(), 940.0);
-    }
-
-    #[test]
-    fn bounds_retarget_preserves_presented_position_and_velocity() {
-        let mut f = Fixture::new(4);
-        let state = &mut f.system.layouts[f.layout];
-        let start = Instant::now();
-        let mut spring = CameraSpring::new(100.0, 1000.0, 200.0, start);
-        let sampled = start + Duration::from_millis(30);
-        assert!(!spring.sample(sampled, 2.0));
-        let position = spring.current;
-        let (_, velocity) = spring.position_velocity(sampled);
-        state.viewport = Viewport::Animation(spring);
-        state.geometry.as_mut().unwrap().bounds = (0.0, 300.0);
-        state.reconcile_camera_bounds();
-        let Viewport::Animation(spring) = &state.viewport else {
-            panic!("spring");
-        };
-        assert_eq!(spring.target, 300.0);
-        assert_eq!(spring.current, position);
-        assert!((spring.velocity - velocity).abs() < 1e-8);
-        assert_eq!(spring.position_velocity(sampled), (position, velocity));
-    }
-
-    #[test]
-    fn shrinking_bounds_animates_back_from_the_previous_position() {
-        let f = Fixture::new(4);
-        let (mut presentation, _) = f.system.presentation(f.layout).unwrap();
-        let start = Instant::now();
-        presentation.bounds = (0.0, 300.0);
-        presentation.viewport = Viewport::Static(700.0);
-        presentation.retarget(700.0, 0.0, start);
-        // Closing a column leaves the displayed camera outside the new bounds.
-        if let Viewport::Animation(spring) = &mut presentation.viewport {
-            spring.target = 300.0;
-        }
-        assert_eq!(presentation.position_velocity(start).0, 700.0);
-        assert!(presentation.sample(start + Duration::from_millis(16), 2.0));
-        assert!(presentation.offset() > 300.0 && presentation.offset() < 700.0);
-        assert!(!presentation.sample(start + Duration::from_secs(2), 2.0));
-        assert_eq!(presentation.offset(), 300.0);
-    }
-
-    #[test]
-    fn spring_finishes_at_pixel_precision_and_snaps_to_exact_target() {
-        for scale in [1.0, 2.0] {
-            let f = Fixture::new(4);
-            let (mut p, _) = f.system.presentation(f.layout).unwrap();
-            let start = Instant::now();
-            p.viewport = Viewport::Static(700.0);
-            p.retarget(100.0, 250.0, start);
-            let mut finished = None;
-            for tick in 1..120 {
-                let now = start + Duration::from_secs_f64(tick as f64 / 120.0);
-                let (position, velocity) = p.position_velocity(now);
-                if !p.sample(now, scale) {
-                    assert!((position - 700.0).abs() * scale <= 0.25);
-                    assert!(velocity.abs() / 800.0_f64.sqrt() * scale <= 0.25);
-                    assert_eq!(p.offset(), 700.0);
-                    finished = Some(tick);
-                    break;
-                }
-            }
-            assert!(
-                finished.is_some_and(|tick| tick < 60),
-                "no invisible one-second spring tail"
-            );
-        }
-    }
-
-    #[test]
-    fn viewport_presentation_aligns_to_physical_pixels_without_changing_sizes() {
-        let f = Fixture::new(4);
-        let (mut p, frames) = f.system.presentation(f.layout).unwrap();
-        p.viewport = Viewport::Static(0.6);
-        let (_, world, fixed) = frames[0];
-        let retina = p.frame_at_offset(world, fixed, 2.0, p.offset());
-        assert_eq!(retina.origin.x.fract().abs(), 0.5);
-        assert_eq!(retina.size, world.size);
-        assert_eq!(
-            p.frame_at_offset(world, fixed, 1.0, p.offset()).origin.x.fract(),
-            0.0
-        );
-    }
-
-    #[test]
-    fn structural_and_environmental_changes_preserve_release_but_clones_are_static() {
-        for edit in [0, 1, 2, 3, 4] {
-            let mut f = Fixture::new(4);
-            f.system.begin_viewport_gesture(f.layout, Instant::now());
-            f.system.update_viewport_gesture(f.layout, 200.0, Duration::from_millis(10));
-            f.system
-                .end_viewport_gesture(f.layout, Duration::from_millis(210), true)
-                .unwrap();
-            match edit {
-                0 => f.system.remove_window(wid(4)),
-                1 => {
-                    f.gaps.outer.left = 30.0;
-                    f.prepare();
-                }
-                3 => f.system.remove_window(f.system.layouts[f.layout].selected().unwrap()),
-                4 => f.system.add_window_after_selection(f.layout, wid(5)),
-                _ => {
-                    f.layout = f.system.clone_layout(f.layout);
-                }
-            }
-            let frames = f.frames();
-            let (mut p, _) = f.system.presentation(f.layout).unwrap();
-            if edit <= 1 {
-                assert!(p.animated(), "non-focus edits preserve release");
-            }
-            if edit == 2 {
-                assert!(!p.animated(), "clones remain static");
-            }
-            assert!(
-                !p.sample(Instant::now() + Duration::from_secs(1), 1.0),
-                "edit {edit} must settle"
-            );
-            f.system.commit_presented_viewport(f.layout, &p.snapshot(Instant::now()));
-            if edit == 2 {
-                assert_eq!(f.frames(), frames);
-            }
-            let state = &f.system.layouts[f.layout];
-            let g = state.geometry.as_ref().unwrap();
-            assert!(
-                matches!(state.viewport, Viewport::Static(x) if (g.bounds.0..=g.bounds.1).contains(&x))
-            );
-        }
-    }
-    #[test]
-    fn saving_interactive_camera_restores_current_static_position() {
-        for released in [false, true] {
-            let mut f = Fixture::new(4);
-            f.system.begin_viewport_gesture(f.layout, Instant::now());
-            f.system.update_viewport_gesture(f.layout, 200.0, Duration::from_millis(10));
-            if released {
-                f.system
-                    .end_viewport_gesture(f.layout, Duration::from_millis(210), true)
-                    .unwrap();
-            }
-            let snapshot = serde_json::to_string(&f.system).unwrap();
-            let settings = f.system.settings.clone();
-            f.system = serde_json::from_str(&snapshot).unwrap();
-            f.system.update_settings(&settings);
-            f.prepare();
-            assert_eq!(f.system.layouts[f.layout].viewport.offset(), 200.0);
-            assert!(matches!(
-                f.system.layouts[f.layout].viewport,
-                Viewport::Static(_)
-            ));
-        }
     }
 }

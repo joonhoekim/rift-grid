@@ -6,7 +6,8 @@ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use parking_lot::Mutex;
 use tracing::{debug, trace};
 
-use super::TransactionId;
+use super::managers::ScrollingDisplayBounds;
+use super::{Presentation, TransactionId};
 use crate::actor::app::{AppThreadHandle, FrameMode, FrameSource, Request, WindowId, pid_t};
 use crate::actor::gesture::{Context, Control};
 use crate::actor::reactor::Reactor;
@@ -41,6 +42,23 @@ impl AnimationSender {
     }
 
     pub fn send(&self, message: Message) -> Result<(), crossbeam_channel::SendError<Message>> {
+        match &message {
+            Message::Replace(animation) | Message::SkipToEnd(animation) => {
+                trace!(
+                    display = animation.display,
+                    count = animation.windows.len(),
+                    "Submitting frame animation"
+                );
+            }
+            Message::Camera(camera) => {
+                trace!(
+                    display = camera.display,
+                    count = camera.windows.len(),
+                    "Submitting camera frames"
+                );
+            }
+            _ => {}
+        }
         self.tx.send(message)
     }
 
@@ -105,7 +123,7 @@ type Frame = (WindowId, CGRect, bool, TransactionId, FrameSource);
 /// Reusable presenter-local batches: all motions on a display publish through
 /// one lock/wake per application, and terminal leases follow that publication.
 #[derive(Debug, Default)]
-struct FrameBatch(HashMap<pid_t, (AppThreadHandle, Vec<Frame>)>);
+struct FrameBatch(HashMap<(pid_t, bool), (AppThreadHandle, Vec<Frame>)>);
 impl FrameBatch {
     fn extend(
         &mut self,
@@ -116,7 +134,10 @@ impl FrameBatch {
         if !handle.can_write_frames() {
             return;
         }
-        let (actor, pending) = self.0.entry(pid).or_insert_with(|| (handle.clone(), Vec::new()));
+        let (actor, pending) = self
+            .0
+            .entry((pid, handle.constrains_scrolling()))
+            .or_insert_with(|| (handle.clone(), Vec::new()));
         if !actor.same_actor(handle) || !actor.can_write_frames() {
             *actor = handle.clone();
         }
@@ -196,7 +217,7 @@ pub struct CameraAnimation {
     scale: f64,
     store: WindowTxStore,
     interval: Duration,
-    bound: Option<super::managers::ScrollingDisplayBounds>,
+    bound: Option<ScrollingDisplayBounds>,
 }
 
 #[derive(Debug)]
@@ -227,13 +248,23 @@ enum Sample<'a> {
         presentation: &'a ViewportPresentation,
         offset: f64,
         scale: f64,
-        bound: Option<super::managers::ScrollingDisplayBounds>,
+        bound: Option<ScrollingDisplayBounds>,
         movement: f64,
     },
 }
 
 impl PresentedWindow {
-    fn begin(&mut self) {
+    fn begin(&mut self, immediate_target: Option<CGRect>) {
+        // Reconcile size at the semantic boundary. Subsequent scrolling samples
+        // move the accepted AX size without reading or resizing on display ticks.
+        if self.handle.constrains_scrolling() && !self.from.size.same_as(self.to.size) {
+            let _ = self.handle.send(Request::set_window_frame(
+                self.wid,
+                immediate_target.unwrap_or_else(|| CGRect::new(self.from.origin, self.to.size)),
+                self.txid,
+                true,
+            ));
+        }
         if !std::mem::replace(&mut self.leased, true) {
             let _ = self.handle.send(Request::BeginWindowAnimation(self.wid, Default::default()));
         }
@@ -264,6 +295,7 @@ impl PresentedWindow {
                 } else {
                     self.from.size
                 };
+                let frame = contain_transition_frame(self.from, self.to, frame);
                 (frame, set_size, FrameSource::Ordinary, set_size)
             }
             Sample::Viewport {
@@ -298,7 +330,9 @@ impl PresentedWindow {
 }
 
 fn stage_windows(windows: &mut [PresentedWindow], sample: Sample<'_>, frames: &mut FrameBatch) {
-    for group in windows.chunk_by_mut(|a, b| a.wid.pid == b.wid.pid) {
+    for group in windows.chunk_by_mut(|a, b| {
+        a.wid.pid == b.wid.pid && a.handle.constrains_scrolling() == b.handle.constrains_scrolling()
+    }) {
         let handle = group[0].handle.clone();
         frames.extend(
             &handle,
@@ -431,18 +465,19 @@ impl CameraAnimation {
 
     fn begin(&mut self) {
         self.windows.sort_unstable_by_key(|w| w.wid.pid);
+        let semantic = self.gesture.is_none() && !self.presentation.gesturing();
         for window in &mut self.windows {
             window.announced = false;
-            window.txid = window.wsid.map_or_else(TransactionId::default, |wsid| {
-                let txid = self.store.next_txid(wsid);
-                if self.gesture.is_none() && !self.presentation.gesturing() {
-                    let frame = self.presentation.target_frame(window.to, window.fixed, self.scale);
-                    let frame = self.bound.map_or(frame, |bounds| bounds.apply(frame));
-                    self.store.insert(wsid, txid, frame);
-                }
-                txid
+            let target = semantic.then(|| {
+                let frame = self.presentation.target_frame(window.to, window.fixed, self.scale);
+                self.bound.map_or(frame, |bounds| bounds.apply(frame))
             });
-            window.begin();
+            window.txid = window
+                .wsid
+                .map_or_else(TransactionId::default, |wsid| self.store.begin(wsid, target));
+            // Growing at the old origin can push a visible window past the display
+            // edge and trigger parking before the first sample places it.
+            window.begin(target.filter(|_| !self.animate));
         }
     }
 
@@ -477,10 +512,15 @@ impl CameraAnimation {
 }
 
 impl Reactor {
-    pub(super) fn cancel_window_presentations(&mut self, mut windows: Vec<WindowId>) {
+    pub(super) fn cancel_window_presentations(&mut self, windows: Vec<WindowId>) {
         if windows.is_empty() {
             return;
         }
+        self.cancel_window_frame_writes(windows);
+        self.commit_presentations();
+    }
+
+    pub(super) fn cancel_window_frame_writes(&mut self, mut windows: Vec<WindowId>) {
         windows.sort_unstable();
         let mut frames = Vec::new();
         for camera in self.presentations.values_mut() {
@@ -507,7 +547,6 @@ impl Reactor {
                 }
             }
         }
-        self.commit_presentations();
     }
 
     pub(super) fn commit_presentations(&mut self) {
@@ -615,6 +654,7 @@ impl Reactor {
         animate: bool,
         gesture: Option<(Context, Control, f64, Duration)>,
         skip: Option<WindowId>,
+        bound: Option<ScrollingDisplayBounds>,
     ) -> Option<HashSet<WindowId>> {
         if self.animation_tx.is_none() && gesture.is_none() && self.viewport_gesture.is_none() {
             return None;
@@ -622,10 +662,6 @@ impl Reactor {
         let screen = self.space_state.screen_by_space(space)?;
         let display = screen.id.as_u32();
         let scale = screen.backing_scale;
-        let screen_frames: Vec<_> =
-            self.space_state.screens.iter().map(|screen| screen.frame).collect();
-        let bound =
-            super::managers::ScrollingDisplayBounds::for_screen(screen.frame, &screen_frames);
         let (workspace, layout) =
             self.layout_manager.layout_engine.workspaces().active_layout_for_space(space)?;
         let LayoutSystemKind::Scrolling(system) =
@@ -648,6 +684,8 @@ impl Reactor {
         });
         let now = Instant::now();
         let control = self.animation_tx.as_ref().map(|tx| tx.control.lock());
+        let mut covered = HashSet::default();
+        let semantic = gesture.is_none() && !presentation.gesturing();
         let windows = frames
             .into_iter()
             .filter_map(|(wid, base_frame, fixed)| {
@@ -655,12 +693,28 @@ impl Reactor {
                     return None;
                 }
                 let window = self.state.windows.window(wid)?;
+                if semantic
+                    && let Some(wsid) = window.info.sys_id
+                    && let Some(write) = self.transaction_manager.store.get(&wsid)
+                {
+                    if write.needs_full_retry() {
+                        return None;
+                    }
+                    let target = presentation.target_frame(base_frame, fixed, scale);
+                    let target = bound.map_or(target, |bounds| bounds.apply(target));
+                    if control.as_ref().is_none_or(|control| !control.frames.contains_key(&wid))
+                        && write.refused(target, window.frame_monotonic)
+                    {
+                        covered.insert(wid);
+                        return None;
+                    }
+                }
                 let app = self.app_manager.apps.get(&wid.pid)?;
                 let frame = control.as_ref().map_or(window.frame_monotonic, |control| {
                     control.frame(wid, window.frame_monotonic)
                 });
                 Some(PresentedWindow {
-                    handle: app.handle.clone(),
+                    handle: app.handle.with_scrolling_bounds(bound),
                     wid,
                     wsid: window.info.sys_id,
                     from: window.frame_monotonic,
@@ -705,7 +759,7 @@ impl Reactor {
         if !previous_was_absent {
             next.replace(previous);
         }
-        let windows = next.windows.iter().map(|w| w.wid).collect();
+        covered.extend(next.windows.iter().map(|w| w.wid));
         let ids = next.windows.iter().map(|w| w.wid).collect();
         self.presentations.insert(space, ViewportHandle {
             identity,
@@ -724,8 +778,24 @@ impl Reactor {
             self.presentations.get_mut(&space).unwrap().headless = Some(next);
             self.commit_presentations();
         }
-        Some(windows)
+        Some(covered)
     }
+}
+
+pub(super) fn scrolling_bounds(
+    reactor: &Reactor,
+    space: SpaceId,
+) -> Option<ScrollingDisplayBounds> {
+    if reactor.layout_manager.layout_engine.active_layout_mode_at(space)
+        != crate::common::config::LayoutMode::Scrolling
+    {
+        return None;
+    }
+    let screen = reactor.space_state.screen_by_space(space)?;
+    ScrollingDisplayBounds::for_screen(
+        screen.frame,
+        reactor.space_state.screens.iter().map(|s| s.frame),
+    )
 }
 
 impl AnimationManager {
@@ -972,26 +1042,49 @@ impl AnimationManager {
         delay
     }
 
-    pub fn animate_layout(
+    pub(super) fn apply_layout(
+        reactor: &mut Reactor,
+        space: SpaceId,
+        layout: &[(WindowId, CGRect)],
+        presentation: Presentation,
+        skip_wid: Option<WindowId>,
+        bounds: Option<ScrollingDisplayBounds>,
+    ) -> bool {
+        match presentation {
+            Presentation::Animated | Presentation::Resize => Self::animate_layout(
+                reactor,
+                space,
+                layout,
+                presentation == Presentation::Resize,
+                skip_wid,
+                bounds,
+            ),
+            Presentation::WorkspaceSwitch | Presentation::Instant | Presentation::Force => {
+                Self::instant_layout(reactor, space, layout, skip_wid, bounds, presentation)
+            }
+        }
+    }
+
+    fn animate_layout(
         reactor: &mut Reactor,
         space: SpaceId,
         layout: &[(WindowId, CGRect)],
         is_resize: bool,
         skip_wid: Option<WindowId>,
+        bounds: Option<ScrollingDisplayBounds>,
     ) -> bool {
-        reactor.retire_presentations();
         let setting = reactor.layout_manager.layout_engine.layout_specific_animate_settings(space);
         let animate_camera = !is_resize
             && setting.unwrap_or(reactor.config.settings.animate)
             && !(setting.is_none() && power::is_low_power_mode_enabled());
-        let presentation = reactor.present_camera(space, animate_camera, None, skip_wid);
+        let presentation = reactor.present_camera(space, animate_camera, None, skip_wid, bounds);
         let camera = presentation.is_some();
         let presented = presentation.unwrap_or_default();
         if !animate_camera {
             let windows = layout
                 .iter()
                 .map(|(wid, _)| *wid)
-                .filter(|wid| !presented.contains(wid))
+                .filter(|wid| Some(*wid) != skip_wid && !presented.contains(wid))
                 .collect();
             reactor.cancel_window_presentations(windows);
         }
@@ -1030,44 +1123,40 @@ impl AnimationManager {
             };
             let current_frame = window.frame_monotonic;
             let window_server_id = window.info.sys_id;
-            let pending = window_server_id
-                .and_then(|wsid| reactor.transaction_manager.get_target_frame(wsid));
-            // Matching the observed frame cannot cancel an older, different target.
-            if pending.is_some_and(|frame| frame.same_as(target_frame))
-                || (pending.is_none() && target_frame.same_as(current_frame))
-            {
+            let transactions = &reactor.transaction_manager;
+            let write =
+                window_server_id.and_then(|id| transactions.store.get(&id)).unwrap_or_default();
+            if write.covers(target_frame, current_frame) {
                 continue;
             }
-            any_frame_changed = true;
-            let txid = window_server_id
-                .map(|wsid| reactor.transaction_manager.generate_next_txid(wsid))
-                .unwrap_or_default();
-
-            let Some(app_state) = &reactor.app_manager.apps.get(&wid.pid) else {
+            let Some(app_state) = reactor.app_manager.apps.get(&wid.pid) else {
                 debug!(?wid, "Skipping for window - app no longer exists");
                 continue;
             };
-
+            any_frame_changed = true;
+            let txid = window_server_id
+                .map(|wsid| transactions.begin(wsid, target_frame))
+                .unwrap_or_default();
             let is_active = reactor.state.windows.workspace_for_window(wid) == Some(active_ws);
 
-            if let Some(wsid) = window_server_id {
-                reactor.transaction_manager.update_txid_entries([(wsid, txid, target_frame)]);
-            }
-            if is_active {
+            let handle = app_state.handle.with_scrolling_bounds(bounds.filter(|_| {
+                is_active && !reactor.layout_manager.layout_engine.is_window_floating(wid)
+            }));
+            if is_active && !write.needs_full_retry() {
                 trace!(?wid, ?current_frame, ?target_frame, "Animating visible window");
-                anim.add_window(&app_state.handle, wid, current_frame, target_frame, txid);
+                anim.add_window(&handle, wid, current_frame, target_frame, txid);
             } else {
                 anim.mark_handled(wid);
                 trace!(
                     ?wid,
                     ?current_frame,
                     ?target_frame,
-                    "Direct positioning hidden window"
+                    "Reconciling window directly"
                 );
                 if let Err(e) =
-                    app_state.handle.send(Request::set_window_frame(wid, target_frame, txid, true))
+                    handle.send(Request::set_window_frame(wid, target_frame, txid, true))
                 {
-                    debug!(?wid, ?e, "Failed to send frame request for hidden window");
+                    debug!(?wid, ?e, "Failed to send frame request");
                     continue;
                 }
             }
@@ -1102,38 +1191,24 @@ impl AnimationManager {
         any_frame_changed
     }
 
-    pub fn instant_layout(
+    fn instant_layout(
         reactor: &mut Reactor,
         space: SpaceId,
         layout: &[(WindowId, CGRect)],
         skip_wid: Option<WindowId>,
+        bounds: Option<ScrollingDisplayBounds>,
+        presentation: Presentation,
     ) -> bool {
-        Self::instant_layout_inner(reactor, space, layout, skip_wid, false)
-    }
-
-    /// Apply the position-only layout used while switching virtual workspaces.
-    ///
-    /// Keep this entry point separate from `instant_layout`: layouts merely suppressed
-    /// while a switch is in progress may still change window sizes and must use the
-    /// full-frame request.
-    pub fn workspace_switch_layout(
-        reactor: &mut Reactor,
-        space: SpaceId,
-        layout: &[(WindowId, CGRect)],
-        skip_wid: Option<WindowId>,
-    ) -> bool {
-        Self::instant_layout_inner(reactor, space, layout, skip_wid, true)
-    }
-
-    fn instant_layout_inner(
-        reactor: &mut Reactor,
-        _space: SpaceId,
-        layout: &[(WindowId, CGRect)],
-        skip_wid: Option<WindowId>,
-        position_only: bool,
-    ) -> bool {
-        reactor.cancel_window_presentations(layout.iter().map(|(wid, _)| *wid).collect());
-        let mut per_app: HashMap<pid_t, _> = HashMap::default();
+        let force_frames = presentation == Presentation::Force;
+        reactor.cancel_window_presentations(
+            layout
+                .iter()
+                .map(|(wid, _)| *wid)
+                .filter(|wid| Some(*wid) != skip_wid)
+                .collect(),
+        );
+        let active = reactor.layout_manager.layout_engine.workspaces().active_workspace(space);
+        let mut per_app: HashMap<(pid_t, bool), _> = HashMap::default();
         let mut any_frame_changed = false;
 
         for &(wid, target_frame) in layout {
@@ -1142,6 +1217,9 @@ impl AnimationManager {
                 continue;
             }
 
+            let constrained = bounds.is_some()
+                && reactor.state.windows.workspace_for_window(wid) == active
+                && !reactor.layout_manager.layout_engine.is_window_floating(wid);
             let window_store = &mut reactor.state.windows;
             let Some(window) = window_store.window_mut(wid) else {
                 debug!(?wid, "Skipping layout - window no longer exists");
@@ -1149,15 +1227,12 @@ impl AnimationManager {
             };
             let target_frame = target_frame.round();
             let current_frame = window.frame_monotonic;
-            if target_frame.same_as(current_frame) {
-                continue;
-            }
-            if let Some(wsid) = window.info.sys_id
-                && reactor
-                    .transaction_manager
-                    .get_target_frame(wsid)
-                    .is_some_and(|pending| pending.same_as(target_frame))
-            {
+            let write = window
+                .info
+                .sys_id
+                .and_then(|id| reactor.transaction_manager.store.get(&id))
+                .unwrap_or_default();
+            if !force_frames && write.covers(target_frame, current_frame) {
                 trace!(?wid, ?target_frame, "Skipping redundant instant layout request");
                 continue;
             }
@@ -1169,29 +1244,30 @@ impl AnimationManager {
                 "Instant workspace positioning"
             );
 
-            let size_unchanged = current_frame.size.same_as(target_frame.size);
+            let size_unchanged = !force_frames
+                && !write.needs_full_retry()
+                && write.target().is_none()
+                && current_frame.size.same_as(target_frame.size);
             window.frame_monotonic = target_frame;
-            let (frames, positions, first_wsid) =
-                per_app.entry(wid.pid).or_insert_with(|| (Vec::new(), Vec::new(), None));
-            *first_wsid = first_wsid.or(window.info.sys_id);
-            if position_only && size_unchanged {
+            let (frames, positions) = per_app
+                .entry((wid.pid, constrained))
+                .or_insert_with(|| (Vec::new(), Vec::new()));
+            if presentation == Presentation::WorkspaceSwitch && size_unchanged {
                 positions.push((wid, target_frame));
             } else {
                 frames.push((wid, target_frame));
             }
         }
 
-        for (pid, (frames, positions, first_wsid)) in per_app {
+        for ((pid, constrained), (frames, positions)) in per_app {
             let Some(app_state) = reactor.app_manager.apps.get(&pid) else {
                 debug!(?pid, "Skipping layout update for app - app no longer exists");
                 continue;
             };
 
-            let handle = &app_state.handle;
+            let handle = app_state.handle.with_scrolling_bounds(bounds.filter(|_| constrained));
 
-            let txid = first_wsid
-                .map(|wsid| reactor.transaction_manager.generate_next_txid(wsid))
-                .unwrap_or_default();
+            let txid = reactor.transaction_manager.store.next_id();
             for wid in frames.iter().map(|(wid, _)| wid).chain(positions.iter().map(|(wid, _)| wid))
             {
                 if let Some(window) = reactor.state.windows.window(*wid)
@@ -1363,9 +1439,10 @@ impl ActiveAnimation {
         for window in &mut next.windows {
             if let Some(old) = self.animation.windows.iter().find(|old| old.wid == window.wid) {
                 window.from = old.frame;
+                window.frame = old.frame;
                 window.leased = old.leased;
             } else {
-                window.begin();
+                window.begin(None);
             }
         }
         for mut old in self.animation.windows {
@@ -1461,7 +1538,7 @@ impl Animation {
 
     fn begin(&mut self) {
         for window in &mut self.windows {
-            window.begin();
+            window.begin(None);
         }
     }
 
@@ -1505,6 +1582,35 @@ fn interpolate_frame(a: CGRect, b: CGRect, s: f64) -> CGRect {
             height: blend(a.size.height, b.size.height, s),
         },
     }
+}
+
+/// Size switches in one step while the origin eases, so a window growing
+/// toward a far edge (or shrinking away from one) can momentarily extend past
+/// both endpoints and off the screen. AX clamps that write and the following
+/// position-only frames jump back. Keeping each frame inside the union of the
+/// endpoints keeps it on screen whenever both endpoints are.
+fn contain_transition_frame(from: CGRect, to: CGRect, mut frame: CGRect) -> CGRect {
+    let contain = |origin: f64, len: f64, a: f64, a_len: f64, b: f64, b_len: f64| {
+        let max = (a + a_len).max(b + b_len) - len;
+        origin.min(max).max(a.min(b))
+    };
+    frame.origin.x = contain(
+        frame.origin.x,
+        frame.size.width,
+        from.origin.x,
+        from.size.width,
+        to.origin.x,
+        to.size.width,
+    );
+    frame.origin.y = contain(
+        frame.origin.y,
+        frame.size.height,
+        from.origin.y,
+        from.size.height,
+        to.origin.y,
+        to.size.height,
+    );
+    frame
 }
 
 fn ease(t: f64) -> f64 {
@@ -1788,9 +1894,15 @@ mod tests {
             ..Default::default()
         });
         let layout = system.create_layout();
-        system.add_window_after_selection(layout, hidden);
-        system.add_window_after_selection(layout, visible);
-        system.select_window(layout, hidden);
+        system.update(crate::layout_engine::systems::WindowChange::Add(
+            layout, hidden, None,
+        ));
+        system.update(crate::layout_engine::systems::WindowChange::Add(
+            layout, visible, None,
+        ));
+        system
+            .focus(layout, crate::layout_engine::systems::Focus::Select(hidden))
+            .handled;
         system.prepare_layout(
             layout,
             rect(0.0, 0.0, 1000.0, 800.0),
@@ -1852,7 +1964,9 @@ mod tests {
             (hidden, rect(0.0, 0.0, 1000.0, 800.0)),
             (visible, rect(1000.0, 0.0, 1000.0, 800.0)),
         ];
-        system.select_window(layout, visible);
+        system
+            .focus(layout, crate::layout_engine::systems::Focus::Select(visible))
+            .handled;
         let mut manager = AnimationManager::new();
         let camera = make_camera(&system, &native, &control);
         let state = camera.state.clone();
@@ -1878,7 +1992,9 @@ mod tests {
             (hidden, rect(-960.0, 0.0, 1000.0, 800.0)),
             (visible, rect(0.0, 0.0, 1000.0, 800.0)),
         ];
-        system.select_window(layout, visible);
+        system
+            .focus(layout, crate::layout_engine::systems::Focus::Select(visible))
+            .handled;
         manager.handle_message(Message::Camera(Box::new(make_camera(
             &system, &native, &control,
         ))));
@@ -1903,7 +2019,14 @@ mod tests {
         };
         for direction in [Direction::Left, Direction::Right] {
             let before: Vec<_> = old.windows.iter().map(|w| (w.wid, w.frame)).collect();
-            assert!(system.move_selection(layout, direction));
+            assert!(
+                system
+                    .edit(layout, crate::layout_engine::systems::LayoutEdit::Move {
+                        direction: direction,
+                        has_display_neighbor: false
+                    })
+                    .changed()
+            );
             let (_, targets) = system.presentation(layout).unwrap();
             let moved = targets.iter().find(|(wid, _, _)| *wid == visible).unwrap().1;
             let neighbor = targets.iter().find(|(wid, _, _)| *wid == hidden).unwrap().1;
@@ -1944,7 +2067,14 @@ mod tests {
         assert!(manager.motions.is_empty());
         let before: Vec<_> =
             control.frames.iter().map(|(wid, (_, frame))| (*wid, *frame)).collect();
-        assert!(system.move_selection(layout, Direction::Left));
+        assert!(
+            system
+                .edit(layout, crate::layout_engine::systems::LayoutEdit::Move {
+                    direction: Direction::Left,
+                    has_display_neighbor: false
+                })
+                .changed()
+        );
         let started = Instant::now();
         let mut next = make_camera(&system, &before, &control);
         next.replace(None);
@@ -1959,9 +2089,20 @@ mod tests {
         // Unequal widths: move the first of three columns past its neighbor.
         next.sample(Instant::now() + Duration::from_secs(2));
         system.commit_presented_viewport(layout, &next.state.lock().viewport);
-        system.resize_selection_by(layout, -0.4, ResizeOrientation::Horizontal);
-        system.add_window_after_selection(layout, WindowId::new(1, 3));
-        system.select_window(layout, visible);
+        system
+            .edit(layout, crate::layout_engine::systems::LayoutEdit::Resize {
+                amount: -0.4,
+                orientation: ResizeOrientation::Horizontal,
+            })
+            .discard();
+        system.update(crate::layout_engine::systems::WindowChange::Add(
+            layout,
+            WindowId::new(1, 3),
+            None,
+        ));
+        system
+            .focus(layout, crate::layout_engine::systems::Focus::Select(visible))
+            .handled;
         let before: Vec<_> =
             crate::layout_engine::systems::scrolling::tests::presented_frames(&system, layout)
                 .collect();
@@ -1970,7 +2111,14 @@ mod tests {
         old.sample(Instant::now() + Duration::from_secs(2));
         system.commit_presented_viewport(layout, &old.state.lock().viewport);
         let before: Vec<_> = old.windows.iter().map(|w| (w.wid, w.frame)).collect();
-        assert!(system.move_selection(layout, Direction::Right));
+        assert!(
+            system
+                .edit(layout, crate::layout_engine::systems::LayoutEdit::Move {
+                    direction: Direction::Right,
+                    has_display_neighbor: false
+                })
+                .changed()
+        );
         assert_eq!(system.window_slot(layout, visible), Some(vec![1, 0]));
         let started = Instant::now();
         let mut next = make_camera(&system, &before, &PresenterControl::default());
@@ -1992,7 +2140,9 @@ mod tests {
         // Removing a preceding column rebases an in-flight camera. Preserve
         // both its position in the new coordinates and its ongoing velocity.
         system.commit_presented_viewport(layout, &next.state.lock().viewport);
-        system.remove_window(WindowId::new(1, 3));
+        system.update(crate::layout_engine::systems::WindowChange::Remove(
+            WindowId::new(1, 3),
+        ));
         system.scroll_by_delta(layout, 0.1);
         let mut replacement = make_camera(&system, &before, &PresenterControl::default());
         assert!(!replacement.presentation.animated());
@@ -2026,7 +2176,9 @@ mod tests {
         };
         let mut system = ScrollingLayoutSystem::new(&Default::default());
         let layout = system.create_layout();
-        system.add_window_after_selection(layout, wid);
+        system.update(crate::layout_engine::systems::WindowChange::Add(
+            layout, wid, None,
+        ));
         system.prepare_layout(
             layout,
             rect(0.0, 0.0, 1000.0, 800.0),
@@ -2108,7 +2260,7 @@ mod tests {
                 "display sampling cannot advance transactions"
             );
             assert_eq!(
-                store.get(&wsid).unwrap().target,
+                store.get(&wsid).unwrap().target(),
                 None,
                 "free gestures have no semantic target"
             );
@@ -2283,7 +2435,15 @@ mod tests {
                 .frames
                 .insert(wid, (handle.clone(), retained));
             // Within a Space, a new camera must preserve the last publication.
-            reactor.present_camera(spaces[source], true, None, None).unwrap();
+            reactor
+                .present_camera(
+                    spaces[source],
+                    true,
+                    None,
+                    None,
+                    scrolling_bounds(&reactor, spaces[source]),
+                )
+                .unwrap();
             let Message::Camera(source_camera) = receiver.commands.try_recv().unwrap() else {
                 panic!("expected source camera");
             };
@@ -2374,6 +2534,51 @@ mod tests {
     }
 
     #[test]
+    fn space_snapshot_preserves_animation_until_presentation_changes() {
+        use super::super::testing::*;
+        use crate::actor::reactor::Event;
+
+        let (mut apps, mut reactor) = test_context();
+        let space = SpaceId::new(1);
+        let Event::SpaceStateChanged(mut snapshot) =
+            space_state_event(vec![rect(0., 0., 1000., 800.)], vec![Some(space)])
+        else {
+            unreachable!()
+        };
+        reactor.handle_event(Event::SpaceStateChanged(snapshot.clone()));
+        apps.make_app_and_settle(&mut reactor, 1, make_windows(1));
+        let wid = WindowId::new(1, 1);
+        let (sender, receiver) = AnimationSender::channel();
+        let frame = rect(10., 10., 500., 400.);
+        sender
+            .control
+            .lock()
+            .frames
+            .insert(wid, (reactor.app_manager.apps[&1].handle.clone(), frame));
+        let control = Arc::clone(&sender.control);
+        reactor.animation_tx = Some(sender);
+        for revision in [snapshot.revision, snapshot.revision.saturating_sub(1)] {
+            let mut restated = snapshot.clone();
+            restated.revision = revision;
+            reactor.handle_event(Event::SpaceStateChanged(restated));
+            assert!(control.lock().frames.contains_key(&wid));
+            assert!(
+                receiver.commands.try_iter().all(|message| !matches!(message, Message::Stop(_)))
+            );
+        }
+        snapshot.revision += 1;
+        reactor.handle_event(Event::SpaceStateChanged(snapshot.clone()));
+        assert!(control.lock().frames.contains_key(&wid));
+        assert!(receiver.commands.try_iter().all(|message| !matches!(message, Message::Stop(_))));
+
+        snapshot.revision += 1;
+        snapshot.destroyed_spaces.insert(space);
+        reactor.handle_event(Event::SpaceStateChanged(snapshot));
+        assert!(!control.lock().frames.contains_key(&wid));
+        assert!(receiver.commands.try_iter().any(|message| matches!(message, Message::Stop(_))));
+    }
+
+    #[test]
     fn cancellation_discards_pending_frames_and_does_not_replay_the_target() {
         let (handle, mut rx) = AppThreadHandle::channel();
         let wid = WindowId::new(1, 1);
@@ -2455,6 +2660,13 @@ mod tests {
 
         let resumed_start = transition_state(&manager).unwrap().animation.windows[0].from;
         assert_eq!(resumed_start, continuing_frame);
+
+        // The presenter publishes immediately after a replacement, before the
+        // next display tick. Queries and subsequent layouts must see the last
+        // displayed frame rather than the new command's stale starting frame.
+        let mut control = PresenterControl::default();
+        manager.publish_frames(&mut control, true);
+        assert_eq!(control.frame(wid, CGRect::ZERO), continuing_frame);
 
         manager.tick_at(transition_state(&manager).unwrap().started + Duration::from_millis(10));
         let expected_next = get_frame(resumed_start, rect(80.0, 90.0, 10.0, 10.0), 1.0 / 30.0);

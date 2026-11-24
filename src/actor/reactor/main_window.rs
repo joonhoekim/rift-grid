@@ -42,12 +42,6 @@ impl MainWindowTracker {
                 }
                 return None;
             }
-            &Event::WindowDestroyed(wid) => {
-                if self.window_server_focus == Some(wid) {
-                    self.window_server_focus = None;
-                }
-                return None;
-            }
             &Event::ApplicationActivated(pid, quiet) => {
                 let app = self.apps.get_mut(&pid)?;
                 app.is_frontmost = true;
@@ -101,6 +95,17 @@ impl MainWindowTracker {
             }
         }
         None
+    }
+
+    pub(super) fn replace_window(&mut self, wid: WindowId, replacement: Option<WindowId>) {
+        if self.window_server_focus == Some(wid) {
+            self.window_server_focus = replacement;
+        }
+        if let Some(app) = self.apps.get_mut(&wid.pid)
+            && app.main_window == Some(wid)
+        {
+            app.main_window = replacement;
+        }
     }
 
     pub fn main_window(&self) -> Option<WindowId> {
@@ -198,7 +203,7 @@ mod tests {
             Quiet::No,
         ));
 
-        let _ = tracker.handle_event(&Event::WindowDestroyed(server_window));
+        tracker.replace_window(server_window, None);
         assert_eq!(tracker.main_window(), Some(ax_window));
     }
 
@@ -209,7 +214,6 @@ mod tests {
         let mut reactor = Reactor::new_for_test(LayoutEngine::new(
             &crate::common::config::VirtualWorkspaceSettings::default(),
             &crate::common::config::LayoutSettings::default(),
-            None,
         ));
         let space = SpaceId::new(1);
         let screen_frame = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1920., 1080.));
@@ -281,7 +285,6 @@ mod tests {
         let mut reactor = Reactor::new_for_test(LayoutEngine::new(
             &crate::common::config::VirtualWorkspaceSettings::default(),
             &crate::common::config::LayoutSettings::default(),
-            None,
         ));
         let space = SpaceId::new(1);
         let screen_frame = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1920., 1080.));
@@ -362,7 +365,6 @@ mod tests {
         let mut reactor = Reactor::new_for_test(LayoutEngine::new(
             &crate::common::config::VirtualWorkspaceSettings::default(),
             &crate::common::config::LayoutSettings::default(),
-            None,
         ));
         let pid = 3;
         let windows = make_windows(2);

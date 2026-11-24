@@ -202,10 +202,15 @@ vertical = 0
 # Enabling requires restarting Rift. Disabling on reload releases Overview resources.
 # Reload closes an open Overview; previews are optional and never request permission.
 [settings.ui.mission_control]
+# Activate the selected window/workspace after releasing the opening hotkey and all modifiers.
+# Leave false to keep Overview open until a click or Enter.
+activate_on_hotkey_release = false
 # enable a niri style overview
 enabled = false
 # Include empty workspaces as navigation and drag destinations.
 show_empty_workspaces = true
+# Hide the camera and navigation controls in the corner of Overview.
+# hide_toolbar = true
 
 [settings.ui.menu_bar]
 # enable menu bar workspace indicators
@@ -289,7 +294,8 @@ preview = true
 # - per_display (default): each display has its own workspaces, numbered from 1. Like macOS
 #   Spaces, each desktop on a display has its own set.
 # - global: workspaces are numbered across all displays. Each one stays on a single display and
-#   is never mirrored; selecting it focuses that display.
+#   is never mirrored; selecting it focuses that display. Next/previous commands and swipes
+#   navigate across visible displays in global mode, and stay local in per_display mode.
 mode = "per_display"
 # Virtual workspaces
 # - enabled: if false, rift behaves like a simple tiling WM with a single space
@@ -487,6 +493,8 @@ comb1 = "Alt + Shift"
 # the following commands *only* work when the master stack layout is active
 # - adjust_master_ratio = 0.05 / adjust_master_count = { delta = 1 }
 # - promote_to_master / swap_master_stack
+# - rotate_master_stack_next shifts windows one slot toward the first master slot
+# - rotate_master_stack_prev shifts windows one slot in the opposite direction
 
 # the following commands *only* work when the scrolling layout is active
 # - scroll_strip = { delta = 0.5 }

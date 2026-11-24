@@ -77,6 +77,17 @@ impl Config {
         key.to_string()
     }
 
+    /// A binding key as the runtime reads it, after modifier combinations expand.
+    pub(crate) fn binding_hotkey(
+        key: &str,
+        combinations: &std::collections::BTreeMap<String, String>,
+    ) -> Option<(String, Hotkey)> {
+        let key =
+            Self::normalize_hotkey_string(&Self::expand_modifier_combinations(key, combinations));
+        let hotkey = Hotkey::from_str(&key).ok()?;
+        Some((key, hotkey))
+    }
+
     fn levenshtein(a: &str, b: &str) -> usize {
         let b: Vec<_> = b.chars().collect();
         let mut row: Vec<_> = (0..=b.len()).collect();
@@ -136,9 +147,29 @@ impl Config {
         // Attempt to deserialize. If it fails, and the error indicates an unknown enum
         // variant, attempt to provide a helpful suggestion.
         match parse_config_file(buf) {
-            Ok(c) => {
+            Ok(mut c) => {
                 if c.binding_modes.contains_key("default") {
                     bail!("`default` is reserved and cannot be defined in [binding_modes]");
+                }
+
+                let overview = &mut c.settings.ui.mission_control;
+                if let Some(keys) = &overview.keys {
+                    let mut assigned = HashSet::default();
+                    let mut normalized = std::collections::BTreeMap::new();
+                    for (key, action) in keys {
+                        let Some((spec, hotkey)) =
+                            Self::binding_hotkey(key, &c.modifier_combinations)
+                        else {
+                            bail!("Could not parse Overview shortcut `{key}`");
+                        };
+                        for modifiers in hotkey.modifiers.expand_to_specific() {
+                            if !assigned.insert(Hotkey::new(modifiers, hotkey.key_code)) {
+                                bail!("Shortcut `{key}` conflicts with another Overview binding");
+                            }
+                        }
+                        normalized.insert(spec, *action);
+                    }
+                    overview.keys = Some(normalized);
                 }
 
                 let mut binding_sets: Vec<_> = c.binding_modes.into_iter().collect();
@@ -154,10 +185,9 @@ impl Config {
                     let mut specs = Vec::with_capacity(bindings.len());
                     let mut assigned = HashSet::default();
                     for (key, cmd) in bindings {
-                        let expanded_key =
-                            Self::expand_modifier_combinations(&key, &c.modifier_combinations);
-                        let normalized_key = Self::normalize_hotkey_string(&expanded_key);
-                        let Ok(hotkey) = Hotkey::from_str(&normalized_key) else {
+                        let Some((normalized_key, hotkey)) =
+                            Self::binding_hotkey(&key, &c.modifier_combinations)
+                        else {
                             bail!("Could not parse hotkey `{key}` in binding mode `{mode}`");
                         };
                         for modifiers in hotkey.modifiers.expand_to_specific() {
@@ -346,5 +376,18 @@ pub(super) fn parse_config_file(buf: &str) -> Result<ConfigSource, toml::de::Err
     migrate_legacy_resize_bindings(&mut document);
     migrate_legacy_window_snapping(&mut document);
     migrate_legacy_stack_line(&mut document);
-    document.try_into()
+    let explicit_workspace_names = document
+        .get("virtual_workspaces")
+        .and_then(|workspaces| workspaces.get("workspace_names"))
+        .is_some();
+    let mut source: ConfigSource = document.try_into()?;
+    // Built-in names follow the configured count. Explicit lists must still be
+    // validated as written, including lists identical to the built-in defaults.
+    if !explicit_workspace_names {
+        source
+            .virtual_workspaces
+            .workspace_names
+            .truncate(source.virtual_workspaces.default_workspace_count);
+    }
+    Ok(source)
 }

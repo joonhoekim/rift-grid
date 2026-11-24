@@ -29,17 +29,21 @@ pub(super) fn target(
     let owns = |frame: CGRect| {
         point.x < frame.origin.x + frame.size.width && point.y < frame.origin.y + frame.size.height
     };
-    scene.targets.iter().filter(|target| Some(target.window) != excluded).find_map(|target| {
-        if !owns(target.frame) {
-            return None;
-        }
-        let zone = classify_zone(target.frame, point, fraction)?;
-        Some(DropIntent {
-            window: target.window,
-            space: target.space,
-            frame: target.frame,
-            zone,
-            action: scene.action_override.unwrap_or_else(|| resolve_action(zone, CENTER)),
+    scene
+        .targets
+        .iter()
+        .filter(|target| Some(target.window) != excluded)
+        .find_map(|target| {
+            if !owns(target.frame) {
+                return None;
+            }
+            let zone = classify_zone(target.frame, point, fraction)?;
+            Some(DropIntent {
+                window: target.window,
+                space: target.space,
+                frame: target.frame,
+                zone,
+                action: scene.action_override.unwrap_or_else(|| resolve_action(zone, CENTER)),
+            })
         })
-    })
 }

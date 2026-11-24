@@ -43,12 +43,6 @@ pub enum MenuState {
     Open(pid_t),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WorkspaceSwitchState {
-    Inactive,
-    Active,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceSwitchOrigin {
     Manual,
@@ -85,6 +79,7 @@ pub(crate) struct WindowState {
     /// Rift/macOS heuristic result, kept separately from an explicit app-rule
     /// override so every discovered window can remain tracked.
     pub(crate) is_manageable: bool,
+    pub(crate) native_transient: bool,
     pub(crate) manage_override: Option<bool>,
 }
 
@@ -94,6 +89,7 @@ impl From<WindowInfo> for WindowState {
             frame_monotonic: info.frame,
             info,
             is_manageable: false,
+            native_transient: false,
             manage_override: None,
         }
     }
@@ -119,10 +115,23 @@ impl WindowState {
     }
 
     pub(crate) fn is_admitted_with_override(&self, manage_override: Option<bool>) -> bool {
-        !self.info.is_minimized && manage_override.unwrap_or(self.is_manageable)
+        !self.info.is_minimized
+            && self.allows_management(manage_override)
+            && manage_override.unwrap_or(self.is_manageable)
     }
 
-    pub(crate) fn can_reconcile_admission(&self) -> bool { !self.info.is_minimized }
+    pub(super) fn allows_management(&self, manage_override: Option<bool>) -> bool {
+        // A rule that explicitly manages a window outranks the AX role
+        // heuristics when the only transient marker is the `AXDialog` subrole,
+        // which some apps use for a real main window. Native transient
+        // attachments and other AX chrome stay vetoed.
+        let overrides_dialog_veto = manage_override == Some(true)
+            && self.info.ax_role.as_deref() == Some("AXWindow")
+            && self.info.ax_subrole.as_deref() == Some("AXDialog");
+        !self.native_transient
+            && (overrides_dialog_veto || !crate::sys::app::is_ax_transient(&self.info))
+            && manage_override != Some(false)
+    }
 }
 
 use thiserror::Error;

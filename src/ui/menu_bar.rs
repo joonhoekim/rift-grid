@@ -7,13 +7,17 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use cgs::{Canvas, Menu, MenuItem, OpenPanel, SavePanel, StatusItem, Ui};
-use objc2::Message;
+use cgs::Ui;
+use cgs::drawing::Canvas;
+use cgs::menu::{Menu, MenuItem, StatusItem};
+use cgs::window::{OpenPanel, SavePanel};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::{AnyThread, Message};
 use objc2_app_kit::{
     NSAlert, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSEventModifierFlags, NSFont,
-    NSFontAttributeName, NSFontWeightBold, NSFontWeightMedium, NSMenuItem, NSSavePanel, NSView,
+    NSFontAttributeName, NSFontWeightBold, NSFontWeightMedium, NSGraphicsContext, NSImage,
+    NSMenuItem, NSSavePanel, NSView,
 };
 use objc2_core_foundation::{
     CFAttributedString, CFDictionary, CFRetained, CFString, CGAffineTransform, CGFloat, CGPoint,
@@ -844,6 +848,13 @@ fn build_static_menu(mtm: MainThreadMarker, handler: &Rc<MenuActionHandler>) -> 
         "Update Master Layout",
         MenuActionHandler::on_save_master_file,
     );
+    add_action_item(
+        &saved_layouts_menu,
+        mtm,
+        handler,
+        "Restore Master Layout on All Displays",
+        MenuActionHandler::on_restore_master_file_displays,
+    );
     add_separator(&saved_layouts_menu);
     let (_, restore_workspace_menu) = add_submenu(&saved_layouts_menu, mtm, "Restore Workspace");
     let (_, restore_space_menu) = add_submenu(&saved_layouts_menu, mtm, "Restore Space");
@@ -1112,7 +1123,7 @@ impl MenuActionHandler {
     }
 
     fn validate_layout_path(path: PathBuf) -> Option<PathBuf> {
-        match LayoutEngine::load(path.clone()) {
+        match LayoutEngine::validate_file(path.clone()) {
             Ok(_) => Some(path),
             Err(error) => {
                 let mtm = MainThreadMarker::new()?;
@@ -1203,6 +1214,12 @@ impl MenuActionHandler {
 
     fn on_save_master_file(&self, _sender: Option<&NSMenuItem>) {
         self.emit(MenuAction::SaveMasterFile);
+    }
+
+    fn on_restore_master_file_displays(&self, _sender: Option<&NSMenuItem>) {
+        if Self::validate_layout_path(restore_file()).is_some() {
+            self.emit(MenuAction::RestoreMasterFile(RestoreScope::Displays));
+        }
     }
 
     fn on_restore_master_file_workspace(&self, _sender: Option<&NSMenuItem>) {
@@ -1799,9 +1816,50 @@ impl MenuBarPreview {
         self.view.set_layout(layout);
     }
 
+    /// Render one example with the same drawing path as the menu bar indicator.
+    #[allow(deprecated)]
+    pub fn choice_image(
+        &self,
+        style: WorkspaceDisplayStyle,
+        label: ActiveWorkspaceLabel,
+    ) -> Retained<NSImage> {
+        let settings = MenuBarSettings {
+            enabled: true,
+            mode: MenuBarDisplayMode::All,
+            display_style: style,
+            active_label: label,
+            current_display_only: true,
+            show_binding_mode: false,
+            show_fullscreen_indicator: false,
+            ..Default::default()
+        };
+        let mut workspace = self.displays[0].workspaces[0].clone();
+        workspace.is_active = false;
+        let displays = vec![DisplayWorkspaces {
+            display_uuid: "example".into(),
+            space: SpaceId::new(1),
+            is_active_context: true,
+            workspaces: vec![workspace],
+        }];
+        let layout = build_layout(&render_inputs(&displays, &settings), &self.view.text_attrs);
+        let size = CGSize::new(layout.size.width.max(1.0), 20.0);
+        let image = NSImage::initWithSize(NSImage::alloc(), size);
+        image.lockFocus();
+        if let Some(context) = NSGraphicsContext::currentContext() {
+            draw_menu_icon(
+                context.CGContext().as_ref(),
+                CGRect::new(CGPoint::ZERO, size),
+                &layout,
+                false,
+            );
+        }
+        image.unlockFocus();
+        image
+    }
+
     pub fn width(&self) -> f64 { self.view.layout.borrow().size.width }
 }
-impl cgs::NativeView for MenuBarPreview {
+impl cgs::view::NativeView for MenuBarPreview {
     fn ns_view(&self) -> &NSView { self.view.canvas.ns_view() }
 }
 

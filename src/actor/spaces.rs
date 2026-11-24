@@ -131,6 +131,13 @@ pub struct ForwardedSpaceState {
 }
 
 impl ForwardedSpaceState {
+    pub(super) fn presentation_changed(&self, previous: &Self) -> bool {
+        !self.destroyed_spaces.is_empty()
+            || self.screens != previous.screens
+            || self.fullscreen_spaces != previous.fullscreen_spaces
+            || self.display_space_ids != previous.display_space_ids
+    }
+
     pub fn screen_by_space(&self, space: SpaceId) -> Option<&ScreenInfo> {
         self.screens.iter().find(|screen| screen.space == Some(space))
     }
@@ -333,10 +340,18 @@ impl SpacesActor {
                 self.handle_space_inventory_changed();
             }
             Event::SpaceCreated(space) => {
+                if self.classify_space(space).is_none() {
+                    return;
+                }
                 self.state.destroyed_spaces.remove(&space);
                 self.handle_space_inventory_changed();
             }
             Event::SpaceDestroyed(space) => {
+                // A destroyed ID may no longer have a queryable type. Use the
+                // inventory classified while it was alive instead.
+                if !self.was_managed_space(space) {
+                    return;
+                }
                 self.state.destroyed_spaces.insert(space);
                 self.handle_space_inventory_changed();
             }
@@ -516,6 +531,20 @@ impl SpacesActor {
         screens: Vec<ScreenInfo>,
         inventory: HashMap<String, Vec<SpaceId>>,
     ) -> ForwardedSpaceState {
+        // Internal WindowServer Spaces must not participate in desktop identity,
+        // remapping, or presentation invalidation.
+        let inventory: HashMap<_, Vec<_>> = inventory
+            .into_iter()
+            .map(|(display, spaces)| {
+                let spaces = spaces
+                    .into_iter()
+                    .filter(|space| {
+                        Self::is_user_space(*space) || Self::is_fullscreen_space(*space)
+                    })
+                    .collect();
+                (display, spaces)
+            })
+            .collect();
         let previous_screens = self.state.screens.clone();
         // Positive presence only: inactive fullscreen enumeration may be incomplete.
         let fullscreen_spaces: HashSet<SpaceId> = screens
@@ -622,11 +651,20 @@ impl SpacesActor {
             .iter()
             .copied()
             .filter(|space| {
-                !inventory.values().any(|spaces| spaces.contains(space))
+                // WindowServer also reports transient Spaces used during app
+                // activation. Only forward destruction of a Space we previously
+                // managed; an unknown ID cannot invalidate desktop geometry.
+                self.was_managed_space(*space)
+                    && !inventory.values().any(|spaces| spaces.contains(space))
                     && !fullscreen_spaces.contains(space)
             })
             .collect();
-        self.state.destroyed_spaces.retain(|space| !destroyed_spaces.contains(space));
+        // Corroborated removals are forwarded once. Untracked transient IDs
+        // are discarded once they are absent from the accepted native sample.
+        self.state.destroyed_spaces.retain(|space| {
+            inventory.values().any(|spaces| spaces.contains(space))
+                || fullscreen_spaces.contains(space)
+        });
         let mut forwarded = ForwardedSpaceState {
             revision: self.state.revision,
             authoritative: true,
@@ -644,26 +682,23 @@ impl SpacesActor {
             resized_spaces,
             active_window_spaces: self.state.visible_window_spaces.clone(),
         };
-        let presentation_changed = self.state.last_forwarded.as_ref().is_none_or(|previous| {
-            !forwarded.destroyed_spaces.is_empty()
-                || previous.screens != forwarded.screens
-                || previous.fullscreen_spaces != forwarded.fullscreen_spaces
-                || previous.display_space_ids != forwarded.display_space_ids
-                || previous.membership_complete != forwarded.membership_complete
-        });
-        let membership_changed = self.state.last_forwarded.as_ref().is_some_and(|previous| {
-            previous.active_window_spaces != forwarded.active_window_spaces
-        });
-        if presentation_changed || membership_changed {
+        let presentation_changed = self
+            .state
+            .last_forwarded
+            .as_ref()
+            .is_none_or(|previous| forwarded.presentation_changed(previous));
+        if presentation_changed
+            || self.state.last_forwarded.as_ref().is_none_or(|previous| {
+                previous.active_window_spaces != forwarded.active_window_spaces
+                    || previous.membership_complete != forwarded.membership_complete
+            })
+        {
             self.state.revision = self.state.revision.wrapping_add(1);
             forwarded.revision = self.state.revision;
-        }
-        // Revoke queued app-actor frames before publishing a changed presentation,
-        // including ordinary native Space switches without physical churn. A window
-        // that only moved between Spaces (as move_window_to_display moves it) leaves
-        // the frames valid; revoking them dropped the moved window's resize.
-        if presentation_changed {
-            self.state.topology_guard.invalidate(self.state.revision);
+            if presentation_changed {
+                // Revoke queued frames only when their presentation is stale.
+                self.state.topology_guard.invalidate(self.state.revision);
+            }
         }
         self.state.last_forwarded = Some(forwarded.clone());
         forwarded
@@ -851,25 +886,17 @@ impl SpacesActor {
     }
 
     fn is_fullscreen_space(space: SpaceId) -> bool {
-        #[cfg(test)]
-        {
-            space.get() >= 0x400000000
-        }
-        #[cfg(not(test))]
-        {
-            window_server::space_is_fullscreen(space.get())
-        }
+        window_server::space_is_fullscreen(space.get())
     }
 
-    fn is_user_space(space: SpaceId) -> bool {
-        #[cfg(test)]
-        {
-            !Self::is_fullscreen_space(space)
-        }
-        #[cfg(not(test))]
-        {
-            window_server::space_is_user(space.get())
-        }
+    fn is_user_space(space: SpaceId) -> bool { window_server::space_is_user(space.get()) }
+
+    fn was_managed_space(&self, space: SpaceId) -> bool {
+        self.state.last_forwarded.as_ref().is_some_and(|previous| {
+            previous.screens.iter().any(|screen| screen.space == Some(space))
+                || previous.display_space_ids.values().any(|spaces| spaces.contains(&space))
+                || previous.fullscreen_spaces.contains(&space)
+        })
     }
 
     fn classify_space(&self, space: SpaceId) -> Option<reactor::SpaceEventKind> {

@@ -2,7 +2,7 @@
 //! its name and then the grids on it. Dragging a button onto another display's
 //! row hands the grid to that display.
 
-use cgs::with_disabled_actions;
+use cgs::compositor::with_disabled_actions;
 
 use super::*;
 
@@ -53,18 +53,33 @@ fn layout(width: f64, top: f64, counts: &[usize]) -> (CGRect, Vec<CGRect>, Vec<V
     let mut buttons = Vec::new();
     for (i, &count) in counts.iter().enumerate() {
         let y = PAD + i as f64 * (BUTTON.height + ROW_GAP);
-        rows.push(rect(PAD / 2.0, y - ROW_GAP / 2.0, inner + PAD, BUTTON.height + ROW_GAP));
+        rows.push(rect(
+            PAD / 2.0,
+            y - ROW_GAP / 2.0,
+            inner + PAD,
+            BUTTON.height + ROW_GAP,
+        ));
         buttons.push(
             (0..count)
                 .map(|j| {
-                    rect(PAD + NAME_WIDTH + j as f64 * (BUTTON.width + BUTTON_GAP), y, BUTTON.width, BUTTON.height)
+                    rect(
+                        PAD + NAME_WIDTH + j as f64 * (BUTTON.width + BUTTON_GAP),
+                        y,
+                        BUTTON.width,
+                        BUTTON.height,
+                    )
                 })
                 .collect(),
         );
     }
     let height = 2.0 * PAD + counts.len() as f64 * (BUTTON.height + ROW_GAP) - ROW_GAP;
     let bar_width = inner - BUTTON_GAP + 2.0 * PAD;
-    let bar = rect(((width - bar_width) / 2.0).round(), top + TOP_GAP, bar_width, height);
+    let bar = rect(
+        ((width - bar_width) / 2.0).round(),
+        top + TOP_GAP,
+        bar_width,
+        height,
+    );
     (bar, rows, buttons)
 }
 
@@ -115,7 +130,12 @@ impl GridBar {
                 let name = label(
                     &layer,
                     &group.name,
-                    rect(PAD + 4.0, row.origin.y + (row.size.height - 16.0) / 2.0, NAME_WIDTH - 12.0, 16.0),
+                    rect(
+                        PAD + 4.0,
+                        row.origin.y + (row.size.height - 16.0) / 2.0,
+                        NAME_WIDTH - 12.0,
+                        16.0,
+                    ),
                     scale,
                 );
                 unsafe {
@@ -181,7 +201,9 @@ impl GridBar {
         if p.x < -DROP_SLACK || p.x > self.frame.size.width + DROP_SLACK {
             return None;
         }
-        self.rows.iter().position(|r| p.y >= r.origin.y && p.y <= r.origin.y + r.size.height)
+        self.rows
+            .iter()
+            .position(|r| p.y >= r.origin.y && p.y <= r.origin.y + r.size.height)
     }
 
     /// Outline the button of grid `grid`, where a dragged window would go.
@@ -191,7 +213,11 @@ impl GridBar {
                 self.cells.iter().flatten().zip(self.groups.iter().flat_map(|g| &g.buttons))
             {
                 let on = Some(button.grid) == grid;
-                cell.setBorderWidth(if on || button.shown == Shown::Elsewhere { 1.5 } else { 0.0 });
+                cell.setBorderWidth(if on || button.shown == Shown::Elsewhere {
+                    1.5
+                } else {
+                    0.0
+                });
                 if on {
                     cell.setBorderColor(Some(&color(1.0, 1.0, 1.0, 0.9)));
                 } else {
@@ -203,7 +229,9 @@ impl GridBar {
 
     /// Note a button pressed at `local`; false when there is none.
     pub(crate) fn press(&mut self, local: CGPoint) -> bool {
-        let Some(button) = self.button_at(local) else { return false };
+        let Some(button) = self.button_at(local) else {
+            return false;
+        };
         self.pressed = Some((button, local, false));
         true
     }
@@ -212,13 +240,17 @@ impl GridBar {
 
     /// Carry the pressed button to `local`, showing the row it would go to.
     pub(crate) fn drag(&mut self, local: CGPoint) {
-        let Some((from, start, moved)) = self.pressed.as_mut() else { return };
+        let Some((from, start, moved)) = self.pressed.as_mut() else {
+            return;
+        };
         *moved |= (local.x - start.x).hypot(local.y - start.y) > DRAG_START;
         if !*moved {
             return;
         }
         let from = *from;
-        let Some(button) = self.button(from).cloned() else { return };
+        let Some(button) = self.button(from).cloned() else {
+            return;
+        };
         let p = self.within(local);
         let target = self.row_at(local).filter(|&r| r != from.0 && !button.new);
         with_disabled_actions(|| {
@@ -290,7 +322,11 @@ fn button_layer(button: &BarButton, frame: CGRect, scale: f64) -> Retained<CALay
         }
         Shown::No => cell.setBackgroundColor(Some(&color(1.0, 1.0, 1.0, 0.1))),
     }
-    let text = if button.new { "+".to_owned() } else { (button.grid + 1).to_string() };
+    let text = if button.new {
+        "+".to_owned()
+    } else {
+        (button.grid + 1).to_string()
+    };
     let number = label(
         &cell,
         &text,
@@ -299,7 +335,11 @@ fn button_layer(button: &BarButton, frame: CGRect, scale: f64) -> Retained<CALay
     );
     unsafe { number.setAlignmentMode(objc2_quartz_core::kCAAlignmentCenter) };
     number.setFontSize(13.0);
-    let alpha = if button.shown == Shown::Here { 1.0 } else { 0.85 };
+    let alpha = if button.shown == Shown::Here {
+        1.0
+    } else {
+        0.85
+    };
     number.setForegroundColor(Some(&color(1.0, 1.0, 1.0, alpha)));
     cell
 }
@@ -311,7 +351,10 @@ mod tests {
     #[test]
     fn displays_stack_in_rows_under_the_menu_bar() {
         let (bar, rows, buttons) = layout(1000.0, 30.0, &[3, 2]);
-        assert!((bar.origin.x + bar.size.width / 2.0 - 500.0).abs() <= 0.5, "centered");
+        assert!(
+            (bar.origin.x + bar.size.width / 2.0 - 500.0).abs() <= 0.5,
+            "centered"
+        );
         assert_eq!(bar.origin.y, 30.0 + TOP_GAP);
         assert!((bar.origin.y + bar.size.height - bar_bottom(30.0, 2)).abs() < 1e-9);
         assert_eq!((buttons[0].len(), buttons[1].len()), (3, 2));
