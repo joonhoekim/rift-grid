@@ -801,6 +801,13 @@ impl OverviewSession {
                 if let Some(id) = close(self, p) {
                     return Some(Some(OverviewAction::CloseWindow(id)));
                 }
+                if let Some((display, selection)) = self.cell_clicked(p) {
+                    self.pressed = None;
+                    NSCursor::arrowCursor().set();
+                    self.activate_display(display);
+                    self.change_selection(selection);
+                    return Some(self.activate(false));
+                }
             }
             // Over the grid row a window goes to the grid of the button it is dropped on.
             Input::PointerUp(p) | Input::Click(p) if self.drag.is_some() && self.on_grid_row(p) => {
@@ -824,6 +831,32 @@ impl OverviewSession {
             return Some(action);
         }
         self.grid_keys(input)
+    }
+
+    /// A click, not a pan, on a cell away from its windows, labels and
+    /// controls: the display and the selection that goes into that cell.
+    fn cell_clicked(&self, point: CGPoint) -> Option<(usize, Selection)> {
+        if let Some((start, _)) = self.pressed
+            && (point.x - start.x).hypot(point.y - start.y) >= 4.0
+        {
+            return None;
+        }
+        let display = self.displays.iter().position(|d| contains(d.bounds, point))?;
+        let d = &self.displays[display];
+        d.grid.shape?;
+        let local = d.local(point);
+        if self.on_grid_row(point)
+            || d.toolbar_item_at(local).is_some()
+            || d.workspace_label_at(local).is_some()
+            || d.hit(point).is_some()
+        {
+            return None;
+        }
+        let ws = d.grid_workspace_at(d.camera.unproject(local))?;
+        Some((display, Selection {
+            workspace: ws.index,
+            window: ws.focused_window,
+        }))
     }
 
     /// Arrow keys and Tab move the real focus in a grid; the overview follows.
