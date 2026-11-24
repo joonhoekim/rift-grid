@@ -6,12 +6,24 @@ Most work fits in one 3x3 grid; more grids keep separate contexts apart.
 
 ## Terms
 
-- **Grid**: 3x3 cells, numbered 1 to 9. The grid size is fixed; a fixed 3x3 is
-  the mental model, and a per-grid size can be opened up later if it is ever
-  needed.
-- **Cell**: one rift virtual workspace. The display shows one cell at a time.
-- **Current cell**: each grid remembers the cell it was last on, the center cell
-  until then.
+The same as subline's: a bar on top (macOS's menu bar here), the grid, its
+cells, and the tiles in a cell. Upstream's names stay in upstream's code, its
+settings and its menus; the fork's own code, commands and settings use these.
+
+| Term | Means | In upstream's terms |
+| --- | --- | --- |
+| **Grid** | 3x3 cells, numbered 1 to 9; one context (a project, a kind of work). The size is fixed: a fixed 3x3 is the mental model | nine workspaces in a row of a display's list |
+| **Cell** | What a display shows; one at a time | one virtual workspace |
+| **Current cell** | The cell on screen; each grid remembers its own, the center cell until then (`current_cell`, `grid_current_cell`) | the active workspace |
+| **Tile** | A window's place in a cell's layout | a node of the layout tree, a column |
+| **Overview** | The grid from above: the current cell and its neighbours, then the whole grid | Mission Control (`show_mission_control_*`, `[settings.ui.mission_control]`) |
+| **Whole grid** | The Overview's second stage, every cell at once (`overview_whole`, `[settings.grid.overview] fit`) | — |
+
+The commands follow subline's actions: `focus` (tile beside, or the next cell
+past the edge), `move_tile`, `go_to_cell`, `go_to_center_cell`, `grid`,
+`send_to_grid`, `overview_whole`. The settings are `[settings.grid]` and
+`[virtual_workspaces] grid_columns`; the settings app shows them on the Grid
+page.
 
 ## Model
 
