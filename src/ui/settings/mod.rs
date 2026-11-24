@@ -65,6 +65,7 @@ pub(super) enum Category {
     General,
     Layouts,
     Workspaces,
+    Grid,
     Rules,
     Keyboard,
     Mouse,
@@ -80,10 +81,11 @@ impl Category {
 
     fn title(self) -> &'static str { CATEGORIES[self.index()].1 }
 }
-pub(super) const CATEGORIES: [(Category, &str, &str); 12] = [
+pub(super) const CATEGORIES: [(Category, &str, &str); 13] = [
     (Category::General, "General", "gearshape"),
     (Category::Layouts, "Layouts", "rectangle.split.2x2"),
     (Category::Workspaces, "Workspaces", "square.grid.2x2"),
+    (Category::Grid, "Grid", "square.grid.3x3"),
     (Category::Rules, "Rules", "line.3.horizontal.decrease"),
     (Category::Keyboard, "Keyboard", "keyboard"),
     (Category::Mouse, "Mouse & Trackpad", "computermouse"),

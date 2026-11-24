@@ -99,7 +99,7 @@ pub struct VirtualWorkspaceSettings {
     #[serde(default)]
     /// Lay workspaces out as a grid with this many columns, row by row from the
     /// top left. 0 keeps them in a line.
-    #[setting(label = "Grid columns", aliases = "grid cells rows 3x3 layout matrix")]
+    #[setting(label = "Grid columns", group = "grid", aliases = "grid cells rows 3x3 layout matrix")]
     pub grid_columns: usize,
     #[serde(default)]
     /// Recheck workspace rules when a window title changes.

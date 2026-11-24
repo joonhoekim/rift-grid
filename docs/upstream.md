@@ -27,7 +27,7 @@ New code lives in fork modules; upstream files only call into them.
 | `sys/mach.rs`, `sys/service.rs`, `common/config/types.rs`, `crates/rift-client/src/lib.rs`, `Cargo.toml`, `assets/Info.plist`, `rift.default.toml` | The fork's names (`crates/rift-protocol/src/names.rs`): the Mach service and launchd label, the binary looked up on `PATH`, the log paths, the config and data directories, the default layout folder, the `[[bin]]` names, the bundle id; clap's `name` in both binaries |
 | `bin/rift.rs` | `load_cells` after the layout engine is made |
 | `Cargo.toml` | `objc2-screen-capture-kit`, which upstream dropped with its screenshot previews: the grid's slides capture windows with it |
-| `ui/settings/*` | A Window Borders category (also in `sidebar.rs`'s badge match); in `interface::overview`, the grid's sections from `grid_pages::overview_sections`; their search entries; in `mod.rs`, one call that ends a field's editing on a click elsewhere or when the window goes to the back (`settings/editing.rs`), checked in `native_tests.rs` |
+| `ui/settings/*` | The Grid and Window Borders categories (`Category`, `CATEGORIES`, `sidebar.rs`'s badge match, the page match in `pages.rs`, one block each in `search.rs`'s `MANUAL` and catalog), their pages in `grid_pages.rs`; `grid_columns` has `group = "grid"` so that it shows on the Grid page only; in `mod.rs`, `EndEditing` (`settings/editing.rs`), which ends a field's editing on a click elsewhere or when the window loses key, checked in `native_tests.rs` |
 
 ## cgs
 
@@ -51,8 +51,8 @@ These could shrink the fork's footprint in upstream files. None is a defect.
   the settings app's command list; the rest are `skip`, since the list would
   offer workspace names for a grid number.
 - The settings app's category list, page match and search catalog: upstream
-  reorganizes these often, and each time the fork's Window Borders entries
-  conflict.
+  reorganizes these often, and each time the fork's Grid and Window Borders
+  entries conflict. Upstream's own pages carry no grid sections.
 - `reactor.rs` has seven separate hook calls. One `Event::Fork` variant with a
   hook before and after handling would make it two.
 

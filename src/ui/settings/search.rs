@@ -107,7 +107,6 @@ fn describe(entry: &Draft) -> String {
         "Screen edges" => "Set the space between windows and screen edges.",
         "Virtual Workspaces" => "Organize your windows into separate workspaces.",
         "Workspace swipes" => "Switch workspaces using trackpad gestures.",
-        "Grid swipes" => "Move between grid cells and grids using trackpad gestures.",
         "New window position" => "Choose where newly opened windows appear.",
         "Default layout" => "Choose the layout used by default.",
         "App rules" => "Choose how Rift handles an application's windows.",
@@ -208,13 +207,6 @@ const MANUAL: &[(Category, Option<LayoutMode>, &str, &str, &str)] = &[
         Mouse,
         None,
         "Mouse & Trackpad",
-        "Grid swipes",
-        "trackpad gestures fingers swipe grid cell mission control",
-    ),
-    (
-        Mouse,
-        None,
-        "Mouse & Trackpad",
         "Scrolling layout gestures",
         "trackpad gestures fingers swipe scrolling niri",
     ),
@@ -237,8 +229,9 @@ const MANUAL: &[(Category, Option<LayoutMode>, &str, &str, &str)] = &[
         None,
         "Overview",
         "Overview",
-        "window previews fade transitions grid mission control",
+        "window previews fade transitions",
     ),
+    (Grid, None, "Grid", "Grid", "workspace grid cells 3x3 overview swipes slide map"),
     (
         Borders,
         None,
@@ -358,7 +351,6 @@ fn catalog() -> &'static [Entry] {
             None,
             "Mouse & Trackpad › Advanced swipe settings",
         );
-        append::<GridGestureSettings>(&mut out, "", Mouse, None, "Mouse & Trackpad › Grid swipes");
         append::<ScrollingGestureSettings>(
             &mut out,
             "",
@@ -369,8 +361,11 @@ fn catalog() -> &'static [Entry] {
         append::<DragDropSettings>(&mut out, "", Mouse, None, "Mouse & Trackpad › Drag & Drop");
         append::<MenuBarSettings>(&mut out, "", MenuBar, None, "Menu Bar");
         append::<MissionControlSettings>(&mut out, "", Overview, None, "Overview");
-        append::<GridOverviewSettings>(&mut out, "", Overview, None, "Overview › Grid");
-        append::<GridMotionSettings>(&mut out, "", Overview, None, "Overview › Grid Motion");
+        append::<VirtualWorkspaceSettings>(&mut out, "grid", Grid, None, "Grid");
+        append::<GridSettings>(&mut out, "", Grid, None, "Grid");
+        append::<GridOverviewSettings>(&mut out, "", Grid, None, "Grid › Overview");
+        append::<GridMotionSettings>(&mut out, "", Grid, None, "Grid › Moves");
+        append::<GridGestureSettings>(&mut out, "", Grid, None, "Grid › Swipes");
         append::<BorderSettings>(&mut out, "", Borders, None, "Window Borders");
         out.extend(super::interface::OVERVIEW_SHORTCUTS.map(|(_, title)| Draft {
             title,

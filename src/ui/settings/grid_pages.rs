@@ -1,5 +1,5 @@
-//! The settings app's pages for the grid fork: the grid sections of the Overview, how moves
-//! between cells are shown, and the window borders.
+//! The settings app's pages for the grid fork: the Grid page and the window
+//! borders.
 
 use cgs::controls::ColorWell;
 use cgs::settings::{Section, SettingsPage};
@@ -7,17 +7,30 @@ use cgs::settings::{Section, SettingsPage};
 use super::*;
 use crate::common::config::*;
 
-/// The grid's sections of upstream's Overview page (`interface::overview`).
-pub(super) fn overview_sections(f: &mut FormBuilder) -> (Section, Section) {
-    let ui = f.ui;
+/// The Grid page: the grid itself, its Overview, how moves between cells are
+/// shown, and the swipes.
+pub(super) fn grid(ui: Ui, model: &Rc<Model>) -> Page {
+    let mut f = FormBuilder::new(ui, model);
+    f.tooltips = true;
     let grid = f.schema_rows(
-        Section::new(&ui, "Grid").description("When workspaces form a grid."),
+        Section::new(&ui, "Grid").description(
+            "Nine grids of cells, one per number key. Each cell is a workspace.",
+        ),
+        "grid",
+        |s| &s.virtual_workspaces,
+        |s| &mut s.virtual_workspaces,
+    );
+    let grid = f.schema_rows(grid, "", |s| &s.settings.grid, |s| &mut s.settings.grid);
+    let overview = f.schema_rows(
+        Section::new(&ui, "Overview").description(
+            "The grid in the Overview, which is turned on in the Overview page.",
+        ),
         "",
         |s| &s.settings.grid.overview,
         |s| &mut s.settings.grid.overview,
     );
     let motion = f.schema_rows(
-        Section::new(&ui, "Grid Motion").description(
+        Section::new(&ui, "Moves").description(
             "How moving to another cell or grid is shown: the screen slides there, and a \
              small map of the grid shows where you went.",
         ),
@@ -25,20 +38,21 @@ pub(super) fn overview_sections(f: &mut FormBuilder) -> (Section, Section) {
         |s| &s.settings.grid.motion,
         |s| &mut s.settings.grid.motion,
     );
-    (grid, motion)
-}
-
-/// The grid's swipes, on the Mouse & Trackpad page after upstream's.
-pub(super) fn swipes(f: &mut FormBuilder) -> Section {
-    let ui = f.ui;
-    f.schema_rows(
-        Section::new(&ui, "Grid swipes").description(
-            "While workspaces form a grid. Distance, tolerance and haptics are the \
-             workspace swipes' own.",
+    let swipes = f.schema_rows(
+        Section::new(&ui, "Swipes").description(
+            "Distance, tolerance and haptics are the workspace swipes' own, in Mouse & \
+             Trackpad.",
         ),
         "",
         |s| &s.settings.grid.gestures,
         |s| &mut s.settings.grid.gestures,
+    );
+    f.finish(
+        SettingsPage::new(&ui, "")
+            .section(grid)
+            .section(overview)
+            .section(motion)
+            .section(swipes),
     )
 }
 

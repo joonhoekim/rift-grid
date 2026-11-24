@@ -21,7 +21,7 @@ impl SettingsSidebar {
                 badge: match id {
                     Category::General | Category::Advanced | Category::About => SettingsBadge::Gray,
                     Category::Layouts => SettingsBadge::Blue,
-                    Category::Workspaces => SettingsBadge::Violet,
+                    Category::Workspaces | Category::Grid => SettingsBadge::Violet,
                     Category::Rules => SettingsBadge::Brown,
                     Category::Keyboard | Category::Mouse => SettingsBadge::Slate,
                     Category::MenuBar

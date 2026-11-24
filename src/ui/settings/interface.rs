@@ -290,7 +290,6 @@ pub(super) fn overview(ui: Ui, model: &Rc<Model>) -> Page {
     f.enabled(&duration, |s| {
         s.settings.ui.mission_control.enabled && s.settings.ui.mission_control.fade_enabled
     });
-    let (grid, motion) = super::grid_pages::overview_sections(&mut f);
     let mut shortcuts = Section::new(&ui, "Keyboard Shortcuts");
     for (action, label) in OVERVIEW_SHORTCUTS {
         let controls = Rc::new(VStack::new(&ui).spacing(4.));
@@ -375,8 +374,6 @@ pub(super) fn overview(ui: Ui, model: &Rc<Model>) -> Page {
             .section(visibility)
             .section(recording)
             .section(transitions.row(duration))
-            .section(grid)
-            .section(motion)
             .section(shortcuts)
             .section(Caption::new(&ui, "Enabling Overview requires restarting Rift.")),
     )
