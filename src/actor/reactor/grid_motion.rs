@@ -14,6 +14,7 @@ use crate::common::collections::HashMap;
 use crate::layout_engine::LayoutCommand;
 use crate::model::VirtualWorkspaceId;
 use crate::sys::screen::SpaceId;
+use crate::ui::grid_motion::edge::{self, EdgeGlow};
 use crate::ui::grid_motion::{
     Carried, Hud, HudView, Image, Motion, Note, Pan, SendBox, Shareable, Step, Tile,
 };
@@ -35,6 +36,8 @@ const FADE_OUT: Duration = Duration::from_millis(150);
 const RECAPTURE_AT: f64 = 0.3;
 /// The shortest cross-fade from a carried window's old look to its new one.
 const SHORTEST_FADE: Duration = Duration::from_millis(80);
+/// How long the edge stays lit before it goes out.
+const EDGE_HOLD: Duration = Duration::from_millis(140);
 
 #[derive(Default)]
 pub(super) struct GridMotionManager {
@@ -44,6 +47,10 @@ pub(super) struct GridMotionManager {
     pending: Option<Pending>,
     recapture: Option<Recapture>,
     hud: Option<Hud>,
+    edge: Option<EdgeGlow>,
+    edge_generation: u64,
+    /// Whether the last command ran into the grid's end.
+    hit_edge: bool,
 }
 
 /// The carried windows of a slide that change size, to capture again once they
@@ -106,6 +113,15 @@ fn moves_cells(command: &LayoutCommand) -> bool {
 }
 
 impl Reactor {
+    /// The moves' settings as the motion level shows them.
+    fn grid_moves(&self) -> crate::common::config::GridMotionSettings {
+        let grid = &self.config.settings.grid;
+        grid.motion.moves(&grid.moves, crate::ui::grid_motion::system_reduces_motion())
+    }
+
+    /// Whether the last command ran into the grid's end.
+    pub(super) fn grid_hit_edge(&self) -> bool { self.grid_motion_manager.hit_edge }
+
     fn grid_motion_send(&self) -> impl Fn(Note) + Send + Clone + 'static {
         let tx = self.communication_manager.events_tx.clone();
         move |note| {
@@ -121,13 +137,18 @@ impl Reactor {
 
     /// Note the current cell before a command that may move to another one.
     pub(super) fn grid_motion_before(&mut self, event: &Event) -> Option<Before> {
-        crate::ui::grid_motion::set_motion(&self.config.settings.grid.moves);
+        // An end an earlier command ran into is not this one's.
+        let _ = self.layout_manager.layout_engine.take_grid_edge();
+        self.grid_motion_manager.hit_edge = false;
+        let settings = &self.grid_moves();
+        let reduce = crate::ui::grid_motion::system_reduces_motion();
+        crate::ui::grid_motion::set_motion(settings);
+        crate::ui::grid_motion::set_time_scale(self.config.settings.grid.motion.time_scale(reduce));
         crate::ui::mission_control::set_grid_settings(&self.config.settings.grid.overview);
-        self.grid_motion_prefetch();
+        self.grid_motion_prefetch(settings.pan);
         let Event::Command(Command::Layout(command)) = event else { return None };
-        let settings = &self.config.settings.grid.moves;
         // Captures and timers report back through the reactor's own queue.
-        if !(settings.pan || settings.map)
+        if !(settings.pan || settings.map || settings.edge_glow)
             || self.communication_manager.events_tx.is_none()
             || !moves_cells(command)
             || !self.layout_manager.layout_engine.workspaces().grid_enabled()
@@ -146,8 +167,8 @@ impl Reactor {
 
     /// Keep the list of capturable windows fresh enough for the next slide, so
     /// that the first move after a while slides as well.
-    fn grid_motion_prefetch(&mut self) {
-        if !self.config.settings.grid.moves.pan
+    fn grid_motion_prefetch(&mut self, pan: bool) {
+        if !pan
             || self.communication_manager.events_tx.is_none()
             || !self.grid_motion_manager.shareable.wants(CONTENT_AGE)
             || !self.layout_manager.layout_engine.workspaces().grid_enabled()
@@ -191,6 +212,12 @@ impl Reactor {
     /// windows are moved, so the screen still shows the cell left.
     pub(super) fn grid_motion_after(&mut self, before: Before) {
         let Before { space, workspace: from, windows } = before;
+        if let Some((space, side)) = self.layout_manager.layout_engine.take_grid_edge() {
+            self.grid_motion_manager.hit_edge = true;
+            if self.config.settings.grid.moves.edge_glow {
+                self.show_grid_edge(space, side);
+            }
+        }
         let store = self.layout_manager.layout_engine.workspaces();
         let Some(to) = store.active_workspace(space).filter(|&to| to != from) else { return };
         let ids = store.workspace_ids(space);
@@ -219,7 +246,7 @@ impl Reactor {
         };
         self.grid_motion_manager.generation += 1;
         let generation = self.grid_motion_manager.generation;
-        let settings = self.config.settings.grid.moves.clone();
+        let settings = self.grid_moves();
         let display = screen.id.as_u32();
         let scale = screen.backing_scale.max(1.0);
 
@@ -271,6 +298,30 @@ impl Reactor {
                 Note::HudFade(generation),
             );
         }
+    }
+
+    /// Light the `side` edge of the display `space` is on, a move having found
+    /// no cell beyond it.
+    fn show_grid_edge(&mut self, space: SpaceId, side: crate::layout_engine::Direction) {
+        let Some(screen) = self.space_state.screen_by_space(space).cloned() else { return };
+        let manager = &mut self.grid_motion_manager;
+        manager.edge_generation += 1;
+        let generation = manager.edge_generation;
+        // Held against the end, a key repeats: the light stays on.
+        if let Some(glow) = manager.edge.as_mut().filter(|g| g.lights(screen.frame, side)) {
+            glow.relight(generation);
+            self.grid_motion_later(EDGE_HOLD, Note::EdgeFade(generation));
+            return;
+        }
+        manager.edge = None;
+        match EdgeGlow::show(generation, screen.frame, screen.backing_scale.max(1.0), side) {
+            Ok(glow) => manager.edge = Some(glow),
+            Err(error) => {
+                debug!(?error, "Edge light unavailable");
+                return;
+            }
+        }
+        self.grid_motion_later(EDGE_HOLD, Note::EdgeFade(generation));
     }
 
     fn show_grid_hud(
@@ -454,6 +505,7 @@ impl Reactor {
 
     /// Slide with the captures that have arrived.
     fn run_pan(&mut self, generation: u64) {
+        let motion = Motion::new(&self.grid_moves());
         let manager = &mut self.grid_motion_manager;
         if manager.pending.as_ref().is_none_or(|p| p.generation != generation) {
             return;
@@ -515,7 +567,6 @@ impl Reactor {
             pending.screen.size,
         );
         let wallpaper = manager.shareable.wallpaper(pending.display, wallpaper_rect);
-        let motion = Motion::new(&self.config.settings.grid.moves);
         let Some(pan) = manager.pan.as_mut() else { return };
         let shape = (pending.columns, pending.cell);
         let duration =
@@ -596,6 +647,22 @@ impl Reactor {
                 if let Some(hud) = manager.hud.as_ref().filter(|h| h.generation() == generation) {
                     hud.fade();
                     self.grid_motion_later(Duration::from_millis(200), Note::HudGone(generation));
+                }
+            }
+            Note::EdgeFade(generation) => {
+                if let Some(glow) = manager.edge.as_ref().filter(|g| g.generation() == generation) {
+                    glow.fade();
+                    self.grid_motion_later(
+                        Duration::from_secs_f64(
+                            edge::FADE_OUT * crate::ui::grid_motion::time_scale() + 0.05,
+                        ),
+                        Note::EdgeGone(generation),
+                    );
+                }
+            }
+            Note::EdgeGone(generation) => {
+                if manager.edge.as_ref().is_some_and(|g| g.generation() == generation) {
+                    manager.edge = None;
                 }
             }
             Note::HudGone(generation) => {

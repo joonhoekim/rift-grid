@@ -43,7 +43,9 @@ impl Reactor {
         let before = self.layout_manager.layout_engine.workspaces().active_workspace(space);
         self.handle_event_inner(Event::Command(Command::Layout(command)));
         let after = self.layout_manager.layout_engine.workspaces().active_workspace(space);
-        if before != after
+        let ticks = before != after
+            || (self.grid_hit_edge() && self.config.settings.grid.moves.edge_glow);
+        if ticks
             && let Some(pattern) = context.haptic
         {
             let _ = crate::sys::haptics::perform_haptic(pattern);

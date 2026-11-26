@@ -82,3 +82,24 @@ fn grid_columns_and_rule_grids_are_checked() {
         assert!(rule(grid).iter().any(|i| i.contains("grid must be")), "grid {grid}");
     }
 }
+
+#[test]
+fn motion_level_shortens_or_stops_moves() {
+    use crate::common::config::{GridMotionSettings, MotionLevel};
+    let moves = GridMotionSettings { zoom: 0.15, ..GridMotionSettings::default() };
+    let parsed = Config::parse("[settings.grid]\nmotion = \"reduced\"\n[keys]\n").unwrap();
+    assert_eq!(parsed.settings.grid.motion, MotionLevel::Reduced);
+    assert_eq!(Config::parse("[settings]\n[keys]\n").unwrap().settings.grid.motion, MotionLevel::System);
+
+    assert_eq!(MotionLevel::Full.moves(&moves, true), moves, "full ignores the system");
+    assert_eq!(MotionLevel::System.moves(&moves, false), moves);
+    let reduced = MotionLevel::System.moves(&moves, true);
+    assert_eq!(reduced, MotionLevel::Reduced.moves(&moves, false));
+    assert_eq!((reduced.duration_ms, reduced.zoom, reduced.pan), (80.0, 0.0, true));
+    let off = MotionLevel::Off.moves(&moves, false);
+    assert!(!off.pan && off.map, "moves show at once, the map stays");
+
+    assert_eq!(MotionLevel::Reduced.duration_ms(180.0, false), 60.0);
+    assert_eq!(MotionLevel::Off.duration_ms(180.0, false), 0.0);
+    assert_eq!(MotionLevel::System.duration_ms(180.0, false), 180.0);
+}

@@ -8,7 +8,9 @@ mod parse;
 mod schema;
 mod types;
 pub use borders::BorderSettings;
-pub use grid::{GRID_COUNT, GridFollow, GridMaps, GridOverviewSettings, GridSettings};
+pub use grid::{
+    GRID_COUNT, GridFollow, GridMaps, GridOverviewSettings, GridSettings, MotionLevel,
+};
 pub use grid_gestures::GridGestureSettings;
 pub use grid_motion::GridMotionSettings;
 pub use document::ConfigDocument;

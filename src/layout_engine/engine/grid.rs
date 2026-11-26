@@ -13,6 +13,16 @@ use crate::model::VirtualWorkspaceId;
 use crate::model::window_store::WindowStore;
 use crate::sys::screen::SpaceId;
 
+/// What the grid commands keep between commands.
+#[derive(Default)]
+pub(super) struct GridState {
+    /// Windows by when they last had the focus, for `focus_recent_window`.
+    pub(super) recent: RecentWindows,
+    /// The display and direction of the last grid command that found no cell
+    /// beyond the grid's end.
+    edge: Option<(SpaceId, Direction)>,
+}
+
 /// Windows by when they last had the focus, the latest first.
 #[derive(Default)]
 pub(super) struct RecentWindows(std::collections::VecDeque<WindowId>);
@@ -38,12 +48,19 @@ impl LayoutEngine {
         self.workspaces.grid_of(index)
     }
 
+    /// The display and direction of the grid's end the last grid command ran
+    /// into, once.
+    pub(crate) fn take_grid_edge(&mut self) -> Option<(SpaceId, Direction)> {
+        self.grid.edge.take()
+    }
+
     pub(super) fn handle_grid_command(
         &mut self,
         window_store: &mut WindowStore,
         space: SpaceId,
         command: &LayoutCommand,
     ) -> EventResponse {
+        self.grid.edge = None;
         match *command {
             LayoutCommand::Focus(direction) => self.focus_tile(window_store, space, direction),
             LayoutCommand::MoveTile(direction) => self.move_tile(window_store, space, direction),
@@ -53,7 +70,10 @@ impl LayoutEngine {
                 };
                 match self.workspaces.grid_neighbor(space, current, direction) {
                     Some(target) => self.activate_workspace(window_store, space, target, None),
-                    None => EventResponse::default(),
+                    None => {
+                        self.grid.edge = Some((space, direction));
+                        EventResponse::default()
+                    }
                 }
             }
             LayoutCommand::GoToCenterCell => {
@@ -149,7 +169,8 @@ impl LayoutEngine {
     fn focus_recent_window(&mut self, window_store: &mut WindowStore) -> EventResponse {
         let current = self.focused_window;
         let target =
-            self.recent
+            self.grid
+                .recent
                 .0
                 .iter()
                 .copied()
@@ -239,6 +260,7 @@ impl LayoutEngine {
             });
         }
         let Some(target) = self.workspaces.grid_neighbor(space, ws_id, direction) else {
+            self.grid.edge = Some((space, direction));
             return EventResponse::default();
         };
         let entry = self.cell_tiles(space, target).and_then(|(area, tiles)| {
@@ -299,6 +321,7 @@ impl LayoutEngine {
             };
         }
         let Some(target) = self.workspaces.grid_neighbor(space, ws_id, direction) else {
+            self.grid.edge = Some((space, direction));
             return EventResponse::default();
         };
         if !self.relocate_window_to_workspace(
@@ -563,12 +586,15 @@ mod tests {
             LayoutCommand::GoToCell(Direction::Right),
         );
         assert_eq!(active(&engine), Some(cell(&mut engine, 5)));
+        assert_eq!(engine.take_grid_edge(), None, "a move that went somewhere");
         let edge = run(
             &mut engine,
             &mut store,
             LayoutCommand::GoToCell(Direction::Right),
         );
         assert!(!edge.changed, "grid 1's right edge, not grid 2");
+        assert_eq!(engine.take_grid_edge(), Some((space, Direction::Right)));
+        assert_eq!(engine.take_grid_edge(), None, "told once");
 
         // A grid opens at its center, and comes back to the cell it was left on.
         let _ = run(&mut engine, &mut store, LayoutCommand::Grid(2));

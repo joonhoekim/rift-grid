@@ -85,7 +85,7 @@ instead, as a window back from the Dock does when its cell changed meanwhile.
 | Alt+Tab | `focus_recent_window` | The window focused before this one, whichever cell or grid it is in; again goes back |
 | Alt+O | `show_mission_control_all` | Overview; again for the whole grid, again to close |
 
-Cells never lead into another grid: moving past the grid's edge stops.
+Cells never lead into another grid: moving past the grid's edge stops, and the edge lights up (`edge_glow`).
 
 Trackpad swipes (`[settings.grid.gestures]`, on by default) do the same on the
 focused display, one step a swipe. The content follows the fingers, as in
@@ -171,7 +171,11 @@ open.
 
 ## Showing moves
 
-`[settings.grid.moves]` shows where a move went. Both parts are on by default.
+`[settings.grid.moves]` shows where a move went, and where one could not go.
+`[settings.grid] motion` sets how much the slides, the map, the edge light and
+the window borders move: `"system"` (default) is full, or reduced while Reduce
+motion is on in the Accessibility settings; `"reduced"` takes a third of the
+time and does not draw back between cells; `"off"` shows everything at once.
 
 - `pan`: the screen slides to the cell moved to, diagonally when the move
   skips across, over `duration_ms` (240, up to 10000). A window carried along
@@ -193,6 +197,9 @@ open.
 - `map`: a small map of the grid, its number beside it, for `map_ms` (700)
   after the last move; the lit cell glides from the cell left to the cell
   arrived at.
+- `edge_glow`: when a move finds no cell beyond the grid's end, by key or by
+  swipe, the screen's edge on that side lights up for a moment, under the menu
+  bar; a swipe also ticks, with the workspace swipes' haptics. On by default.
 - `full_resolution`: capture windows for the slide at the display's
   resolution rather than one pixel a point (default). Twice as sharp on a
   Retina display, for four times the pixels to capture and hold.

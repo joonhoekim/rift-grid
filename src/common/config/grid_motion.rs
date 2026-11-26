@@ -65,6 +65,12 @@ pub struct GridMotionSettings {
     /// How long the map stays after the last move.
     #[setting(label = "Move map time", unit = "ms", enabled_by = "map")]
     pub map_ms: f64,
+    #[serde(default = "yes")]
+    /// Light the screen's edge on that side for a moment when a move, by key or
+    /// swipe, finds no cell beyond the grid's end. A swipe also ticks, with the
+    /// workspace swipes' haptics.
+    #[setting(label = "Light the edge at the end", aliases = "edge glow end bump limit boundary")]
+    pub edge_glow: bool,
     #[serde(default)]
     /// Capture windows for slides at the display's full
     /// resolution, twice as sharp on a Retina display, for four times the pixels
@@ -93,6 +99,7 @@ impl Default for GridMotionSettings {
             zoom_in_time: default_zoom_in_time(),
             map: true,
             map_ms: default_map_ms(),
+            edge_glow: true,
             full_resolution: false,
         }
     }

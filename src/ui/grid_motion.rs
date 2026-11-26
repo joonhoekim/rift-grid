@@ -31,6 +31,8 @@ use objc2_screen_capture_kit::{
 
 use crate::common::collections::HashMap;
 
+pub mod edge;
+
 pub type Image = CFRetained<CGImage>;
 
 /// Carries ScreenCaptureKit's results from its queue to the reactor.
@@ -53,6 +55,9 @@ pub enum Note {
     End(u64),
     HudFade(u64),
     HudGone(u64),
+    /// Put out, then drop, the lit edge of that generation.
+    EdgeFade(u64),
+    EdgeGone(u64),
     /// Capture the carried windows again now that they have their new size.
     Recapture(u64),
     /// A carried window as it is at its new size.
@@ -94,6 +99,36 @@ pub fn set_overview_open(open: bool) {
 }
 
 pub fn overview_open() -> bool { OVERVIEW_OPEN.load(std::sync::atomic::Ordering::Relaxed) }
+
+/// Whether Reduce motion is on in the Accessibility settings, asked of the
+/// system at most once a second.
+pub fn system_reduces_motion() -> bool {
+    static ASKED: std::sync::Mutex<Option<(Instant, bool)>> = std::sync::Mutex::new(None);
+    let Ok(mut asked) = ASKED.lock() else { return false };
+    match *asked {
+        Some((at, reduce)) if at.elapsed() < Duration::from_secs(1) => reduce,
+        _ => {
+            let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+            let reduce: bool =
+                unsafe { objc2::msg_send![&*workspace, accessibilityDisplayShouldReduceMotion] };
+            *asked = Some((Instant::now(), reduce));
+            reduce
+        }
+    }
+}
+
+/// The share of their time the map's and the edge light's animations take,
+/// as `[settings.grid] motion` sets it, in f64 bits.
+static TIME_SCALE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0x3FF0_0000_0000_0000); // 1.0
+
+pub fn set_time_scale(scale: f64) {
+    TIME_SCALE.store(scale.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn time_scale() -> f64 {
+    f64::from_bits(TIME_SCALE.load(std::sync::atomic::Ordering::Relaxed))
+}
 
 /// The space between cells as the screen slides past them.
 const GAP: f64 = 28.0;
@@ -1021,25 +1056,29 @@ impl Hud {
         }
         let from = unsafe { self.highlight.presentationLayer() }.map(|l| l.frame());
         self.highlight.setFrame(to);
-        if grid_changed && !first {
-            // Another grid: the map comes in from the side it lies on.
-            let shift = if forward { 14.0 } else { -14.0 };
-            let at = self.content.position();
-            animate(
-                &self.content,
-                "position",
-                &point_value(CGPoint::new(at.x + shift, at.y)),
-                0.2,
-            );
-            animate(&self.content, "opacity", &NSNumber::new_f64(0.2), 0.2);
-        } else {
-            let from = match (first, view.from) {
-                (true, Some(cell)) => Some(self.cell_frame(cell)),
-                (true, None) => None,
-                (false, _) => from.filter(|f| f.size.width > 0.0),
-            };
-            if let Some(from) = from {
-                glide(&self.highlight, from, 0.2);
+        // Motion off: the map shows where the move went at once.
+        let time = 0.2 * time_scale();
+        if time > 0.0 {
+            if grid_changed && !first {
+                // Another grid: the map comes in from the side it lies on.
+                let shift = if forward { 14.0 } else { -14.0 };
+                let at = self.content.position();
+                animate(
+                    &self.content,
+                    "position",
+                    &point_value(CGPoint::new(at.x + shift, at.y)),
+                    time,
+                );
+                animate(&self.content, "opacity", &NSNumber::new_f64(0.2), time);
+            } else {
+                let from = match (first, view.from) {
+                    (true, Some(cell)) => Some(self.cell_frame(cell)),
+                    (true, None) => None,
+                    (false, _) => from.filter(|f| f.size.width > 0.0),
+                };
+                if let Some(from) = from {
+                    glide(&self.highlight, from, time);
+                }
             }
         }
         CATransaction::commit();
@@ -1050,7 +1089,10 @@ impl Hud {
         CATransaction::begin();
         CATransaction::setDisableActions(true);
         self.root.setOpacity(0.0);
-        animate(&self.root, "opacity", &NSNumber::new_f64(1.0), 0.18);
+        // A zero duration would be Core Animation's default, not none.
+        if time_scale() > 0.0 {
+            animate(&self.root, "opacity", &NSNumber::new_f64(1.0), 0.18 * time_scale());
+        }
         CATransaction::commit();
         CATransaction::flush();
     }

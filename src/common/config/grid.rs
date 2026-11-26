@@ -28,6 +28,12 @@ pub struct GridSettings {
     #[setting(ignore)]
     pub gestures: GridGestureSettings,
     #[serde(default)]
+    /// How much rift-grid's own animations move: the slides between cells, the
+    /// grid map, the edge light and the window borders. System follows Reduce
+    /// motion in the Accessibility settings.
+    #[setting(label = "Motion", choices, aliases = "reduce reduced animation accessibility")]
+    pub motion: MotionLevel,
+    #[serde(default)]
     /// Which grids get a map in the menu bar.
     #[setting(label = "Grid map", choices, aliases = "grid map 3x3 menu bar")]
     pub grid_map: GridMaps,
@@ -136,6 +142,61 @@ pub enum GridMaps {
     /// The grid on screen alone, after its number when other grids are in use.
     #[setting(label = "The grid on screen")]
     Current,
+}
+
+/// How much the grid's animations move.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy, Default, ConfigEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum MotionLevel {
+    /// Full, or reduced while Reduce motion is on in the Accessibility settings.
+    #[default]
+    #[setting(label = "As the system")]
+    System,
+    #[setting(label = "Full")]
+    Full,
+    /// A third of the time, and the screen does not draw back between cells.
+    #[setting(label = "Reduced")]
+    Reduced,
+    /// Everything shows at once.
+    #[setting(label = "Off")]
+    Off,
+}
+
+impl MotionLevel {
+    /// `settings` as this level shows them; `reduce` is whether the system asks
+    /// for reduced motion.
+    pub fn moves(self, settings: &GridMotionSettings, reduce: bool) -> GridMotionSettings {
+        let mut shown = settings.clone();
+        match self.resolve(reduce) {
+            Self::Reduced => {
+                shown.duration_ms /= 3.0;
+                shown.zoom = 0.0;
+            }
+            Self::Off => shown.pan = false,
+            _ => {}
+        }
+        shown
+    }
+
+    /// How long an animation of `ms` takes at this level.
+    pub fn duration_ms(self, ms: f64, reduce: bool) -> f64 { ms * self.time_scale(reduce) }
+
+    /// The share of their time animations take at this level: 0 when off.
+    pub fn time_scale(self, reduce: bool) -> f64 {
+        match self.resolve(reduce) {
+            Self::Reduced => 1.0 / 3.0,
+            Self::Off => 0.0,
+            _ => 1.0,
+        }
+    }
+
+    fn resolve(self, reduce: bool) -> Self {
+        match self {
+            Self::System if reduce => Self::Reduced,
+            Self::System => Self::Full,
+            level => level,
+        }
+    }
 }
 
 /// How a grid Overview's first stage moves when the current cell changes.

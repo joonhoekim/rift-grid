@@ -133,7 +133,15 @@ impl Reactor {
             return;
         }
         let previous = self.border_manager.style.as_ref().map(|(_, style)| *style);
-        let style = self.border_manager.style(settings);
+        let motion = self.config.settings.grid.motion;
+        let reduce = motion == crate::common::config::MotionLevel::System
+            && crate::ui::grid_motion::system_reduces_motion();
+        let animation_ms = motion.duration_ms(settings.animation_ms, reduce);
+        let style = if animation_ms == settings.animation_ms {
+            self.border_manager.style(settings)
+        } else {
+            self.border_manager.style(&BorderSettings { animation_ms, ..settings.clone() })
+        };
         // The system's main window is the focus: clicks, app switches and moves
         // within an app all reach it. But when rift moves focus to another app's
         // window, the main window first passes through that app's previous one;

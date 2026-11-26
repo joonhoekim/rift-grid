@@ -221,8 +221,8 @@ pub struct LayoutEngine {
     persistence: PersistenceState,
     /// Legacy strip commands report boundary excess; workspace arbitration lives here.
     scroll_boundary: Option<((VirtualWorkspaceId, LayoutId, Direction), f64)>,
-    /// Windows by when they last had the focus, for focus_recent_window.
-    recent: grid::RecentWindows,
+    /// The grid commands' own state (`grid.rs`).
+    grid: grid::GridState,
     /// The cells windows were in when rift-grid last ran (`cells.rs`).
     cells: cells::Cells,
     // Display-relocation recovery only; temporary absence never snapshots topology.
@@ -1750,7 +1750,7 @@ impl LayoutEngine {
             floating_positions: FloatingPositionStore::default(),
             app_rules: AppRuleEngine::new(&virtual_workspace_config.app_rules),
             focused_window: None,
-            recent: Default::default(),
+            grid: Default::default(),
             cells: Default::default(),
             window_layout_constraints: LayoutConstraints::default(),
             workspaces,
@@ -2148,7 +2148,7 @@ impl LayoutEngine {
                 }
                 if self.floating.is_floating(wid) {
                     self.focused_window = Some(wid);
-                    self.recent.focused(wid);
+                    self.grid.recent.focused(wid);
                     self.floating.set_last_focus(Some(wid));
                 } else if let Some((ws_id, layout)) = self.workspaces.active_layout_for_space(space)
                 {
@@ -2164,7 +2164,7 @@ impl LayoutEngine {
                             .layout_system
                             .selection_contains_window(layout, wid);
                     self.focused_window = Some(wid);
-                    self.recent.focused(wid);
+                    self.grid.recent.focused(wid);
                     let selection_changed =
                         self.workspaces[ws_id].layout_system.selected_window(layout) != Some(wid);
                     if !preserve_selection {
