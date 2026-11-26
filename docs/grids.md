@@ -36,13 +36,15 @@ display that shows it, or else the one whose cells of it hold windows. Each
 display has room for all nine, but uses only the grids that are on it, so grid
 N means one place whichever display the focus is on.
 
-- **Alt+N** shows grid N on the display it is on and moves the focus there; it
-  is the way the focus crosses displays from the keyboard. A grid on no display
+- **Alt+N** shows grid N on the display it is on and moves the focus there. A grid on no display
   yet (no windows, not shown) comes up on the focused display. An empty grid
   that leaves the screen is on no display again.
 - **Alt+Ctrl+N** sends the window to grid N on its display. When that display
   shows grid N, the focus goes along with the window; otherwise the focus stays.
-- **Alt+Ctrl+IJKL** (`move_window_to_display`) carries the window into the
+- **Alt+Ctrl+IJKL** (`focus_display`) moves the focus to the display in that
+  direction: the window last focused in the cell it shows, or that empty cell,
+  the pointer going along.
+- **Alt+Ctrl+Shift+IJKL** (`move_window_to_display`) carries the window into the
   cell on screen on the display in that direction.
 - When the displays change (login, plugging one in), a display showing an empty
   grid that a display before it shows too is moved to the first grid on no
@@ -82,6 +84,8 @@ instead, as a window back from the Dock does when its cell changed meanwhile.
 | Alt+Shift+IJKL / arrows | `move_tile` | Swap with the tile beside, or carry the window into the next cell |
 | Alt+Cmd+IJKL | `go_to_cell` | Next cell of this grid |
 | Alt+H | `go_to_center_cell` | Center cell of the grid on screen |
+| Alt+Ctrl+IJKL / arrows | `focus_display` | The display in that direction, as subline's Mod+Ctrl |
+| Alt+Ctrl+Shift+IJKL / arrows | `move_window_to_display` | Carry the window to the display in that direction |
 | Alt+Tab | `focus_recent_window` | The window focused before this one, whichever cell or grid it is in; again goes back |
 | Alt+O | `show_mission_control_all` | Overview; again for the whole grid, again to close |
 

@@ -397,14 +397,23 @@ move2 = "Alt + Ctrl"
 # ── Tier 3 — Alt+Ctrl: cross a monitor, or reach the WM ──────────────────
 # This tier is why the duplicate move_node bindings had to go. Two displays
 # here, so these earn their place.
-"move2 + I" = { move_window_to_display = { selector = "up" } }
-"move2 + K" = { move_window_to_display = { selector = "down" } }
-"move2 + J" = { move_window_to_display = { selector = "left" } }
-"move2 + L" = { move_window_to_display = { selector = "right" } }
-"move2 + Up" = { move_window_to_display = { selector = "up" } }
-"move2 + Down" = { move_window_to_display = { selector = "down" } }
-"move2 + Left" = { move_window_to_display = { selector = "left" } }
-"move2 + Right" = { move_window_to_display = { selector = "right" } }
+# Ctrl looks at the display that way; Shift on top carries the window there, as subline's Mod+Ctrl(+Shift).
+"move2 + I" = { focus_display = "up" }
+"move2 + K" = { focus_display = "down" }
+"move2 + J" = { focus_display = "left" }
+"move2 + L" = { focus_display = "right" }
+"move2 + Up" = { focus_display = "up" }
+"move2 + Down" = { focus_display = "down" }
+"move2 + Left" = { focus_display = "left" }
+"move2 + Right" = { focus_display = "right" }
+"Alt + Ctrl + Shift + I" = { move_window_to_display = { selector = "up" } }
+"Alt + Ctrl + Shift + K" = { move_window_to_display = { selector = "down" } }
+"Alt + Ctrl + Shift + J" = { move_window_to_display = { selector = "left" } }
+"Alt + Ctrl + Shift + L" = { move_window_to_display = { selector = "right" } }
+"Alt + Ctrl + Shift + Up" = { move_window_to_display = { selector = "up" } }
+"Alt + Ctrl + Shift + Down" = { move_window_to_display = { selector = "down" } }
+"Alt + Ctrl + Shift + Left" = { move_window_to_display = { selector = "left" } }
+"Alt + Ctrl + Shift + Right" = { move_window_to_display = { selector = "right" } }
 
 "move2 + R" = "reload_config"
 
