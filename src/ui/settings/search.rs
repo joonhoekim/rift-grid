@@ -364,7 +364,7 @@ fn catalog() -> &'static [Entry] {
         append::<VirtualWorkspaceSettings>(&mut out, "grid", Grid, None, "Grid");
         append::<GridSettings>(&mut out, "", Grid, None, "Grid");
         append::<GridOverviewSettings>(&mut out, "", Grid, None, "Grid › Overview");
-        append::<GridMotionSettings>(&mut out, "", Grid, None, "Grid › Moves");
+        append::<GridMotionSettings>(&mut out, "", Grid, None, "Grid › Showing moves");
         append::<GridGestureSettings>(&mut out, "", Grid, None, "Grid › Swipes");
         append::<BorderSettings>(&mut out, "", Borders, None, "Window Borders");
         out.extend(super::interface::OVERVIEW_SHORTCUTS.map(|(_, title)| Draft {

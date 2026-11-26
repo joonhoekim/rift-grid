@@ -36,7 +36,7 @@ const GRID_MAP_SPACING: f64 = 5.0;
 /// Between a grid's number and its map.
 const GRID_LABEL_SPACING: f64 = 3.0;
 
-/// `[settings.grid] menu_bar_maps`, noted by the menu bar actor, which is given
+/// `[settings.grid] grid_map`, noted by the menu bar actor, which is given
 /// the whole config; the drawing code is given the menu bar's section only.
 static MAPS: std::sync::Mutex<GridMaps> = std::sync::Mutex::new(GridMaps::All);
 
@@ -92,7 +92,7 @@ pub(super) fn label(
         .any(|w| w.grid != active && w.window_count > 0);
     let numbered = match maps() {
         GridMaps::All => workspace.grid,
-        GridMaps::Active => active.filter(|_| others),
+        GridMaps::Current => active.filter(|_| others),
     };
     numbered.map_or(Cow::Borrowed(""), |grid| Cow::Owned((grid + 1).to_string()))
 }
@@ -407,7 +407,7 @@ mod tests {
         assert_eq!(cells[10].1, GRID_MAP_OCCUPIED_ALPHA * GRID_MAP_DIMMED);
 
         // Only the grid on screen, after its number since grid 2 is in use.
-        set_maps(GridMaps::Active);
+        set_maps(GridMaps::Current);
         let inputs = render_inputs(&displays, &settings);
         set_maps(GridMaps::All);
         assert_eq!(inputs.len(), 9);

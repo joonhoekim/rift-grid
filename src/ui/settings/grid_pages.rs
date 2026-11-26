@@ -29,14 +29,14 @@ pub(super) fn grid(ui: Ui, model: &Rc<Model>) -> Page {
         |s| &s.settings.grid.overview,
         |s| &mut s.settings.grid.overview,
     );
-    let motion = f.schema_rows(
-        Section::new(&ui, "Moves").description(
+    let moves = f.schema_rows(
+        Section::new(&ui, "Showing moves").description(
             "How moving to another cell or grid is shown: the screen slides there, and a \
              small map of the grid shows where you went.",
         ),
         "",
-        |s| &s.settings.grid.motion,
-        |s| &mut s.settings.grid.motion,
+        |s| &s.settings.grid.moves,
+        |s| &mut s.settings.grid.moves,
     );
     let swipes = f.schema_rows(
         Section::new(&ui, "Swipes").description(
@@ -51,7 +51,7 @@ pub(super) fn grid(ui: Ui, model: &Rc<Model>) -> Page {
         SettingsPage::new(&ui, "")
             .section(grid)
             .section(overview)
-            .section(motion)
+            .section(moves)
             .section(swipes),
     )
 }

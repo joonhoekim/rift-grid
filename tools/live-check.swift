@@ -113,8 +113,8 @@ func check(display wanted: String?) throws {
     let config = (try riftCLI(["execute", "config", "get"]) as? [String: Any])?["settings"] as? [String: Any] ?? [:]
     let ui = config["ui"] as? [String: Any] ?? [:]
     let enabled = { (key: String) -> Bool in (ui[key] as? [String: Any])?["enabled"] as? Bool ?? false }
-    let motion = ui["grid_motion"] as? [String: Any] ?? [:]
-    let pan = motion["pan"] as? Bool ?? true, hud = motion["hud"] as? Bool ?? true
+    let moves = (config["grid"] as? [String: Any])?["moves"] as? [String: Any] ?? [:]
+    let pan = moves["pan"] as? Bool ?? true, map = moves["map"] as? Bool ?? true
     let displays = try riftCLI(["query", "displays"]) as? [[String: Any]] ?? []
     record("rift.displays", !displays.isEmpty, "\(displays.count) displays")
 
@@ -221,7 +221,7 @@ func check(display wanted: String?) throws {
     // map show, and coming back puts the windows where they were.
     var panAt: Int?, panGone: Int?, hudAt: Int?, hudGone: Int?
     let t0 = Date()
-    _ = try riftCLI(["execute", "layout", "grid-cell", direction])
+    _ = try riftCLI(["execute", "layout", "go-to-cell", direction])
     _ = poll(2.5, every: 0.015) {
         let mine = serverWindows().filter { $0.pid == rift }
         let p = mine.contains { $0.layer >= 100 && $0.bounds.equalTo(visible) }
@@ -242,17 +242,17 @@ func check(display wanted: String?) throws {
     }
     let left = [serverIds["rift-check A"], serverIds["rift-check B"]].map { onServer($0).integral }
     record("grid.cell-move", moved && hidden,
-           "\(direction): active cell \(moved ? "changed" : "unchanged"), test windows at \(left)")
+           "\(direction): current cell \(moved ? "changed" : "unchanged"), test windows at \(left)")
     if pan {
-        record("motion.pan", panAt != nil && panGone != nil,
+        record("moves.pan", panAt != nil && panGone != nil,
                "overlay after \(panAt.map { "\($0) ms" } ?? "-"), gone after \(panGone.map { "\($0) ms" } ?? "-")")
     }
-    if hud {
-        record("motion.hud", hudAt != nil && hudGone != nil,
+    if map {
+        record("moves.map", hudAt != nil && hudGone != nil,
                "map after \(hudAt.map { "\($0) ms" } ?? "-"), gone after \(hudGone.map { "\($0) ms" } ?? "-")")
     }
     Thread.sleep(forTimeInterval: 0.3)
-    _ = try riftCLI(["execute", "layout", "grid-cell", opposite])
+    _ = try riftCLI(["execute", "layout", "go-to-cell", opposite])
     let back = poll(1.5, every: 0.05) {
         active() == home && [("rift-check A", a), ("rift-check B", b)].allSatisfy { title, frame in
             let r = onServer(serverIds[title])

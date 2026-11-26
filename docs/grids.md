@@ -117,11 +117,11 @@ the display the window opens on, even when grid N is on another display.
 
 ## Menu bar
 
-`[settings.grid] menu_bar_maps`:
+`[settings.grid] grid_map`:
 
 - `"all"` (default): a 3x3 map per grid, side by side, each after its number,
   for the grids that have windows plus the grid on screen. The grid on screen, number and map, is drawn at full strength.
-- `"active"`: one map, the grid on screen, after its number when more than one
+- `"current"`: one map, the grid on screen, after its number when more than one
   grid has windows.
 
 Clicking the item opens rift's menu; its Workspace submenu lists grids 1 to 9
@@ -169,9 +169,9 @@ The overview closes when a display comes or goes, moves, or shows another
 Space; other display updates, such as windows moving between displays, leave it
 open.
 
-## Motion
+## Showing moves
 
-`[settings.grid.motion]` shows where a move went. Both parts are on by default.
+`[settings.grid.moves]` shows where a move went. Both parts are on by default.
 
 - `pan`: the screen slides to the cell moved to, diagonally when the move
   skips across, over `duration_ms` (240, up to 10000). A window carried along
@@ -190,7 +190,7 @@ open.
     `zoom_out_time` of the slide's time (0.25), slides across while drawn
     back, and comes in again over `zoom_in_time` (0.3). The slide across
     starts near the end of drawing back and ends halfway through coming in.
-- `hud`: a small map of the grid, its number beside it, for `hud_ms` (700)
+- `map`: a small map of the grid, its number beside it, for `map_ms` (700)
   after the last move; the lit cell glides from the cell left to the cell
   arrived at.
 - `full_resolution`: capture windows for the slide at the display's

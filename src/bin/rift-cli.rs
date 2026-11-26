@@ -383,7 +383,7 @@ enum LayoutCommands {
         display: DisplaySelectionArgs,
     },
     /// Focus the window focused before this one, in whatever cell it is; again goes back
-    FocusRecent,
+    FocusRecentWindow,
 }
 
 #[derive(Subcommand)]
@@ -1024,7 +1024,7 @@ fn map_layout_command(cmd: LayoutCommands) -> Result<CliCommand, String> {
                 display: display.into_selector()?,
             })))
         }
-        LayoutCommands::FocusRecent => {
+        LayoutCommands::FocusRecentWindow => {
             Ok(CliCommand::Reactor(reactor::Command::Layout(LC::FocusRecentWindow)))
         }
         LayoutCommands::JoinWindow { direction } => Ok(CliCommand::Reactor(

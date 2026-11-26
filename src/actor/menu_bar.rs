@@ -110,7 +110,7 @@ impl Menu {
             .enabled
             .then(|| MenuIcon::new(mtm, action_tx.clone(), reactor_tx.clone(), &layout_folder));
         if let Some(icon) = &mut icon {
-            crate::ui::menu_bar::set_grid_maps(config.settings.grid.menu_bar_maps);
+            crate::ui::menu_bar::set_grid_maps(config.settings.grid.grid_map);
             icon.update_config(&config.settings.ui.menu_bar, &config.keys);
         }
         Self {
@@ -273,7 +273,7 @@ impl Menu {
         }
 
         if let Some(icon) = &mut self.icon {
-            crate::ui::menu_bar::set_grid_maps(self.config.settings.grid.menu_bar_maps);
+            crate::ui::menu_bar::set_grid_maps(self.config.settings.grid.grid_map);
             icon.update_config(&self.config.settings.ui.menu_bar, &self.config.keys);
         }
 

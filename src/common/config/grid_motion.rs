@@ -1,4 +1,4 @@
-//! How moving between grid cells and grids is shown, `[settings.ui.grid_motion]`.
+//! How moving between grid cells and grids is shown, `[settings.grid.moves]`.
 
 use serde::{Deserialize, Serialize};
 
@@ -19,12 +19,12 @@ pub struct GridMotionSettings {
     pub pan: bool,
     #[serde(default = "default_duration_ms")]
     /// How long the slide or fade takes.
-    #[setting(label = "Slide duration", unit = "ms", enabled_by = "pan", aliases = "speed")]
+    #[setting(label = "Move time", unit = "ms", enabled_by = "pan", aliases = "speed")]
     pub duration_ms: f64,
     #[serde(default)]
     /// How the slide gathers speed and slows down.
     #[setting(
-        label = "Easing",
+        label = "Move curve",
         choices,
         enabled_by = "pan",
         aliases = "curve bezier timing spring ease acceleration"
@@ -33,13 +33,13 @@ pub struct GridMotionSettings {
     #[serde(default)]
     /// The custom easing: a cubic Bézier curve `x1, y1, x2, y2`, as in CSS's
     /// `cubic-bezier()`, with x1 and x2 from 0 to 1.
-    #[setting(label = "Custom curve", enabled_by = "pan", aliases = "cubic bezier easing")]
+    #[setting(label = "Custom move curve", enabled_by = "pan", aliases = "cubic bezier easing")]
     pub curve: String,
     #[serde(default)]
     /// How far the screen draws back halfway through a slide between cells, as a
     /// fraction of its size. 0 keeps it flat.
     #[setting(
-        label = "Zoom out",
+        label = "Draw back while moving",
         unit = "%",
         scale = 100.0,
         enabled_by = "pan",
@@ -59,12 +59,12 @@ pub struct GridMotionSettings {
     #[serde(default = "yes")]
     /// Show a small map of the grid for a moment, its current cell moving to the
     /// cell moved to.
-    #[setting(label = "Grid map", aliases = "hud indicator minimap overlay osd")]
-    pub hud: bool,
-    #[serde(default = "default_hud_ms")]
+    #[setting(label = "Move map", aliases = "hud indicator minimap overlay osd")]
+    pub map: bool,
+    #[serde(default = "default_map_ms")]
     /// How long the map stays after the last move.
-    #[setting(label = "Map time", unit = "ms", enabled_by = "hud")]
-    pub hud_ms: f64,
+    #[setting(label = "Move map time", unit = "ms", enabled_by = "map")]
+    pub map_ms: f64,
     #[serde(default)]
     /// Capture windows for slides at the display's full
     /// resolution, twice as sharp on a Retina display, for four times the pixels
@@ -77,7 +77,7 @@ pub struct GridMotionSettings {
 }
 
 fn default_duration_ms() -> f64 { 240.0 }
-fn default_hud_ms() -> f64 { 700.0 }
+fn default_map_ms() -> f64 { 700.0 }
 fn default_zoom_out_time() -> f64 { 0.25 }
 fn default_zoom_in_time() -> f64 { 0.3 }
 
@@ -91,8 +91,8 @@ impl Default for GridMotionSettings {
             zoom: 0.0,
             zoom_out_time: default_zoom_out_time(),
             zoom_in_time: default_zoom_in_time(),
-            hud: true,
-            hud_ms: default_hud_ms(),
+            map: true,
+            map_ms: default_map_ms(),
             full_resolution: false,
         }
     }

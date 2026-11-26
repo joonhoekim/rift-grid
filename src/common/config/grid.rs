@@ -23,14 +23,14 @@ pub struct GridSettings {
     pub overview: GridOverviewSettings,
     #[serde(default)]
     #[setting(ignore)]
-    pub motion: GridMotionSettings,
+    pub moves: GridMotionSettings,
     #[serde(default)]
     #[setting(ignore)]
     pub gestures: GridGestureSettings,
     #[serde(default)]
     /// Which grids get a map in the menu bar.
-    #[setting(label = "Menu bar maps", choices, aliases = "grid map 3x3 menu bar")]
-    pub menu_bar_maps: GridMaps,
+    #[setting(label = "Grid map", choices, aliases = "grid map 3x3 menu bar")]
+    pub grid_map: GridMaps,
 }
 
 /// `[settings.grid.overview]`: the grid Overview, over upstream's Overview.
@@ -47,7 +47,7 @@ pub struct GridOverviewSettings {
     /// Size of a cell in the Overview's first stage, as a fraction of the
     /// display. The whole grid is never shown larger than this.
     #[setting(
-        label = "Cell zoom",
+        label = "Overview size",
         unit = "%",
         scale = 100.0,
         aliases = "grid overview cell size first stage"
@@ -56,7 +56,7 @@ pub struct GridOverviewSettings {
     #[serde(default)]
     /// How the first stage moves when the current cell changes.
     #[setting(
-        label = "Camera",
+        label = "Following focus",
         choices,
         aliases = "grid overview follow focus reveal centre center"
     )]
@@ -64,11 +64,16 @@ pub struct GridOverviewSettings {
     #[serde(default = "default_gap")]
     /// Space between cells, as a fraction of the display's shorter side, so it
     /// looks the same at any size and scale.
-    #[setting(label = "Cell gap", unit = "%", scale = 100.0, aliases = "grid overview spacing cells")]
+    #[setting(
+        label = "Overview cell gap",
+        unit = "%",
+        scale = 100.0,
+        aliases = "grid overview spacing cells"
+    )]
     pub gap: f64,
     #[serde(default = "yes")]
     /// Show each window's app and title over its tile.
-    #[setting(label = "Tile labels", aliases = "grid overview titles icons names")]
+    #[setting(label = "Tile title bars", aliases = "grid overview titles icons names")]
     pub labels: bool,
     #[serde(default)]
     /// Capture every preview at the size it shows at, at the display's
@@ -130,7 +135,7 @@ pub enum GridMaps {
     All,
     /// The grid on screen alone, after its number when other grids are in use.
     #[setting(label = "The grid on screen")]
-    Active,
+    Current,
 }
 
 /// How a grid Overview's first stage moves when the current cell changes.

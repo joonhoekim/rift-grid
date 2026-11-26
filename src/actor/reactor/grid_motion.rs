@@ -121,13 +121,13 @@ impl Reactor {
 
     /// Note the current cell before a command that may move to another one.
     pub(super) fn grid_motion_before(&mut self, event: &Event) -> Option<Before> {
-        crate::ui::grid_motion::set_motion(&self.config.settings.grid.motion);
+        crate::ui::grid_motion::set_motion(&self.config.settings.grid.moves);
         crate::ui::mission_control::set_grid_settings(&self.config.settings.grid.overview);
         self.grid_motion_prefetch();
         let Event::Command(Command::Layout(command)) = event else { return None };
-        let settings = &self.config.settings.grid.motion;
+        let settings = &self.config.settings.grid.moves;
         // Captures and timers report back through the reactor's own queue.
-        if !(settings.pan || settings.hud)
+        if !(settings.pan || settings.map)
             || self.communication_manager.events_tx.is_none()
             || !moves_cells(command)
             || !self.layout_manager.layout_engine.workspaces().grid_enabled()
@@ -147,7 +147,7 @@ impl Reactor {
     /// Keep the list of capturable windows fresh enough for the next slide, so
     /// that the first move after a while slides as well.
     fn grid_motion_prefetch(&mut self) {
-        if !self.config.settings.grid.motion.pan
+        if !self.config.settings.grid.moves.pan
             || self.communication_manager.events_tx.is_none()
             || !self.grid_motion_manager.shareable.wants(CONTENT_AGE)
             || !self.layout_manager.layout_engine.workspaces().grid_enabled()
@@ -219,11 +219,11 @@ impl Reactor {
         };
         self.grid_motion_manager.generation += 1;
         let generation = self.grid_motion_manager.generation;
-        let settings = self.config.settings.grid.motion.clone();
+        let settings = self.config.settings.grid.moves.clone();
         let display = screen.id.as_u32();
         let scale = screen.backing_scale.max(1.0);
 
-        let view = (settings.hud && !crate::ui::grid_motion::overview_open()).then(|| {
+        let view = (settings.map && !crate::ui::grid_motion::overview_open()).then(|| {
             let per_grid = ids
                 .iter()
                 .enumerate()
@@ -267,7 +267,7 @@ impl Reactor {
         if let Some(view) = view.flatten() {
             self.show_grid_hud(generation, display, screen.frame, scale, &view);
             self.grid_motion_later(
-                Duration::from_secs_f64(settings.hud_ms.clamp(100.0, 5000.0) / 1000.0),
+                Duration::from_secs_f64(settings.map_ms.clamp(100.0, 5000.0) / 1000.0),
                 Note::HudFade(generation),
             );
         }
@@ -515,7 +515,7 @@ impl Reactor {
             pending.screen.size,
         );
         let wallpaper = manager.shareable.wallpaper(pending.display, wallpaper_rect);
-        let motion = Motion::new(&self.config.settings.grid.motion);
+        let motion = Motion::new(&self.config.settings.grid.moves);
         let Some(pan) = manager.pan.as_mut() else { return };
         let shape = (pending.columns, pending.cell);
         let duration =
