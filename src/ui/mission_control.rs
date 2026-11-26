@@ -1164,10 +1164,13 @@ impl DisplayOverview {
 
     fn update_focus_ring(&self, opacity: f32) {
         let selected = self.windows.iter().find(|w| Some(w.data.id) == self.selection.window);
-        let visible = self.active && self.dragged != self.selection.window && selected.is_some();
+        let frame = selected.map(|w| w.world).or_else(|| self.grid_empty_selection());
+        let visible = self.active
+            && frame.is_some()
+            && (self.dragged.is_none() || self.dragged != self.selection.window);
         self.focus_ring.setHidden(!visible);
-        if let Some(w) = selected {
-            self.focus_ring.setFrame(w.world);
+        if let Some(frame) = frame {
+            self.focus_ring.setFrame(frame);
             self.focus_ring.setBorderWidth(
                 2.5 / self.applied.map_or(self.camera.zoom, |(camera, _)| camera.zoom),
             );

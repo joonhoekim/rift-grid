@@ -512,6 +512,20 @@ impl DisplayOverview {
         self.grid.shape.map(|_| CGRect::new(origin, self.info.frame.size))
     }
 
+    /// The selected cell, in the world, when it has no window to select: the
+    /// focus ring goes around the cell instead.
+    pub(super) fn grid_empty_selection(&self) -> Option<CGRect> {
+        let empty = self
+            .workspaces
+            .iter()
+            .find(|ws| ws.index == self.selection.workspace)
+            .is_some_and(|ws| ws.windows.is_empty());
+        if self.selection.window.is_some() || !empty {
+            return None;
+        }
+        self.grid_cell_rect(self.workspace_origin(self.selection.workspace))
+    }
+
     /// The cell at `world`.
     pub(super) fn grid_workspace_at(&self, world: CGPoint) -> Option<&RuntimeWorkspaceData> {
         self.workspaces.iter().find(|ws| {
