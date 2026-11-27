@@ -237,6 +237,20 @@ those hooks, and are useful upstream on their own. None has been proposed yet.
   themselves (Esc stepping) are the fork's, so this waits
   for the first item.
 
+## Settings app changes to propose
+
+- **One row per command on the Keyboard page, with all its keys.** Upstream's
+  page (`ui/settings/commands.rs`) gives every key its own row: a command
+  bound to two keys, as `focus = "down"` on Alt+K and Alt+Down, shows twice,
+  each with its own argument popup, and the rows sort by key, so an action's
+  arguments come out jumbled (Down, Up, Left, Down, ...). Any keymap that binds
+  letters and arrows alike meets it. The fork makes it one row per command:
+  the argument once, a key chip for each key, and "+" to record another; a
+  changed argument rebinds every key of the row. It changes the page's row
+  model and recorder, a large diff in a file upstream reworks often, so it is
+  worth proposing before the fork carries it long: an issue first, with
+  screenshots of both, then the pull request if the maintainer wants it.
+
 ## Contributing back
 
 See [FORK.md](../FORK.md#upstream-candidates): each candidate goes as a pull
