@@ -80,6 +80,18 @@ N means one place whichever display the focus is on.
 Two displays can show the same number only when both hold windows in it, as
 state from before this model may.
 
+When the focused window closes, or its app quits, and its cell is left empty,
+the display stays on that cell, as in subline. macOS would give the keyboard to
+a window in another cell (another window of the app, or the next app's), and
+upstream would follow it there. In an empty cell an invisible window of
+rift-grid's own has the keyboard, so typed keys are not sent to a window off
+the screen, and rift-grid is the app in front (its menu bar shows) until a
+window takes the focus. Choosing an app from the Dock, Cmd+Tab or home still
+goes to its window's cell. A window that opens in the cell takes the focus.
+Going to an empty cell works the same way (before, it gave the focus to the
+desktop, which can bring a Finder window of another cell forward). The code is
+`actor/reactor/cell_focus.rs` and `ui/home/holder.rs`.
+
 When rift-grid restarts, windows go back to their cells, in the arrangement
 each cell had, and with `start = "last"` each display shows the cell it showed.
 rift-grid keeps all three in `~/.rift-grid/cells.json`, written whenever they change, so a crash

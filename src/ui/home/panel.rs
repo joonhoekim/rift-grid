@@ -91,6 +91,9 @@ struct State {
     generation: u64,
     /// The app in front when home opened.
     front: Option<Retained<NSRunningApplication>>,
+    /// The holder had the keyboard when home opened: the cell was empty
+    /// (`holder.rs`).
+    holder_was_key: bool,
     query: String,
     shown: Shown,
     pick: Option<Pick>,
@@ -380,6 +383,7 @@ impl Home {
                     open: false,
                     generation: 0,
                     front: None,
+                    holder_was_key: false,
                     query: String::new(),
                     shown: Shown::default(),
                     pick: None,
@@ -634,6 +638,7 @@ impl Controller {
             state.open = true;
             state.generation += 1;
             state.front = NSWorkspace::sharedWorkspace().frontmostApplication();
+            state.holder_was_key = super::holder::is_key();
             state.query.clear();
             state.pick = None;
             state.hover = None;
@@ -694,19 +699,30 @@ impl Controller {
     }
 
     fn close(&self, why: Closed) {
-        let (generation, front) = {
+        let (generation, front, holder_was_key) = {
             let mut state = self.ivars().state.borrow_mut();
             if !state.open {
                 return;
             }
             state.open = false;
             state.generation += 1;
-            (state.generation, state.front.take())
+            (
+                state.generation,
+                state.front.take(),
+                std::mem::take(&mut state.holder_was_key),
+            )
         };
         super::set_open(false);
         let views = self.views();
         views.panel.setIgnoresMouseEvents(true);
+        let mtm = self.mtm();
         let give_back = move || {
+            // On an empty cell the keyboard goes back to the holder: macOS
+            // would give it to the front app's window in another cell.
+            if why == Closed::Itself && holder_was_key {
+                super::holder::take_back(mtm);
+                return;
+            }
             // macOS gives the keyboard back to the app in front; if it did
             // not, ask that app to take it.
             if why == Closed::Itself

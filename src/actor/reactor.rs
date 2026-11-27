@@ -6,6 +6,7 @@
 
 mod animation;
 mod borders;
+mod cell_focus;
 mod changes;
 mod claims;
 mod events;
@@ -422,6 +423,7 @@ pub struct Reactor {
     drag_manager: managers::DragManager,
     border_manager: borders::BorderManager,
     grid_motion_manager: grid_motion::GridMotionManager,
+    cell_focus: cell_focus::CellFocus,
     workspace_switch_manager: managers::WorkspaceSwitchManager,
     recording_manager: managers::RecordingManager,
     communication_manager: managers::CommunicationManager,
@@ -528,6 +530,7 @@ impl Reactor {
             },
             border_manager: borders::BorderManager::default(),
             grid_motion_manager: Default::default(),
+            cell_focus: Default::default(),
             workspace_switch_manager: managers::WorkspaceSwitchManager {
                 active_workspace_switch: None,
                 pending_workspace_switch_origin: None,
@@ -1387,7 +1390,9 @@ impl Reactor {
 
     fn handle_event_inner(&mut self, event: Event) {
         let home = self.home_before();
+        let cell_focus = self.cell_focus_before(&event);
         self.handle_event_body(event);
+        self.cell_focus_after(cell_focus);
         self.home_after(home);
     }
 
@@ -5665,7 +5670,7 @@ impl Reactor {
         let Some(screen) = self.space_state.screen_by_space(space) else {
             return false;
         };
-        if !window_server::focus_desktop_window(screen) {
+        if !self.cell_focus.take_focus(&self.layout_manager.layout_engine, space, screen) {
             return false;
         }
 

@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 pub mod apps;
 pub mod categories;
 pub mod grid;
+pub mod holder;
 pub mod launches;
 pub mod panel;
 pub mod search;

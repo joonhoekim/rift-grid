@@ -11,6 +11,7 @@ use objc2_foundation::MainThreadMarker;
 use crate::actor::{self, config};
 use crate::common::config::{ConfigSource, HomeSettings};
 use crate::ui::home::apps::{self, Catalog};
+use crate::ui::home::holder;
 use crate::ui::home::panel::{Closed, Home, HomeEdit};
 
 #[derive(Debug)]
@@ -23,6 +24,11 @@ pub enum Event {
     Close,
     Configure(HomeSettings),
     Catalog(Catalog),
+    /// The current cell on this display (a `CGDirectDisplayID`) is empty: the
+    /// holder takes the keyboard there (`ui/home/holder.rs`).
+    Hold(u32),
+    /// The holder's cell has a window again, or the display shows another.
+    Release,
 }
 
 pub type Sender = actor::Sender<Event>;
@@ -39,6 +45,7 @@ pub fn send(event: Event) {
 pub struct HomeActor {
     rx: actor::Receiver<Event>,
     home: Home,
+    mtm: MainThreadMarker,
 }
 
 impl HomeActor {
@@ -48,7 +55,7 @@ impl HomeActor {
         crate::ui::home::spotlight::take_key(settings.take_spotlight);
         let home = Home::new(mtm, settings, move |change| edit(&config_tx, change), read_apps);
         read_apps();
-        Self { rx, home }
+        Self { rx, home, mtm }
     }
 
     pub async fn run(mut self) {
@@ -68,6 +75,8 @@ impl HomeActor {
                     self.home.configure(settings);
                 }
                 Event::Catalog(catalog) => self.home.set_catalog(catalog),
+                Event::Hold(display) => holder::hold(self.mtm, display),
+                Event::Release => holder::release(self.mtm),
             }
         }
     }
