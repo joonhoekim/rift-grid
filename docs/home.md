@@ -271,7 +271,10 @@ stays until the next opening; opening it then fails with a notice.
 - Order: by name, as Finder sorts (`localizedStandardCompare`).
 - **Hidden apps** (`hidden = ["com.apple.Chess", …]`, bundle ids, case
   ignored) are left out of the grid, the search and the frequent row.
-- **Categories** (`categorize = true`): with no search, the apps are in boxes
+- **Categories** (`categorize = true`): a button right of the search box
+  switches between boxes by kind and one list by name, as subline's; it
+  writes `categorize` to the config, so home opens the same way next time.
+  With no search, the apps are in boxes
   by kind, each under its title, in this order: Internet, Social,
   Productivity, Developer Tools, Creativity, Entertainment, Games,
   Information & Reading, Utilities, Other. Empty ones are not shown, and with

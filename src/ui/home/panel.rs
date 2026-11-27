@@ -45,6 +45,10 @@ use crate::sys::screen::NSScreenExt;
 const MOST_COLUMNS: f64 = 9.0;
 const SEARCH_W: f64 = 560.0;
 const SEARCH_H: f64 = 36.0;
+/// Kept free for a scroller at the grid's right.
+const SCROLLER_ROOM: f64 = 16.0;
+/// The grouping button's width, right of the search box.
+const GROUPING_W: f64 = 36.0;
 const PANEL_RADIUS: f64 = 16.0;
 /// How dark the windows around the panel get.
 const DIM: f64 = 0.5;
@@ -63,6 +67,8 @@ pub enum HomeEdit {
     Hide(String),
     /// Put the app in this category (`categories`).
     Category(String, HomeCategory),
+    /// Show the grid in boxes by kind, or as one list by name (`categorize`).
+    Categorize(bool),
 }
 
 /// Why home closed: by itself (`Esc`, the command again, a click on its
@@ -101,6 +107,8 @@ struct Views {
     clock: Retained<NSTextField>,
     date: Retained<NSTextField>,
     field: Retained<NSTextField>,
+    /// Beside the search box: boxes by kind, or one list by name.
+    grouping: Retained<objc2_app_kit::NSButton>,
     scroll: Retained<NSScrollView>,
     grid: Retained<GridView>,
     empty: Retained<NSTextField>,
@@ -331,6 +339,9 @@ define_class!(
         #[unsafe(method(menuHide:))]
         fn menu_hide(&self, item: &NSMenuItem) { self.hide_app(item.tag() as usize); }
 
+        #[unsafe(method(toggleGrouping:))]
+        fn toggle_grouping_action(&self, _sender: Option<&objc2::runtime::AnyObject>) { self.toggle_grouping(); }
+
         #[unsafe(method(menuCategory:))]
         fn menu_category(&self, item: &NSMenuItem) {
             let tag = item.tag() as usize;
@@ -389,6 +400,7 @@ impl Home {
         super::set_window(views.panel.windowNumber().max(0) as u32);
         let _ = controller.ivars().views.set(views);
         controller.observe();
+        controller.show_grouping();
         Self { controller }
     }
 
@@ -490,6 +502,21 @@ fn make_views(mtm: MainThreadMarker, controller: &Retained<Controller>) -> Views
     unsafe { field.setDelegate(Some(ProtocolObject::from_ref(&**controller))) };
     card.addSubview(&field);
 
+    let grouping = unsafe {
+        objc2_app_kit::NSButton::buttonWithImage_target_action(
+            &symbol("square.grid.3x1.below.line.grid.1x2"),
+            Some(&**controller),
+            Some(sel!(toggleGrouping:)),
+            mtm,
+        )
+    };
+    grouping.setBordered(false);
+    grouping.setButtonType(objc2_app_kit::NSButtonType::PushOnPushOff);
+    // The search box keeps the keyboard when it is clicked.
+    unsafe { grouping.setRefusesFirstResponder(true) };
+    grouping.setContentTintColor(Some(&NSColor::labelColor()));
+    card.addSubview(&grouping);
+
     let scroll = NSScrollView::initWithFrame(NSScrollView::alloc(mtm), CGRect::ZERO);
     scroll.setDrawsBackground(false);
     scroll.setHasVerticalScroller(true);
@@ -544,6 +571,7 @@ fn make_views(mtm: MainThreadMarker, controller: &Retained<Controller>) -> Views
         clock,
         date,
         field,
+        grouping,
         scroll,
         grid,
         empty,
@@ -724,9 +752,42 @@ impl Controller {
             self.close(Closed::Elsewhere);
         }
         self.ivars().state.borrow_mut().settings = settings;
+        self.show_grouping();
         if self.ivars().state.borrow().open {
             self.refill();
         }
+    }
+
+    /// The grouping button shows which way the grid is: boxes by kind, or one
+    /// list by name.
+    fn show_grouping(&self) {
+        let categorize = self.ivars().state.borrow().settings.categorize;
+        let button = &self.views().grouping;
+        let (image, tip) = if categorize {
+            (
+                "square.grid.3x1.below.line.grid.1x2",
+                "Grouped by category; click for A to Z",
+            )
+        } else {
+            ("textformat.abc", "A to Z; click to group by category")
+        };
+        button.setImage(Some(&symbol(image)));
+        button.setState(if categorize { 1 } else { 0 });
+        button.setToolTip(Some(&NSString::from_str(tip)));
+    }
+
+    fn toggle_grouping(&self) {
+        let categorize = {
+            let mut state = self.ivars().state.borrow_mut();
+            state.settings.categorize = !state.settings.categorize;
+            // The rows move: what was picked is somewhere else now.
+            state.pick = None;
+            state.settings.categorize
+        };
+        (self.ivars().edit)(HomeEdit::Categorize(categorize));
+        self.show_grouping();
+        self.refill();
+        self.scroll_to_top();
     }
 
     fn set_catalog(&self, catalog: Catalog) {
@@ -815,10 +876,15 @@ impl Controller {
         } else {
             top -= 20.0;
         }
-        let search_w = SEARCH_W.min(w - 2.0 * PAD);
+        let search_w = SEARCH_W.min(w - 2.0 * PAD - GROUPING_W - 8.0);
+        let search_x = (w - search_w) / 2.0;
         views.field.setFrame(CGRect::new(
-            CGPoint::new((w - search_w) / 2.0, top - SEARCH_H),
+            CGPoint::new(search_x, top - SEARCH_H),
             CGSize::new(search_w, SEARCH_H),
+        ));
+        views.grouping.setFrame(CGRect::new(
+            CGPoint::new(search_x + search_w + 8.0, top - SEARCH_H),
+            CGSize::new(GROUPING_W, SEARCH_H),
         ));
         top -= SEARCH_H + 20.0;
         let bottom = if full { 24.0 } else { 12.0 };
@@ -831,8 +897,9 @@ impl Controller {
         views
             .empty
             .setFrame(CGRect::new(CGPoint::new(0.0, top - 60.0), CGSize::new(w, 24.0)));
-        // The room inside the scroll view, without a scroller that takes some.
-        let inner = views.scroll.contentSize().width;
+        // The room inside the scroll view, without the room a scroller takes
+        // when one shows (with a mouse attached, scrollers take room).
+        let inner = scroll.size.width - SCROLLER_ROOM;
         let columns = grid::columns(inner);
         let mut state = self.ivars().state.borrow_mut();
         state.columns = columns;
@@ -1301,6 +1368,18 @@ impl Controller {
         };
         png.is_some_and(|png| png.writeToFile_atomically(&NSString::from_str(path), true))
     }
+}
+
+/// An SF Symbol, sized for the search box's row.
+fn symbol(name: &str) -> Retained<NSImage> {
+    let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+        &NSString::from_str(name),
+        None,
+    )
+    .unwrap_or_else(NSImage::new);
+    let config =
+        objc2_app_kit::NSImageSymbolConfiguration::configurationWithPointSize_weight(18.0, 0.0);
+    image.imageWithSymbolConfiguration(&config).unwrap_or(image)
 }
 
 fn running_apps(bundle_id: &str) -> Vec<Retained<NSRunningApplication>> {

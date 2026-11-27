@@ -97,6 +97,7 @@ fn edit(config_tx: &config::Sender, change: HomeEdit) {
                     home.categories.retain(|id, _| !id.eq_ignore_ascii_case(&bundle_id));
                     home.categories.insert(bundle_id, category);
                 }
+                HomeEdit::Categorize(categorize) => home.categorize = categorize,
             }
         },
     )));
