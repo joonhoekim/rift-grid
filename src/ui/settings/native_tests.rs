@@ -1455,11 +1455,59 @@ fn keyboard_controls(
         }
         panic!("shortcut must belong to a native list cell")
     }
+    // A row's keys, one recorder each, in the rows that show them.
+    fn labelled(view: &NSView, title: &str, found: &mut Vec<Retained<NSButton>>) {
+        if view.isHidden() {
+            return;
+        }
+        // A row's first key is "Shortcut for …", its others "Shortcut for …, key 2" and on.
+        if let Some(button) = view.downcast_ref::<NSButton>()
+            && button.accessibilityLabel().is_some_and(|label| {
+                let label = label.to_string();
+                label == title || label.starts_with(&format!("{title}, key "))
+            })
+        {
+            found.push(button.retain());
+        }
+        for child in view.subviews().iter() {
+            labelled(&child, title, found);
+        }
+    }
+    let rows_of = |name: &str| -> Vec<Vec<Retained<NSButton>>> {
+        let table = find::<NSTableView>(root).unwrap();
+        (0..table.numberOfRows())
+            .filter_map(|row| table.viewAtColumn_row_makeIfNecessary(0, row, true))
+            .map(|cell| {
+                let mut found = Vec::new();
+                labelled(&cell, &format!("Shortcut for {name}"), &mut found);
+                found
+            })
+            .filter(|found| !found.is_empty())
+            .collect()
+    };
+    let keys_of = |name: &str| -> Vec<Vec<String>> {
+        rows_of(name)
+            .iter()
+            .map(|row| row.iter().map(|key| key.title().to_string()).collect())
+            .collect()
+    };
     assert_eq!(
         action_label(&shown("Focus window Left").unwrap()),
         "Focus window"
     );
     assert_eq!(action_label(&shown("Focus window Right").unwrap()), "");
+    assert_eq!(keys_of("Focus window Left"), [["⌥H"]]);
+    let menu_of = |key: &NSButton| {
+        let mut ancestor = unsafe { key.superview() };
+        loop {
+            let view = ancestor.expect("key context menu");
+            if let Some(menu) = view.menu() {
+                break menu;
+            }
+            ancestor = unsafe { view.superview() };
+        }
+    };
+    let restore_default = objc2_foundation::NSString::from_str("Restore Default Shortcut");
     assert!(shown("Balance").is_none(), "Assigned is the quiet default");
     assert!(
         action(root, "Shortcut for Balance").is_none(),
@@ -1894,7 +1942,75 @@ fn keyboard_controls(
     assert!(extra.isHidden());
     hover.mouseEntered(&event);
     assert!(!extra.isHidden());
+    // Adding records another key for the same command, with the same conflict checks.
+    assert!(named::<NSButton>(root, "Another shortcut for Balance").is_none());
     click(&extra);
+    assert!(capturing.get());
+    let another = named::<NSButton>(root, "Another shortcut for Balance").unwrap();
+    press(&another, 3, "f", option);
+    assert!(pending.try_recv().is_err());
+    assert!(named::<NSButton>(root, "Replace Existing").is_some());
+    press(&another, 53, "\u{1b}", none);
+    assert!(!capturing.get());
+    assert!(
+        named::<NSButton>(root, "Another shortcut for Balance").is_none(),
+        "an abandoned add hides its recorder again"
+    );
+    assert!(pending.try_recv().is_err());
+    hover.mouseExited(&event);
+    assert!(extra.isHidden());
+    click(&extra);
+    let another = named::<NSButton>(root, "Another shortcut for Balance").unwrap();
+    press(&another, 45, "n", option);
+    let edited = apply(pending);
+    assert_eq!(edited.keys["Alt + H"], balance);
+    assert_eq!(edited.keys["Alt + N"], balance);
+    assert_eq!(keys_of("Balance"), [["⌥H", "⌥N"]]);
+    // Leaving the add by moving focus elsewhere, or by Delete, hides its recorder again.
+    let extra = action(root, "Add another Balance shortcut")
+        .or_else(|| table_action(root, "Add another Balance shortcut"))
+        .unwrap();
+    click(&extra);
+    assert!(capturing.get());
+    assert!(named::<NSButton>(root, "Another shortcut for Balance").is_some());
+    assert!(_host.ns_window().makeFirstResponder(Some(&search)));
+    assert!(!capturing.get());
+    assert!(named::<NSButton>(root, "Another shortcut for Balance").is_none());
+    click(&extra);
+    let another = named::<NSButton>(root, "Another shortcut for Balance").unwrap();
+    press(&another, 51, "\u{7f}", none);
+    assert!(!capturing.get());
+    assert!(named::<NSButton>(root, "Another shortcut for Balance").is_none());
+    assert!(pending.try_recv().is_err());
+    // A key the row already has records as a no-op, not a conflict with itself.
+    click(&extra);
+    let another = named::<NSButton>(root, "Another shortcut for Balance").unwrap();
+    press(&another, 4, "h", option);
+    assert!(!capturing.get());
+    assert!(named::<NSButton>(root, "Replace Existing").is_none());
+    assert!(named::<NSButton>(root, "Another shortcut for Balance").is_none());
+    assert!(pending.try_recv().is_err());
+    let second = rows_of("Balance")[0][1].clone();
+    click(&second);
+    press(&second, 4, "h", option);
+    assert!(!capturing.get());
+    assert!(named::<NSButton>(root, "Replace Existing").is_none());
+    assert!(pending.try_recv().is_err());
+    assert_eq!(keys_of("Balance"), [["⌥H", "⌥N"]]);
+    // Duplicating preserves the originating command, while labels don't reveal it.
+    let mut ancestor = unsafe { rows_of("Balance")[0][1].superview() };
+    let menu = loop {
+        let view = ancestor.expect("key context menu");
+        if let Some(menu) = view.menu() {
+            break menu;
+        }
+        ancestor = unsafe { view.superview() };
+    };
+    assert_eq!(
+        menu.itemAtIndex(1).unwrap().title().to_string(),
+        "Duplicate Shortcut…"
+    );
+    menu.performActionForItemAtIndex(1);
     let editor = settings
         .model()
         .sheet
@@ -1913,8 +2029,22 @@ fn keyboard_controls(
         "Balance"
     );
     click(&named::<NSButton>(&editor, "Cancel").unwrap());
-    hover.mouseExited(&event);
-    assert!(extra.isHidden());
+    // Removing one key from its menu keeps the command's other keys.
+    let mut ancestor = unsafe { rows_of("Balance")[0][1].superview() };
+    let menu = loop {
+        let view = ancestor.expect("key context menu");
+        if let Some(menu) = view.menu() {
+            break menu;
+        }
+        ancestor = unsafe { view.superview() };
+    };
+    let remove =
+        menu.indexOfItemWithTitle(&objc2_foundation::NSString::from_str("Remove Shortcut"));
+    menu.performActionForItemAtIndex(remove);
+    let edited = apply(pending);
+    assert!(!edited.keys.contains_key("Alt + N"));
+    assert_eq!(edited.keys["Alt + H"], balance);
+    assert_eq!(keys_of("Balance"), [["⌥H"]]);
     root.setFrameSize(CGSize::new(cgs::view::Metrics::DETAIL_MIN_WIDTH, 600.0));
     root.layoutSubtreeIfNeeded();
     assert!(
@@ -1940,31 +2070,96 @@ fn keyboard_controls(
     assert!(named::<NSButton>(root, "Use Default Shortcuts…").is_some());
     assert!(settings.model().source.borrow().keys.is_empty());
     assert!(pending.try_recv().is_err());
-    // Two bindings with identical parameters remain independently editable/removable.
+    // Keys bound to one command share its row, and each stays editable and removable.
     let mut duplicates = settings.model().source.borrow().as_ref().clone();
     duplicates.keys.insert("Alt + H".into(), focus(Direction::Left));
     duplicates.keys.insert("Alt + J".into(), focus(Direction::Left));
     duplicates.keys.insert("Alt + L".into(), focus(Direction::Right));
     settings.router.model.replace_source(duplicates);
     page.synchronize(settings.model());
-    let table = find::<NSTableView>(root).unwrap();
-    let left_fields: Vec<_> = (0..table.numberOfRows())
-        .filter_map(|row| table.viewAtColumn_row_makeIfNecessary(0, row, true))
-        .filter_map(|cell| named::<NSButton>(&cell, "Shortcut for Focus window Left"))
-        .collect();
-    assert_eq!(left_fields.len(), 2);
+    assert_eq!(keys_of("Focus window Left"), [["⌥H", "⌥J"]]);
+    assert_eq!(keys_of("Focus window Right"), [["⌥L"]]);
+    let left_fields = rows_of("Focus window Left").remove(0);
     assert_eq!(action_label(&left_fields[0]), "Focus window");
-    assert_eq!(action_label(&left_fields[1]), "");
+    assert_eq!(action_label(&left_fields[1]), "Focus window");
+    // Changing the argument rebinds every key of the row.
     choose(&named::<NSPopUpButton>(root, "Focus window Left").unwrap(), 1);
     let edited = apply(pending);
     assert_eq!(edited.keys["Alt + H"], focus(Direction::Right));
-    assert_eq!(edited.keys["Alt + J"], focus(Direction::Left));
-    click(&left_fields[1]);
-    press(&left_fields[1], 51, "\u{7f}", none);
+    assert_eq!(edited.keys["Alt + J"], focus(Direction::Right));
+    assert!(shown("Focus window Left").is_none());
+    assert_eq!(keys_of("Focus window Right"), [["⌥H", "⌥J", "⌥L"]]);
+    let right = rows_of("Focus window Right").remove(0);
+    click(&right[1]);
+    press(&right[1], 51, "\u{7f}", none);
     let edited = apply(pending);
     assert!(!edited.keys.contains_key("Alt + J"));
     assert_eq!(edited.keys["Alt + H"], focus(Direction::Right));
     assert_eq!(edited.keys["Alt + L"], focus(Direction::Right));
+    assert_eq!(keys_of("Focus window Right"), [["⌥H", "⌥L"]]);
+    // A shortcut added from the catalog joins its command's row.
+    click(&named::<NSButton>(&header, "Add Shortcut…").unwrap());
+    let catalog = settings
+        .model()
+        .sheet
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .ns_window()
+        .contentView()
+        .unwrap();
+    change_text(
+        &named::<objc2_app_kit::NSSearchField>(&catalog, "Search actions").unwrap(),
+        "Focus window",
+    );
+    let table = named::<NSTableView>(&catalog, "Available shortcut actions").unwrap();
+    table.selectRowIndexes_byExtendingSelection(
+        &objc2_foundation::NSIndexSet::indexSetWithIndex(navigation_row(&table, "Focus window")),
+        false,
+    );
+    click(&named::<NSButton>(&catalog, "Continue").unwrap());
+    let editor = settings
+        .model()
+        .sheet
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .ns_window()
+        .contentView()
+        .unwrap();
+    choose(&named::<NSPopUpButton>(&editor, "Options").unwrap(), 1);
+    let recorder = named::<NSButton>(&editor, "Record shortcut").unwrap();
+    click(&recorder);
+    press(&recorder, 40, "k", option);
+    let edited = apply(pending);
+    assert_eq!(edited.keys["Alt + K"], focus(Direction::Right));
+    assert_eq!(keys_of("Focus window Right"), [["⌥H", "⌥K", "⌥L"]]);
+    // A hotkey search finds the row holding that key.
+    change_text(&search, "alt+k");
+    assert_eq!(keys_of("Focus window Right"), [["⌥H", "⌥K", "⌥L"]]);
+    change_text(&search, "alt+j");
+    assert!(shown("Focus window Right").is_none());
+    change_text(&search, "");
+    // Restore Default is offered only while the row lacks the default key, and replaces
+    // just the key it is chosen on.
+    let mut source = settings.model().source.borrow().as_ref().clone();
+    source.keys.remove("Alt + H");
+    source.keys.insert("Alt + Y".into(), focus(Direction::Left));
+    source.keys.insert("Alt + U".into(), focus(Direction::Left));
+    settings.router.model.replace_source(source);
+    page.synchronize(settings.model());
+    assert_eq!(keys_of("Focus window Left"), [["⌥U", "⌥Y"]]);
+    let left = rows_of("Focus window Left").remove(0);
+    assert!(menu_of(&left[1]).indexOfItemWithTitle(&restore_default) >= 0);
+    let menu = menu_of(&left[0]);
+    menu.performActionForItemAtIndex(menu.indexOfItemWithTitle(&restore_default));
+    let edited = apply(pending);
+    assert!(!edited.keys.contains_key("Alt + U"));
+    assert_eq!(edited.keys["Alt + Y"], focus(Direction::Left));
+    assert_eq!(keys_of("Focus window Left"), [["⌥H", "⌥Y"]]);
+    for key in rows_of("Focus window Left").remove(0) {
+        assert_eq!(menu_of(&key).indexOfItemWithTitle(&restore_default), -1);
+    }
     settings.window.toolbar().set_page_controls(&ui, None);
     settings.router.model.env.shortcut_capture.borrow_mut().take();
 }

@@ -16,6 +16,7 @@ use rift_protocol::{
     ResizeOrientation,
 };
 
+use super::key_chips::{self, KeyChips};
 use super::*;
 use crate::actor::reactor::Command;
 use crate::actor::wm_controller::{ConfiguredLayoutCommand, ExecCmd, WmCmd, WmCommand};
@@ -163,13 +164,36 @@ pub(super) fn recorded_key(key: &KeyShortcut) -> Option<String> {
 
 type Setter = Rc<dyn Fn(WmCommand)>;
 
+/// Where `cmd`'s argument sits in its popup, so an action's rows read in that order.
+fn argument_rank(cmd: &WmCommand) -> Option<usize> {
+    let position = |items: Vec<(String, DisplaySelector)>, target: &DisplaySelector| {
+        items.iter().position(|(_, item)| item == target)
+    };
+    match command_argument(cmd)?.0 {
+        Arg::Direction(d) => position(directions(false), &DisplaySelector::Direction(d)),
+        Arg::Display(target) => position(directions(true), &target),
+        Arg::Orientation(o) => [
+            ResizeOrientation::Smart,
+            ResizeOrientation::Horizontal,
+            ResizeOrientation::Vertical,
+        ]
+        .iter()
+        .position(|other| *other == o),
+        Arg::Backwards(backwards) => Some(backwards as usize),
+        Arg::Layout(mode) => pages::layouts().iter().position(|(_, other)| *other == mode),
+        Arg::WorkspaceIndex(i) | Arg::Workspace(WorkspaceSelector::Index(i)) => Some(i as usize),
+        _ => None,
+    }
+}
+
 /// Keep content at its natural width, but below the priority at which it would set the
 /// window's minimum width, so rows shrink with the window instead.
 fn compressible(view: &impl NativeView) { Style::flexible(view); }
 
 #[derive(Clone, PartialEq, Eq)]
 enum Id {
-    Bound(String),
+    /// A command's keys, in the order its row shows them.
+    Bound(Vec<String>),
     /// An action without parameters or a binding, by template index.
     Unbound(usize),
 }
@@ -181,8 +205,8 @@ struct Row {
     title: String,
     shortcut: String,
     section: usize,
-    hotkey: Option<Hotkey>,
-    /// Lowercased title, glyphs and key, for filtering.
+    hotkeys: Vec<Hotkey>,
+    /// Lowercased title, glyphs and keys, for filtering.
     text: String,
     controls: std::cell::OnceCell<RowControls>,
     divider_hidden: Cell<bool>,
@@ -198,7 +222,7 @@ struct RowControls {
     cell: cgs::view::View,
     divider: Rc<HStack>,
     name: Rc<Label>,
-    _recorder: Rc<KeyRecorder>,
+    chips: Rc<KeyChips>,
     conflicts: Rc<VStack>,
     _menu: Option<Menu>,
 }
@@ -267,6 +291,27 @@ impl Shortcuts {
         );
     }
 
+    /// Bind every key of a row to `command`, as one edit.
+    fn rebind(
+        &self,
+        keys: Vec<String>,
+        old: WmCommand,
+        command: WmCommand,
+        error: &Weak<ValidationMessage>,
+    ) {
+        let Some(model) = self.model.upgrade() else { return };
+        let mode = self.mode();
+        let error = error.clone();
+        model.submit_edit(
+            Box::new(move |s| {
+                keys.into_iter().try_for_each(|key| {
+                    s.bind(&mode, Some((&key, &old)), key.clone(), command.clone())
+                })
+            }),
+            Box::new(move |result| report(&error, &result)),
+        );
+    }
+
     fn remove(
         &self,
         key: String,
@@ -291,6 +336,21 @@ impl Shortcuts {
                 done(result.is_ok());
             }),
         );
+    }
+
+    /// Whether `key` already triggers `command` in this keymap.
+    fn bound_to(&self, key: &str, command: &WmCommand) -> bool {
+        let Some(model) = self.model.upgrade() else {
+            return false;
+        };
+        let source = model.source.borrow();
+        let Some(hotkey) = source.hotkey(key) else { return false };
+        source.keymap(&self.mode()).is_some_and(|keymap| {
+            keymap.iter().any(|(other, bound)| {
+                bound == command
+                    && source.hotkey(other).is_some_and(|other| other.overlaps(&hotkey))
+            })
+        })
     }
 
     fn close_inspector(&self) {
@@ -335,26 +395,31 @@ impl Shortcuts {
         *self.popover.borrow_mut() = Some(popover);
     }
 
-    /// Records over `id`'s shortcut, binding `draft`. Delete removes a binding; a failed
-    /// save restores the shortcut shown.
+    /// Records over `key`'s shortcut, or a new one, binding `draft`. Delete removes a
+    /// binding; a failed save restores the shortcut shown. `recording` learns when
+    /// recording starts and ends, however it ends.
     fn recorder(
         self: &Rc<Self>,
-        id: &Id,
+        key: Option<&str>,
         draft: Rc<RefCell<WmCommand>>,
         hotkey: Option<&Hotkey>,
         error: Weak<ValidationMessage>,
         parameter_error: Weak<ValidationMessage>,
         panel: Rc<VStack>,
         finished: Option<Rc<dyn Fn()>>,
+        recording: Option<Rc<dyn Fn(bool)>>,
     ) -> Rc<KeyRecorder> {
-        let except = match id {
-            Id::Bound(key) => Some(key.clone()),
-            Id::Unbound(_) => None,
-        };
+        let except = key.map(str::to_string);
         let original = hotkey.map(shortcut);
         let this = Rc::new(RefCell::new(Weak::<KeyRecorder>::new()));
         let (weak, value, finish) = (this.clone(), original.clone(), finished.clone());
+        // A key already bound to the command adds nothing; a sheet adding it is done.
+        let sheet = finished.is_some();
+        let ended = recording.clone();
         let restore = move |saved: bool| {
+            if let (false, Some(ended)) = (saved, &ended) {
+                ended(false);
+            }
             if saved {
                 if let Some(finish) = &finish {
                     finish();
@@ -364,12 +429,12 @@ impl Shortcuts {
                 recorder.set_value(value.clone());
             }
         };
-        let (page, conflict_error, recorder_ref, pending_command, conflict_id) = (
+        let (page, conflict_error, recorder_ref, pending_command, conflict_key) = (
             Rc::downgrade(self),
             error.clone(),
             this.clone(),
             draft.clone(),
-            id.clone(),
+            except.clone(),
         );
         let (cancel_panel, cancel_error) = (Rc::downgrade(&panel), error.clone());
         let conflict = move |candidate: &KeyShortcut| {
@@ -401,8 +466,10 @@ impl Shortcuts {
             let conflicts: Vec<_> = source
                 .keymap(&mode)?
                 .iter()
-                .filter(|(other, _)| {
+                .filter(|(other, command)| {
+                    // A key already bound to this command records as a no-op.
                     Some(other.as_str()) != except.as_deref()
+                        && **command != *pending_command.borrow()
                         && source.hotkey(other).is_some_and(|other| other.overlaps(&hotkey))
                 })
                 .map(|(key, command)| (key.clone(), command.clone()))
@@ -438,10 +505,7 @@ impl Shortcuts {
                     recorder.begin_recording();
                 }
             });
-            let old = match &conflict_id {
-                Id::Bound(key) => Some((key.clone(), pending_command.borrow().clone())),
-                Id::Unbound(_) => None,
-            };
+            let old = conflict_key.clone().map(|key| (key, pending_command.borrow().clone()));
             let command = pending_command.borrow().clone();
             let (page_ref, weak_panel, error, recorder, candidate, finish) = (
                 Rc::downgrade(&page),
@@ -500,9 +564,16 @@ impl Shortcuts {
             panel.set_hidden(false);
             Some(message)
         };
-        let (page, id) = (Rc::downgrade(self), id.clone());
+        let (page, key) = (Rc::downgrade(self), key.map(str::to_string));
+        let mut guard = recording_guard(self.model.clone(), error.clone());
         let recorder = KeyRecorder::new(&self.ui)
-            .capture(recording_guard(self.model.clone(), error.clone()))
+            .capture(move |active| {
+                let result = guard(active);
+                if let Some(recording) = &recording {
+                    recording(active && result.is_ok());
+                }
+                result
+            })
             .on_cancel(move || {
                 if let Some(panel) = cancel_panel.upgrade() {
                     panel.clear();
@@ -514,11 +585,12 @@ impl Shortcuts {
             .on_change(move |value| {
                 let Some(page) = page.upgrade() else { return };
                 let command = draft.borrow().clone();
-                match (&id, value.as_ref().and_then(recorded_key)) {
-                    (Id::Bound(key), _) if value.is_none() => {
+                match (&key, value.as_ref().and_then(recorded_key)) {
+                    (_, Some(key)) if page.bound_to(&key, &command) => restore(sheet),
+                    (Some(key), _) if value.is_none() => {
                         page.remove(key.clone(), command, &error, restore.clone())
                     }
-                    (Id::Bound(old), Some(key)) => {
+                    (Some(old), Some(key)) => {
                         let unchanged = page.model.upgrade().is_some_and(|model| {
                             let s = model.source.borrow();
                             s.hotkey(old).is_some() && s.hotkey(old) == s.hotkey(&key)
@@ -529,10 +601,8 @@ impl Shortcuts {
                         let old = Some((old.clone(), command.clone()));
                         page.save(old, key, command, &error, restore.clone());
                     }
-                    (Id::Unbound(_), Some(key)) => {
-                        page.save(None, key, command, &error, restore.clone())
-                    }
-                    _ => {}
+                    (None, Some(key)) => page.save(None, key, command, &error, restore.clone()),
+                    _ => restore(false),
                 }
             });
         recorder.set_value(original);
@@ -541,7 +611,7 @@ impl Shortcuts {
         recorder
     }
 
-    /// Compact action, optional parameter summary, and a consistently sized recorder.
+    /// Compact action, optional parameter summary, and a recorder for each of its keys.
     fn row_controls(
         self: &Rc<Self>,
         id: Id,
@@ -550,27 +620,20 @@ impl Shortcuts {
         s: &ConfigSource,
     ) -> RowControls {
         let ui = self.ui;
-        let key = match &id {
-            Id::Bound(key) => Some(key.clone()),
-            Id::Unbound(_) => None,
+        let keys = match &id {
+            Id::Bound(keys) => keys.clone(),
+            Id::Unbound(_) => Vec::new(),
         };
-        let hotkey = key.as_deref().and_then(|key| s.hotkey(key));
         let parameter_message = inline_message(&ui);
         let message = inline_message(&ui);
         let error = Rc::downgrade(&parameter_message);
         let draft = Rc::new(RefCell::new(command.clone()));
-        let set: Setter = if let Some(key) = &key {
-            let (page, key, old, error) =
-                (Rc::downgrade(self), key.clone(), command.clone(), error.clone());
+        let set: Setter = if !keys.is_empty() {
+            let (page, keys, old, error) =
+                (Rc::downgrade(self), keys.clone(), command.clone(), error.clone());
             Rc::new(move |cmd| {
                 if let Some(page) = page.upgrade() {
-                    page.save(
-                        Some((key.clone(), old.clone())),
-                        key.clone(),
-                        cmd,
-                        &error,
-                        |_| {},
-                    );
+                    page.rebind(keys.clone(), old.clone(), cmd, &error);
                 }
             })
         } else {
@@ -582,7 +645,7 @@ impl Shortcuts {
         compressible(&*name);
         let parameter: Option<Box<dyn NativeView>> = if simple_parameter(&command) {
             self.model.upgrade().and_then(|model| {
-                parameters(ui, &model, &command, key.is_none(), set.clone(), error.clone())
+                parameters(ui, &model, &command, keys.is_empty(), set.clone(), error.clone())
             })
         } else if has_parameters(&command) {
             let text = summary(
@@ -598,7 +661,7 @@ impl Shortcuts {
                 draft.clone(),
                 set.clone(),
                 error.clone(),
-                key.is_none(),
+                keys.is_empty(),
             );
             let button = Style::summary(&ui, &text);
             let anchor = objc2::rc::Weak::new(button.ns_view());
@@ -620,21 +683,34 @@ impl Shortcuts {
         });
         let conflicts = Rc::new(Style::conflicts(&ui));
         conflicts.set_hidden(true);
-        let recorder = self.recorder(
-            &id,
-            draft.clone(),
-            hotkey.as_ref(),
-            Rc::downgrade(&message),
-            error,
-            conflicts.clone(),
-            None,
-        );
-        recorder.accessibility_label(&format!("Shortcut for {title}"));
+        let chips = KeyChips::new(&ui);
+        // One recorder per key, then one that records another key for the command.
+        let mut recorders = Vec::new();
+        for (index, key) in keys.iter().map(Some).chain([None]).enumerate() {
+            let recorder = self.recorder(
+                key.map(String::as_str),
+                draft.clone(),
+                key.and_then(|key| s.hotkey(key)).as_ref(),
+                Rc::downgrade(&message),
+                error.clone(),
+                conflicts.clone(),
+                None,
+                key.is_none().then(|| chips.recording()),
+            );
+            recorder.accessibility_label(&match (key, index) {
+                (_, 0) => format!("Shortcut for {title}"),
+                (None, _) => format!("Another shortcut for {title}"),
+                (Some(_), index) => format!("Shortcut for {title}, key {}", index + 1),
+            });
+            recorders.push((key.cloned(), recorder));
+        }
         let page = Rc::downgrade(self);
+        let adding = Rc::downgrade(&chips);
         let another =
             Button::new(&ui, "").symbol("plus.circle.fill").borderless().on_click(move || {
-                if let Some(page) = page.upgrade() {
-                    page.open_editor(draft.borrow().clone());
+                if let (Some(page), Some(chips)) = (page.upgrade(), adding.upgrade()) {
+                    page.close_inspector();
+                    chips.add_another();
                 }
             });
         another.accessibility_label(&format!("Add another {action_name} shortcut"));
@@ -646,16 +722,62 @@ impl Shortcuts {
                 parameter.accessibility_label(&title);
             }
         }
-        let presentation = cgs::settings::ShortcutRow::new(
+        let presentation = key_chips::shortcut_row(
             &ui,
             name.clone(),
             parameter,
-            &recorder,
+            chips.clone(),
             another,
             parameter_message,
             message.clone(),
             conflicts.clone(),
         );
+        // Each key's menu edits that key; the row's records another.
+        let mut menu = None;
+        for (key, recorder) in recorders {
+            let bound = key.is_some();
+            let key_menu = self.key_menu(
+                key,
+                &command,
+                &keys,
+                &recorder,
+                option_button.clone(),
+                &message,
+                s,
+            );
+            if bound {
+                chips.push(&recorder, key_menu);
+            } else {
+                chips.set_another(&recorder, keys.is_empty());
+                menu = Some(key_menu);
+            }
+        }
+        if let Some(menu) = &menu {
+            unsafe { presentation.view.ns_view().setMenu(Some(menu.ns_menu())) };
+        }
+        RowControls {
+            view: presentation.view,
+            cell: presentation.cell,
+            divider: presentation.divider,
+            name,
+            conflicts,
+            chips,
+            _menu: menu,
+        }
+    }
+
+    /// `key`'s context menu; without a key, the row's, which records another.
+    fn key_menu(
+        self: &Rc<Self>,
+        key: Option<String>,
+        command: &WmCommand,
+        keys: &[String],
+        recorder: &Rc<KeyRecorder>,
+        option_button: Option<objc2::rc::Weak<objc2_app_kit::NSButton>>,
+        message: &Rc<ValidationMessage>,
+        s: &ConfigSource,
+    ) -> Menu {
+        let ui = self.ui;
         let (page, copy) = (Rc::downgrade(self), command.clone());
         let duplicate = MenuItem::new(&ui, "Duplicate Shortcut…").on_click(move || {
             if let Some(page) = page.upgrade() {
@@ -700,11 +822,16 @@ impl Shortcuts {
                 }
             }));
             if self.mode() == "default" {
-                if let Some(default_key) = defaults().keys.iter().find_map(|(key, value)| {
-                    (value == &command)
-                        .then(|| defaults().hotkey(key).map(|key| key.to_string()))
-                        .flatten()
-                }) {
+                if let Some(default_key) = defaults()
+                    .keys
+                    .iter()
+                    .find_map(|(key, value)| {
+                        (value == command)
+                            .then(|| defaults().hotkey(key).map(|key| key.to_string()))
+                            .flatten()
+                    })
+                    .filter(|default| !keys.iter().any(|key| s.hotkey(key) == s.hotkey(default)))
+                {
                     let (page, old, expected, error) = (
                         Rc::downgrade(self),
                         key.clone(),
@@ -725,16 +852,7 @@ impl Shortcuts {
                 }
             }
         }
-        unsafe { presentation.view.ns_view().setMenu(Some(menu.ns_menu())) };
-        RowControls {
-            view: presentation.view,
-            cell: presentation.cell,
-            divider: presentation.divider,
-            name,
-            conflicts,
-            _recorder: recorder,
-            _menu: Some(menu),
-        }
+        menu
     }
 
     fn realize<'a>(self: &Rc<Self>, row: &'a Row) -> Option<&'a RowControls> {
@@ -762,18 +880,18 @@ impl Shortcuts {
         source: &ConfigSource,
     ) -> Row {
         let section = template(&command).map_or(OTHER, |i| actions()[i].0);
-        let key = match &id {
-            Id::Bound(key) => Some(key.as_str()),
-            _ => None,
+        let keys = match &id {
+            Id::Bound(keys) => keys.as_slice(),
+            _ => &[],
         };
-        let hotkey = key.and_then(|key| source.hotkey(key));
+        let hotkeys: Vec<_> = keys.iter().filter_map(|key| source.hotkey(key)).collect();
         let options = self.model.upgrade().map_or_else(String::new, |model| {
             summary(&command, source, &model.env.displays.borrow())
         });
         let text = search_query(&format!(
             "{title} {shortcut} {options} {} {} {} {}",
-            key.unwrap_or_default(),
-            hotkey.as_ref().map(ToString::to_string).unwrap_or_default(),
+            keys.join(" "),
+            hotkeys.iter().map(ToString::to_string).collect::<Vec<_>>().join(" "),
             SECTIONS[section],
             toml_text(&command)
         ));
@@ -783,7 +901,7 @@ impl Shortcuts {
             title,
             shortcut,
             section,
-            hotkey,
+            hotkeys,
             text,
             controls: std::cell::OnceCell::new(),
             divider_hidden: Cell::new(false),
@@ -801,11 +919,11 @@ impl Shortcuts {
         let displays = model.env.displays.borrow();
         let mode = self.mode();
         let keymap = s.keymap(&mode);
-        let mut wanted: Vec<_> = keymap
-            .into_iter()
-            .flatten()
-            .map(|(key, command)| (Id::Bound(key.clone()), command.clone()))
-            .collect();
+        let mut wanted: Vec<_> =
+            key_chips::by_command(keymap.into_iter().flatten(), |key| glyphs(key, s))
+                .into_iter()
+                .map(|(keys, command)| (Id::Bound(keys), command))
+                .collect();
         // The assigned view does not need native controls for the action catalog.
         // Once browsed, retain those rows so their drafts survive switching tabs.
         if self.all_actions.get()
@@ -827,7 +945,9 @@ impl Shortcuts {
             .map(|(id, command)| {
                 let title = title(&command, s, &displays);
                 let shortcut = match &id {
-                    Id::Bound(key) => glyphs(key, s),
+                    Id::Bound(keys) => {
+                        keys.iter().map(|key| glyphs(key, s)).collect::<Vec<_>>().join(" ")
+                    }
                     Id::Unbound(_) => String::new(),
                 };
                 old.iter()
@@ -847,10 +967,15 @@ impl Shortcuts {
         let phase = timing::start();
         rows.sort_by_cached_key(|row| {
             let key = match &row.id {
-                Id::Bound(key) => key.clone(),
+                Id::Bound(keys) => keys[0].clone(),
                 Id::Unbound(_) => String::new(),
             };
-            (row.section, template(&row.command).unwrap_or(usize::MAX), key)
+            (
+                row.section,
+                template(&row.command).unwrap_or(usize::MAX),
+                argument_rank(&row.command).unwrap_or(usize::MAX),
+                key,
+            )
         });
         drop(displays);
         let changed = old.len() != rows.len()
@@ -886,9 +1011,7 @@ impl Shortcuts {
                 let included = self.all_actions.get() || matches!(row.id, Id::Bound(_));
                 let visible = included
                     && match &hotkey {
-                        Some(hotkey) => {
-                            row.hotkey.as_ref().is_some_and(|other| other.overlaps(hotkey))
-                        }
+                        Some(hotkey) => row.hotkeys.iter().any(|other| other.overlaps(hotkey)),
                         None => query.split_whitespace().all(|word| row.text.contains(word)),
                     };
                 if visible {
@@ -1044,13 +1167,14 @@ impl Shortcuts {
             }
         });
         let recorder = self.recorder(
-            &Id::Unbound(current),
+            None,
             draft,
             None,
             Rc::downgrade(&message),
             Rc::downgrade(&parameter_error),
             conflicts.clone(),
             Some(finished),
+            None,
         );
         let page = Rc::downgrade(self);
         let cancel =
@@ -1225,7 +1349,7 @@ pub(super) fn keyboard(ui: Ui, model: &Rc<Model>) -> Page {
                     page.close_inspector();
                     for row in page.rows.borrow().iter() {
                         if let Some(controls) = row.controls.get() {
-                            controls._recorder.cancel();
+                            controls.chips.cancel();
                             controls.conflicts.clear();
                             controls.conflicts.set_hidden(true);
                         }

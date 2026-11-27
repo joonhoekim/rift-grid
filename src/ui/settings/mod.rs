@@ -33,6 +33,7 @@ mod editing;
 mod editors;
 mod interface;
 mod interface_preview;
+mod key_chips;
 mod layouts;
 mod grid_pages;
 mod grid_sidebar;
