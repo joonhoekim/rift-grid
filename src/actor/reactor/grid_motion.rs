@@ -265,12 +265,16 @@ impl Reactor {
                         !self.state.windows.workspace_windows(id).is_empty()
                     })
                     .collect();
+                let engine = &self.layout_manager.layout_engine;
+                let tiles =
+                    per_grid.iter().map(|&(_, &id)| engine.cell_tile_shares(space, id)).collect();
                 Some(HudView {
                     grid: to_grid,
                     rows,
                     columns,
                     cell: to_cell,
                     occupied,
+                    tiles,
                     from: (from_grid == to_grid).then_some(from_cell),
                 })
             } else {

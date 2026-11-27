@@ -224,7 +224,8 @@ time and does not draw back between cells; `"off"` shows everything at once.
     back, and comes in again over `zoom_in_time` (0.3). The slide across
     starts near the end of drawing back and ends halfway through coming in.
 - `map`: a small map of the grid, its number beside it, for `map_ms` (700)
-  after the last move; the lit cell glides from the cell left to the cell
+  after the last move. As subline's, each cell draws its tiles as they lie,
+  and a ring round the current cell glides from the cell left to the cell
   arrived at.
 - `edge_glow`: when a move finds no cell beyond the grid's end, by key or by
   swipe, the screen's edge on that side lights up for a moment, under the menu

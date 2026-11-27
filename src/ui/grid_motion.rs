@@ -893,6 +893,8 @@ pub struct HudView {
     pub cell: (usize, usize),
     /// Which cells have windows, row by row.
     pub occupied: Vec<bool>,
+    /// Where each cell's tiles lie, as shares of the cell, row by row.
+    pub tiles: Vec<Vec<CGRect>>,
     /// The cell the move left, when it was in the same grid.
     pub from: Option<(usize, usize)>,
 }
@@ -901,9 +903,35 @@ const HUD_CELL: f64 = 34.0;
 const HUD_GAP: f64 = 5.0;
 const HUD_PAD: f64 = 14.0;
 const HUD_NUMBER: f64 = 26.0;
+/// The current cell's ring, and how far the tiles sit in from their cell's
+/// edge and apart.
+const HUD_RING: f64 = 1.5;
+const HUD_TILE_INSET: f64 = 2.0;
 
-/// The grid map: the grid's number beside its cells, the active one lit, shown a
-/// moment after each move.
+/// Draw a map cell's tiles, given as shares of the cell, in place of those it had.
+fn draw_tiles(cell: &CALayer, tiles: &[CGRect]) {
+    // Dropped all at once: removing them one by one while going through the
+    // list changes the list under the enumeration, which panics.
+    unsafe { cell.setSublayers(None) };
+    let size = cell.bounds().size;
+    let (w, h) = (size.width - 2.0 * HUD_TILE_INSET, size.height - 2.0 * HUD_TILE_INSET);
+    for tile in tiles {
+        let x0 = HUD_TILE_INSET + (tile.origin.x * w).round();
+        let y0 = HUD_TILE_INSET + (tile.origin.y * h).round();
+        let x1 = HUD_TILE_INSET + ((tile.origin.x + tile.size.width) * w).round();
+        let y1 = HUD_TILE_INSET + ((tile.origin.y + tile.size.height) * h).round();
+        let layer = CALayer::layer();
+        // Half a point in on each side leaves a point between neighbours.
+        layer.setFrame(rect(x0 + 0.5, y0 + 0.5, (x1 - x0 - 1.0).max(1.0), (y1 - y0 - 1.0).max(1.0)));
+        layer.setCornerRadius(1.5);
+        layer.setContentsScale(cell.contentsScale());
+        layer.setBackgroundColor(Some(&color(1.0, 1.0, 1.0, 0.55)));
+        cell.addSublayer(&layer);
+    }
+}
+
+/// The grid map: the grid's number beside its cells, each with its tiles as they
+/// lie, and a ring round the current one, shown a moment after each move.
 pub struct Hud {
     generation: u64,
     display: u32,
@@ -984,8 +1012,9 @@ impl Hud {
                     cells.push(cell);
                 }
             }
-            highlight.setCornerRadius(3.0);
-            highlight.setBackgroundColor(Some(&NSColor::controlAccentColor().CGColor()));
+            highlight.setCornerRadius(4.0);
+            highlight.setBorderWidth(HUD_RING);
+            highlight.setBorderColor(Some(&NSColor::controlAccentColor().CGColor()));
             content.addSublayer(&highlight);
             root.addSublayer(&content);
         });
@@ -1038,11 +1067,17 @@ impl Hud {
         CATransaction::flush();
     }
 
+    /// The ring round cell `(row, column)`, just outside it.
     fn cell_frame(&self, (row, column): (usize, usize)) -> CGRect {
-        self.cells
-            .get(row * self.shape.1 + column)
-            .map(|cell| cell.frame())
-            .unwrap_or_default()
+        self.cells.get(row * self.shape.1 + column).map_or_else(CGRect::default, |cell| {
+            let f = cell.frame();
+            rect(
+                f.origin.x - HUD_RING,
+                f.origin.y - HUD_RING,
+                f.size.width + 2.0 * HUD_RING,
+                f.size.height + 2.0 * HUD_RING,
+            )
+        })
     }
 
     fn draw(&mut self, view: &HudView, first: bool) {
@@ -1054,9 +1089,12 @@ impl Hud {
         CATransaction::setDisableActions(true);
         let text = CFString::from_str(&(view.grid + 1).to_string());
         unsafe { self.number.setString(Some(&*(text.as_ref() as *const _ as *const AnyObject))) };
-        for (cell, &occupied) in self.cells.iter().zip(&view.occupied) {
-            let alpha = if occupied { 0.34 } else { 0.12 };
-            cell.setBackgroundColor(Some(&color(1.0, 1.0, 1.0, alpha)));
+        for (index, cell) in self.cells.iter().enumerate() {
+            let tiles = view.tiles.get(index).map_or(&[][..], Vec::as_slice);
+            // Windows with no tile, all floating, still light the cell.
+            let lit = tiles.is_empty() && view.occupied.get(index).copied().unwrap_or(false);
+            cell.setBackgroundColor(Some(&color(1.0, 1.0, 1.0, if lit { 0.34 } else { 0.12 })));
+            draw_tiles(cell, tiles);
         }
         let from = unsafe { self.highlight.presentationLayer() }.map(|l| l.frame());
         self.highlight.setFrame(to);
@@ -1099,5 +1137,22 @@ impl Hud {
         }
         CATransaction::commit();
         CATransaction::flush();
+    }
+}
+
+#[cfg(test)]
+mod map_tests {
+    use super::*;
+
+    #[test]
+    fn a_map_cell_draws_its_tiles_again_in_place_of_the_old() {
+        let cell = CALayer::layer();
+        cell.setFrame(rect(0.0, 0.0, 34.0, 22.0));
+        let halves = [rect(0.0, 0.0, 0.5, 1.0), rect(0.5, 0.0, 0.5, 1.0)];
+        draw_tiles(&cell, &halves);
+        draw_tiles(&cell, &halves);
+        assert_eq!(unsafe { cell.sublayers() }.map_or(0, |l| l.count()), 2);
+        draw_tiles(&cell, &[]);
+        assert_eq!(unsafe { cell.sublayers() }.map_or(0, |l| l.count()), 0);
     }
 }

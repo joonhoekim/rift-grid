@@ -2,7 +2,7 @@
 //! past a cell's edge into the next cell. Where a direction leads comes from
 //! `common::grid_nav`.
 
-use objc2_core_foundation::{CGPoint, CGRect};
+use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 
 use super::{EventResponse, LayoutCommand, LayoutEngine, WindowRelocation};
 use crate::actor::app::WindowId;
@@ -197,6 +197,23 @@ impl LayoutEngine {
         self.focused_window.filter(|&wid| {
             !self.floating.is_floating(wid) && self.space_with_window(wid) == Some(space)
         })
+    }
+
+    /// Where a cell's tiles lie, each as shares of the cell from its top left
+    /// corner, for the grid map.
+    pub(crate) fn cell_tile_shares(
+        &self,
+        space: SpaceId,
+        workspace: VirtualWorkspaceId,
+    ) -> Vec<CGRect> {
+        let Some((area, tiles)) = self.cell_tiles(space, workspace) else {
+            return Vec::new();
+        };
+        let (w, h) = (area.w.max(1.0), area.h.max(1.0));
+        tiles
+            .into_iter()
+            .map(|(_, t)| CGRect::new(CGPoint::new(t.x / w, t.y / h), CGSize::new(t.w / w, t.h / h)))
+            .collect()
     }
 
     /// A cell's tiles at the cell's own size, from its top left corner. There are no
@@ -404,6 +421,15 @@ mod tests {
         let grid = |engine: &mut LayoutEngine, store: &mut WindowStore, command| {
             engine.handle_virtual_workspace_command(store, space, &command)
         };
+
+        // The map draws the cell's two tiles as its halves.
+        let mut shares = engine.cell_tile_shares(space, center);
+        shares.sort_by(|a, b| a.origin.x.total_cmp(&b.origin.x));
+        assert_eq!(shares.len(), 2);
+        assert_eq!((shares[0].origin.x, shares[0].size.width), (0.0, 0.5));
+        assert_eq!((shares[1].origin.x, shares[1].size.height), (0.5, 1.0));
+        let corner = cell(&mut engine, 0);
+        assert!(engine.cell_tile_shares(space, corner).is_empty(), "an empty cell");
 
         // Inside the cell, focus moves between tiles.
         let response = grid(
