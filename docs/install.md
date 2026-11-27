@@ -109,7 +109,7 @@ then, in that file:
 "Alt + Cmd + K" = { go_to_cell = "down" }
 "Alt + Cmd + J" = { go_to_cell = "left" }
 "Alt + Cmd + L" = { go_to_cell = "right" }
-"Alt + H" = "go_to_center_cell"
+"Alt + H" = "focus_default_cell"
 "Alt + Tab" = "focus_recent_window"
 "Alt + O" = "show_mission_control_all"
 "Alt + 1" = { grid = 1 }

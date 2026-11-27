@@ -101,7 +101,7 @@ fn moves_cells(command: &LayoutCommand) -> bool {
         LayoutCommand::Focus(_)
             | LayoutCommand::MoveTile(_)
             | LayoutCommand::GoToCell(_)
-            | LayoutCommand::GoToCenterCell
+            | LayoutCommand::FocusDefaultCell
             | LayoutCommand::Grid(_)
             | LayoutCommand::FocusRecentWindow
             | LayoutCommand::NextWorkspace(_)

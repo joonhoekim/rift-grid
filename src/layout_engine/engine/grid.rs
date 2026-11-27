@@ -76,7 +76,7 @@ impl LayoutEngine {
                     }
                 }
             }
-            LayoutCommand::GoToCenterCell => {
+            LayoutCommand::FocusDefaultCell => {
                 let Some(grid) = self.active_grid(space) else {
                     return EventResponse::default();
                 };
@@ -609,7 +609,7 @@ mod tests {
         );
         let _ = run(&mut engine, &mut store, LayoutCommand::Grid(2));
         assert_eq!(active(&engine), Some(cell(&mut engine, 10)));
-        let _ = run(&mut engine, &mut store, LayoutCommand::GoToCenterCell);
+        let _ = run(&mut engine, &mut store, LayoutCommand::FocusDefaultCell);
         assert_eq!(
             active(&engine),
             Some(cell(&mut engine, 13)),

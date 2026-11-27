@@ -144,9 +144,9 @@ pub enum LayoutCommand {
     /// Grid: go to the neighboring cell.
     #[command(group = 2, label = "Go to cell", order = 22)]
     GoToCell(Direction),
-    /// Grid: go to the center cell of the grid on screen.
-    #[command(group = 2, label = "Go to center cell", order = 23)]
-    GoToCenterCell,
+    /// Grid: go to the default cell, the center, of the grid on screen.
+    #[command(group = 2, label = "Go to the default cell", order = 23)]
+    FocusDefaultCell,
     /// Grid: show grid N (1-based) at its current cell.
     #[command(skip)]
     Grid(usize),

@@ -370,8 +370,8 @@ enum LayoutCommands {
     MoveTile { direction: String },
     /// Grid: go to the next cell
     GoToCell { direction: String },
-    /// Grid: go to the center cell of the grid on screen
-    GoToCenterCell,
+    /// Grid: go to the default cell, the center, of the grid on screen
+    FocusDefaultCell,
     /// Grid: show grid N (1-9) at its current cell
     Grid { grid: usize },
     /// Grid: send the focused window to grid N's (1-9) current cell
@@ -1009,8 +1009,8 @@ fn map_layout_command(cmd: LayoutCommands) -> Result<CliCommand, String> {
         LayoutCommands::GoToCell { direction } => Ok(CliCommand::Reactor(
             reactor::Command::Layout(LC::GoToCell(direction.into())),
         )),
-        LayoutCommands::GoToCenterCell => {
-            Ok(CliCommand::Reactor(reactor::Command::Layout(LC::GoToCenterCell)))
+        LayoutCommands::FocusDefaultCell => {
+            Ok(CliCommand::Reactor(reactor::Command::Layout(LC::FocusDefaultCell)))
         }
         LayoutCommands::Grid { grid } => {
             Ok(CliCommand::Reactor(reactor::Command::Layout(LC::Grid(grid))))

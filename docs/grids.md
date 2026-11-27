@@ -20,7 +20,7 @@ settings and its menus; the fork's own code, commands and settings use these.
 | **Whole grid** | The Overview's second stage, every cell at once (`overview_whole`, `[settings.grid.overview] fit`) | — |
 
 The commands follow subline's actions: `focus` (tile beside, or the next cell
-past the edge), `move_tile`, `go_to_cell`, `go_to_center_cell`, `grid`,
+past the edge), `move_tile`, `go_to_cell`, `focus_default_cell`, `grid`,
 `send_to_grid`, `overview_whole`. The settings are `[settings.grid]` and
 `[virtual_workspaces] grid_columns`; the settings app shows them on the Grid
 page.
@@ -83,7 +83,7 @@ instead, as a window back from the Dock does when its cell changed meanwhile.
 | Alt+IJKL / arrows | `focus` | Tile beside, or the next cell of this grid past its edge |
 | Alt+Shift+IJKL / arrows | `move_tile` | Swap with the tile beside, or carry the window into the next cell |
 | Alt+Cmd+IJKL | `go_to_cell` | Next cell of this grid |
-| Alt+H | `go_to_center_cell` | Center cell of the grid on screen |
+| Alt+H | `focus_default_cell` | The default cell, the center of the grid on screen |
 | Alt+Ctrl+IJKL / arrows | `focus_display` | The display in that direction, as subline's Mod+Ctrl |
 | Alt+Ctrl+Shift+IJKL / arrows | `move_window_to_display` | Carry the window to the display in that direction |
 | Alt+Tab | `focus_recent_window` | The window focused before this one, whichever cell or grid it is in; again goes back |

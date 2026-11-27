@@ -2630,7 +2630,7 @@ impl LayoutEngine {
             | LayoutCommand::Focus(_)
             | LayoutCommand::MoveTile(_)
             | LayoutCommand::GoToCell(_)
-            | LayoutCommand::GoToCenterCell
+            | LayoutCommand::FocusDefaultCell
             | LayoutCommand::Grid(_)
             | LayoutCommand::SendToGrid(_)
             | LayoutCommand::SendWindowToGrid { .. }
@@ -3116,7 +3116,7 @@ impl LayoutEngine {
             LayoutCommand::Focus(_)
             | LayoutCommand::MoveTile(_)
             | LayoutCommand::GoToCell(_)
-            | LayoutCommand::GoToCenterCell
+            | LayoutCommand::FocusDefaultCell
             | LayoutCommand::Grid(_)
             | LayoutCommand::SendToGrid(_)
             | LayoutCommand::SendWindowToGrid { .. }
