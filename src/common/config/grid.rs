@@ -251,7 +251,6 @@ impl GridSettings {
                 }
             }
         }
-        self.gestures.validate(issues);
     }
 }
 

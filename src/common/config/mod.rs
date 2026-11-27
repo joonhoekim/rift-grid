@@ -12,7 +12,7 @@ pub use grid::{
     GRID_COUNT, GridFollow, GridLayout, GridMaps, GridOverviewSettings, GridSettings, GridStart,
     MotionLevel,
 };
-pub use grid_gestures::GridGestureSettings;
+pub use grid_gestures::{GestureAction, GridGestureSettings, SwipeActions};
 pub use grid_motion::GridMotionSettings;
 pub use document::ConfigDocument;
 pub use schema::*;

@@ -126,3 +126,19 @@ fn motion_level_shortens_or_stops_moves() {
     assert_eq!(MotionLevel::Off.duration_ms(180.0, false), 0.0);
     assert_eq!(MotionLevel::System.duration_ms(180.0, false), 180.0);
 }
+
+#[test]
+fn editing_one_swipe_keeps_the_others() {
+    use crate::common::config::{ConfigDocument, GestureAction, SwipeActions};
+    let mut document = ConfigDocument::default();
+    let config = document
+        .update(|s| s.settings.grid.gestures.three.left = GestureAction::FocusLeft)
+        .unwrap();
+    let three = config.settings.grid.gestures.three;
+    assert_eq!(three.left, GestureAction::FocusLeft);
+    let defaults = SwipeActions::three();
+    assert_eq!((three.right, three.up, three.down), (defaults.right, defaults.up, defaults.down));
+    let again = document.runtime().unwrap().settings.grid.gestures;
+    assert_eq!(again.three, three, "as written and read back");
+    assert_eq!(again.four, SwipeActions::four());
+}

@@ -21,7 +21,7 @@ New code lives in fork modules; upstream files only call into them.
 | `common/config/parse.rs` | `with_grid` where `Config` is built from the file and from a snapshot: the workspace store reads the grid (`grid_layout`: shape, names, start) from `virtual_workspaces` |
 | `ui/mission_control.rs`, `actor/mission_control.rs` | Upstream's Overview is one spatial scene seen through a camera; the grid places each cell's region at its row and column (`place_grid_cells`, `sync_grid_layers`), and `default_camera` takes `grid_camera`: the current cell at `[settings.grid.overview] zoom`, then the whole grid. `step_back`/`step_in` move between the two; `ToggleWhole`, `Changed` and `Step` events, Esc stepping in before it closes; `follow_grid` on refresh; `grid_input` first in `OverviewSession::input` (label close buttons, drops on grid buttons, `grid_bar_input`, arrows and Tab as `GridFocus`); in `drop_target`, the grid cell's workspace; window shadows slid in `apply_camera`; `set_capture_limits` first in `OverviewSession::new`; in `update_focus_ring`, the ring goes around a selected empty cell (`grid_empty_selection`); no pixel cap in `update_sources_at` with `full_resolution`. The grid's settings reach the Overview through `set_grid_settings`, which the reactor calls with the rest of `[settings.grid]` |
 | `ui/menu_bar.rs`, `actor/menu_bar.rs` | Grid maps and the grid entries of the Workspace menu; the grid fields in the settings preview's `Workspace`; `set_grid_maps` before each `update_config` |
-| `actor/gesture.rs` | `ActionConfig::grid`; the grid's actions in `Settings` (first in `action_for`, and `consume` while they are on); `DeviceSession` keeps `settings` and `mode` in place of upstream's `alternate`, so a late finger can pick any action; a `Lifecycle::Grid` variant, and one call to `grid_swipe` for a grid action's swipe frames |
+| `actor/gesture.rs` | `ActionConfig::grid`; the grid's actions in `Settings` (first in `action_for`, and `consume` while they are on); `DeviceSession` keeps `settings` and `mode` in place of upstream's `alternate`, so a late finger can pick any action; a `Lifecycle::Grid` variant, and one call to `grid_swipe` for a grid action's swipe frames; `GridSwipe` and `GridAction` re-exported from `gesture/grid.rs` |
 | `sys/gesture.rs`, `actor/input.rs` | `Filter::vertical`: with a vertical grid swipe on, vertical Dock swipes (Mission Control, App Exposé) go through arbitration too |
 | `actor/input.rs` (gesture `configure`) | Gestures stay on while the Overview is open when the grid's are; `Control::set_overview` after `configure`, and `action_for` then gives only grid actions |
 | `actor/wm_controller.rs`, `actor/mission_control.rs` | `WmEvent::OverviewStep` passed on as `mission_control::Event::Step`, handled by `overview_step` |
@@ -219,7 +219,8 @@ those hooks, and are useful upstream on their own. None has been proposed yet.
   Scrolling layout strip. A table like `[gestures] three.left = "..."` (as in
   subline) binding any command to three or four fingers in each direction
   would make the cell swipe plain configuration (`go_to_cell`), leaving the
-  fork only its grid and Overview commands. It needs two changes the fork
+  fork only its grid and Overview commands. (The fork has such a table for
+  the grid: `[settings.grid.gestures.three/four]`, `grid_gestures.rs`.) It needs two changes the fork
   already carries: vertical Dock swipes (Mission Control, App Exposé) going
   through the event tap's arbitration (`Filter::vertical`), and a late finger
   picking any configured action (`action_for(mode, count)` in place of the

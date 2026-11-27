@@ -1,10 +1,11 @@
 //! The grid's trackpad swipes, on the focused display as the keys are, whichever
-//! display the pointer is on. The content follows the fingers: swiping left shows
-//! the cell to the right, or the next grid.
+//! display the pointer is on: each does the action `[settings.grid.gestures]`
+//! gives it. The content follows the fingers: swiping left shows the cell to the
+//! right, or the next grid.
 
-use super::{Command, Event, Reactor};
-use crate::actor::gesture::{Context, GridSwipe};
-use crate::common::config::GRID_COUNT;
+use super::{Command, DisplaySelector, Event, Reactor};
+use crate::actor::gesture::{Context, GridAction, GridSwipe};
+use crate::common::config::{GRID_COUNT, GestureAction};
 use crate::layout_engine::{Direction, LayoutCommand};
 
 impl Reactor {
@@ -17,27 +18,44 @@ impl Reactor {
         {
             return;
         }
-        let towards = match fingers {
-            Direction::Left => Direction::Right,
-            Direction::Right => Direction::Left,
-            Direction::Up => Direction::Down,
-            Direction::Down => Direction::Up,
+        let action = match swipe.action(fingers) {
+            Some(GridAction::Do(action)) => action,
+            Some(GridAction::OverviewBack) => return self.grid_overview_step(false),
+            None => return,
         };
-        let command = match swipe {
-            GridSwipe::Grids { .. } if matches!(fingers, Direction::Up | Direction::Down) => {
-                if let Some(wm) = &self.communication_manager.wm_sender {
-                    wm.send(crate::actor::wm_controller::WmEvent::OverviewStep {
-                        out: fingers == Direction::Up,
-                    });
-                }
-                return;
-            }
-            GridSwipe::Cell => LayoutCommand::GoToCell(towards),
-            GridSwipe::Grids { .. } => {
-                let Some(grid) = self.next_grid_on(space, towards == Direction::Right) else {
+        let command = match action {
+            GestureAction::None => return,
+            GestureAction::Overview => return self.grid_overview_step(true),
+            GestureAction::GoToCellLeft => LayoutCommand::GoToCell(Direction::Left),
+            GestureAction::GoToCellRight => LayoutCommand::GoToCell(Direction::Right),
+            GestureAction::GoToCellUp => LayoutCommand::GoToCell(Direction::Up),
+            GestureAction::GoToCellDown => LayoutCommand::GoToCell(Direction::Down),
+            GestureAction::FocusLeft => LayoutCommand::Focus(Direction::Left),
+            GestureAction::FocusRight => LayoutCommand::Focus(Direction::Right),
+            GestureAction::FocusUp => LayoutCommand::Focus(Direction::Up),
+            GestureAction::FocusDown => LayoutCommand::Focus(Direction::Down),
+            GestureAction::NextGrid | GestureAction::PreviousGrid => {
+                let forward = action == GestureAction::NextGrid;
+                let Some(grid) = self.next_grid_on(space, forward) else {
                     return;
                 };
                 LayoutCommand::Grid(grid + 1)
+            }
+            GestureAction::FocusDefaultCell => LayoutCommand::FocusDefaultCell,
+            GestureAction::FocusRecentWindow => LayoutCommand::FocusRecentWindow,
+            GestureAction::FocusDisplayLeft
+            | GestureAction::FocusDisplayRight
+            | GestureAction::FocusDisplayUp
+            | GestureAction::FocusDisplayDown => {
+                let way = match action {
+                    GestureAction::FocusDisplayLeft => Direction::Left,
+                    GestureAction::FocusDisplayRight => Direction::Right,
+                    GestureAction::FocusDisplayUp => Direction::Up,
+                    _ => Direction::Down,
+                };
+                return self.handle_event_inner(Event::Command(Command::Reactor(
+                    super::ReactorCommand::FocusDisplay(DisplaySelector::Direction(way)),
+                )));
             }
         };
         let before = self.layout_manager.layout_engine.workspaces().active_workspace(space);
@@ -49,6 +67,13 @@ impl Reactor {
             && let Some(pattern) = context.haptic
         {
             let _ = crate::sys::haptics::perform_haptic(pattern);
+        }
+    }
+
+    /// Step the Overview out a stage, opening it, or back in, leaving it.
+    fn grid_overview_step(&mut self, out: bool) {
+        if let Some(wm) = &self.communication_manager.wm_sender {
+            wm.send(crate::actor::wm_controller::WmEvent::OverviewStep { out });
         }
     }
 
@@ -106,7 +131,24 @@ mod tests {
         (reactor, space, context)
     }
 
-    const GRIDS: GridSwipe = GridSwipe::Grids { overview: true, open: false };
+    const THREE: GridSwipe = GridSwipe {
+        actions: crate::common::config::SwipeActions {
+            left: GestureAction::GoToCellRight,
+            right: GestureAction::GoToCellLeft,
+            up: GestureAction::GoToCellDown,
+            down: GestureAction::GoToCellUp,
+        },
+        open: false,
+    };
+    const GRIDS: GridSwipe = GridSwipe {
+        actions: crate::common::config::SwipeActions {
+            left: GestureAction::NextGrid,
+            right: GestureAction::PreviousGrid,
+            up: GestureAction::Overview,
+            down: GestureAction::None,
+        },
+        open: false,
+    };
 
     fn cell(reactor: &Reactor, space: SpaceId) -> Option<usize> {
         let workspaces = reactor.layout_manager.layout_engine.workspaces();
@@ -118,20 +160,20 @@ mod tests {
     fn the_cell_comes_in_from_where_the_fingers_go() {
         let (mut reactor, space, context) = one_display();
         let center = cell(&reactor, space).unwrap();
-        reactor.grid_swipe(&context, GridSwipe::Cell, Direction::Left);
+        reactor.grid_swipe(&context, THREE, Direction::Left);
         assert_eq!(
             cell(&reactor, space),
             Some(center + 1),
             "left shows the cell to the right"
         );
-        reactor.grid_swipe(&context, GridSwipe::Cell, Direction::Up);
+        reactor.grid_swipe(&context, THREE, Direction::Up);
         assert_eq!(
             cell(&reactor, space),
             Some(center + 4),
             "up shows the cell below"
         );
-        reactor.grid_swipe(&context, GridSwipe::Cell, Direction::Down);
-        reactor.grid_swipe(&context, GridSwipe::Cell, Direction::Right);
+        reactor.grid_swipe(&context, THREE, Direction::Down);
+        reactor.grid_swipe(&context, THREE, Direction::Right);
         assert_eq!(cell(&reactor, space), Some(center));
     }
 

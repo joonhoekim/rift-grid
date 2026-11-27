@@ -7,6 +7,7 @@ use cgs::settings::{Section, SettingsPage};
 
 use super::*;
 use crate::common::config::*;
+use crate::layout_engine::Direction;
 
 /// The Grid page: the grids' size and where a display starts.
 pub(super) fn grid(ui: Ui, model: &Rc<Model>) -> Page {
@@ -58,16 +59,74 @@ pub(super) fn overview_section(f: &mut FormBuilder, ui: &Ui) -> Section {
     )
 }
 
-/// The grid's swipes, on upstream's Mouse & Trackpad page.
+/// The grid's swipes, on upstream's Mouse & Trackpad page: subline's table, a
+/// row for each way and a column for three and four fingers.
 pub(super) fn swipes_section(f: &mut FormBuilder, ui: &Ui) -> Section {
-    f.schema_rows(
-        Section::new(ui, "Grid").description(
-            "Distance, tolerance and haptics are the workspace swipes' own, above.",
-        ),
-        "",
-        |s| &s.settings.grid.gestures,
-        |s| &mut s.settings.grid.gestures,
-    )
+    let mut section = Section::new(ui, "Grid").description(
+        "What each swipe does on the grid. The content follows the fingers: swiping left \
+         shows what is to the right. In the Overview, the opposite of the swipe that opens \
+         it steps back, and out. A swipe that does nothing is left to macOS. Distance and \
+         haptics are the workspace swipes', above.",
+    );
+    let header = HStack::new(ui).spacing(GESTURE_GAP);
+    let header = ["Three fingers", "Four fingers"].into_iter().fold(header, |row, title| {
+        let label = Caption::single_line(ui, title);
+        label.width(GESTURE_COLUMN);
+        row.push(label)
+    });
+    section = section.row(f.row("", header, Rc::new(ValidationMessage::new(ui))));
+    for (title, way) in [
+        ("Swipe left", Direction::Left),
+        ("Swipe right", Direction::Right),
+        ("Swipe up", Direction::Up),
+        ("Swipe down", Direction::Down),
+    ] {
+        let message = Rc::new(ValidationMessage::new(ui));
+        let row = HStack::new(ui)
+            .spacing(GESTURE_GAP)
+            .push(gesture_popup(f, false, way, &message))
+            .push(gesture_popup(f, true, way, &message));
+        section = section.row(f.row(title, row, message));
+    }
+    section
+}
+
+const GESTURE_COLUMN: f64 = 190.0;
+const GESTURE_GAP: f64 = 8.0;
+
+/// A popup choosing what the swipe `way` of three fingers, or of four, does.
+fn gesture_popup(
+    f: &mut FormBuilder,
+    four: bool,
+    way: Direction,
+    message: &Rc<ValidationMessage>,
+) -> Rc<Popup> {
+    fn hand(s: &ConfigSource, four: bool) -> SwipeActions {
+        let gestures = &s.settings.grid.gestures;
+        if four { gestures.four } else { gestures.three }
+    }
+    let get = move |s: &ConfigSource| hand(s, four).get(way);
+    let change = f.assign(
+        get,
+        move |s, action| {
+            let gestures = &mut s.settings.grid.gestures;
+            if four { &mut gestures.four } else { &mut gestures.three }.set(way, action)
+        },
+        Rc::downgrade(message),
+    );
+    let popup = Rc::new(
+        Popup::new(&f.ui)
+            .items(GestureAction::CONFIG_CHOICES.iter().map(|(label, _)| *label))
+            .on_change(move |index| {
+                if let Some(action) = GestureAction::from_config_choice(index) {
+                    change(action)
+                }
+            }),
+    );
+    popup.width(GESTURE_COLUMN);
+    popup.set_item_badge(get(defaults()).config_choice_index(), Some("Default"));
+    f.sync_when(&popup, get, move |popup, s| popup.set_selected(get(s).config_choice_index()));
+    popup
 }
 
 /// The grid map, on upstream's Menu Bar page.

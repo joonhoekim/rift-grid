@@ -110,26 +110,32 @@ instead, as a window back from the Dock does when its cell changed meanwhile.
 
 Cells never lead into another grid: moving past the grid's edge stops, and the edge lights up (`edge_glow`).
 
-Trackpad swipes (`[settings.grid.gestures]`, on by default) do the same on the
-focused display, one step a swipe. The content follows the fingers, as in
-macOS and subline:
+Trackpad swipes are a table, as subline's `[gestures]`: what each swipe of
+three fingers (`[settings.grid.gestures.three]`) and of four
+(`[settings.grid.gestures.four]`) does, `left`, `right`, `up` and `down`, on the
+focused display, one step a swipe. The content follows the fingers, as in macOS
+and subline. The defaults:
 
-| Swipe | What it does |
-| --- | --- |
-| Three fingers left / right / up / down | The cell to the right / left / below / above, like `go_to_cell` |
-| Four fingers left / right | The next / previous grid on this display (shown, or holding windows), round the end |
-| Four fingers up | The Overview, as Alt+O; again steps out to the whole grid, and stops there |
-| Four fingers down (Overview open) | Steps back in a stage, as Esc |
+| Swipe | Three fingers | Four fingers |
+| --- | --- | --- |
+| Left | `go_to_cell_right` | `next_grid` (on this display, round the end) |
+| Right | `go_to_cell_left` | `previous_grid` |
+| Up | `go_to_cell_down` | `overview`: opens it, again steps out to the whole grid |
+| Down | `go_to_cell_up` | `none` (macOS's App Exposé) |
 
-The swipes stay on while the Overview is open, so macOS doesn't get them then
-either; upstream's swipes are off there. `overview = false` leaves four fingers
-up and down to Mission Control and App Exposé.
+A swipe can also be `focus_left` .. `focus_down` (tile or cell, as `focus`),
+`focus_default_cell`, `focus_recent_window` or `focus_display_left` ..
+`focus_display_down`. In the Overview, the way opposite the swipe bound to
+`overview`, when it has no action of its own, steps back in a stage, and out,
+as Esc. A way left out of a table keeps its default; `"none"` leaves it to
+macOS. The settings app shows the
+table on the Mouse & Trackpad page.
 
-Rift takes these finger counts before macOS, so its own swipes between Spaces,
-Mission Control and App Exposé don't come with them; four fingers down is still
-App Exposé. `enabled = false` gives them back; `cell_fingers` and
-`grid_fingers` change the counts (0 turns one off). The swipe distance,
-vertical tolerance and haptics are `[settings.gestures]`'s.
+Rift takes a finger count before macOS while one of its swipes has an action,
+so its own swipes between Spaces, Mission Control and App Exposé don't come
+with it then; a swipe with no action stays macOS's. The swipes stay on while
+the Overview is open; upstream's are off there. The swipe distance and haptics
+are `[settings.gestures]`'s.
 
 ## App rules
 

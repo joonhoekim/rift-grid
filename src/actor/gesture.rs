@@ -16,7 +16,7 @@ use crate::sys::gesture::{Owner, Ownership};
 use crate::sys::screen::SpaceId;
 
 mod grid;
-pub use grid::GridSwipe;
+pub use grid::{GridAction, GridSwipe};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Motion {

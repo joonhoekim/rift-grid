@@ -1,34 +1,42 @@
-//! The workspace grid's swipes, `[settings.grid.gestures]`: one finger count goes
-//! to the neighboring cell any way, another goes through the display's grids
-//! left and right, and up and down through the Overview's stages. They take
-//! their finger counts before upstream's swipes, and stay on while the Overview
-//! is open, when upstream's are off. A swipe moves one step, when it has gone
-//! the swipe distance.
+//! The workspace grid's swipes, `[settings.grid.gestures]`: a table of what
+//! each swipe of three and of four fingers does, as subline's. They take their
+//! finger counts before upstream's swipes, and stay on while the Overview is
+//! open, when upstream's are off. A swipe does its action once, when it has gone
+//! the swipe distance; a swipe with nothing to do is left to macOS.
 
 use super::*;
+use crate::common::config::{GestureAction, SwipeActions};
 use crate::layout_engine::Direction;
 
+/// What a grid swipe of some finger count does each way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GridSwipe {
-    /// To the neighboring cell, up, down, left or right.
-    Cell,
-    /// Through the grids on the display, left or right. With `overview`, up
-    /// opens the Overview and steps out a stage, and down steps back in while it
-    /// is `open`; with the Overview closed, down is left to macOS.
-    Grids { overview: bool, open: bool },
+pub struct GridSwipe {
+    pub actions: SwipeActions,
+    /// The Overview is open: the way opposite a swipe that opens it steps back.
+    pub open: bool,
 }
 
 impl GridSwipe {
-    fn allows(self, way: Direction) -> bool {
-        match self {
-            Self::Cell => true,
-            Self::Grids { overview, open } => match way {
-                Direction::Left | Direction::Right => true,
-                Direction::Up => overview,
-                Direction::Down => overview && open,
-            },
+    /// What the swipe does going `way`: its action, or with the Overview open,
+    /// stepping back where the opposite way opens it.
+    pub fn action(self, way: Direction) -> Option<GridAction> {
+        match self.actions.get(way) {
+            GestureAction::None => (self.open
+                && self.actions.get(way.opposite()) == GestureAction::Overview)
+                .then_some(GridAction::OverviewBack),
+            action => Some(GridAction::Do(action)),
         }
     }
+
+    fn allows(self, way: Direction) -> bool { self.action(way).is_some() }
+}
+
+/// What a grid swipe asks the reactor for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GridAction {
+    Do(GestureAction),
+    /// Step the Overview back in a stage, or leave it.
+    OverviewBack,
 }
 
 impl Settings {
@@ -48,8 +56,8 @@ const CLAIM_DISTANCE: f64 = 0.015;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct Actions {
-    cell: Option<ActionConfig>,
-    grids: Option<ActionConfig>,
+    three: Option<ActionConfig>,
+    four: Option<ActionConfig>,
     /// The Overview is open.
     open: bool,
 }
@@ -58,9 +66,9 @@ impl Actions {
     /// `tolerance` is upstream's, for the left-and-right grid swipe.
     pub(super) fn new(config: &Config, tolerance: f64) -> Self {
         let settings = &config.settings.grid.gestures;
-        let on = settings.enabled && config.virtual_workspaces.grid_layout.is_some();
-        let action = |fingers: usize, swipe| {
-            (on && fingers > 0).then_some(ActionConfig {
+        let on = config.virtual_workspaces.grid_layout.is_some();
+        let action = |fingers: usize, actions: SwipeActions| {
+            (on && actions.any()).then_some(ActionConfig {
                 fingers,
                 invert: false,
                 tolerance,
@@ -69,38 +77,38 @@ impl Actions {
                 propagate: false,
                 boundary_threshold: 0.0,
                 animate: None,
-                grid: Some(swipe),
+                grid: Some(GridSwipe { actions, open: false }),
             })
         };
-        let cell = action(settings.cell_fingers, GridSwipe::Cell);
-        let grids = action(settings.grid_fingers, GridSwipe::Grids {
-            overview: settings.overview,
+        Self {
+            three: action(3, settings.three),
+            four: action(4, settings.four),
             open: false,
-        })
-        .filter(|grids| cell.is_none_or(|cell| cell.fingers != grids.fingers));
-        Self { cell, grids, open: false }
+        }
     }
 
-    pub(super) fn any(self) -> bool { self.cell.is_some() || self.grids.is_some() }
+    pub(super) fn any(self) -> bool { self.three.is_some() || self.four.is_some() }
+
+    fn all(self) -> impl Iterator<Item = ActionConfig> { self.three.into_iter().chain(self.four) }
 
     pub(super) fn vertical(self) -> bool {
-        self.cell.is_some()
-            || self.grids.is_some_and(|a| a.grid.is_some_and(|s| s.allows(Direction::Up)))
+        self.all().filter_map(|a| a.grid).any(|s| {
+            let open = GridSwipe { open: true, ..s };
+            open.allows(Direction::Up) || open.allows(Direction::Down)
+        })
     }
 
     pub(super) fn open(self) -> bool { self.open }
 
     pub(super) fn for_fingers(self, fingers: usize) -> Option<ActionConfig> {
-        let mut action = self.cell.into_iter().chain(self.grids).find(|a| a.fingers == fingers)?;
-        if let Some(GridSwipe::Grids { open, .. }) = action.grid.as_mut() {
-            *open = self.open;
+        let mut action = self.all().find(|a| a.fingers == fingers)?;
+        if let Some(swipe) = action.grid.as_mut() {
+            swipe.open = self.open;
         }
         Some(action)
     }
 
-    pub(super) fn max_fingers(self) -> usize {
-        self.cell.into_iter().chain(self.grids).map(|a| a.fingers).max().unwrap_or(0)
-    }
+    pub(super) fn max_fingers(self) -> usize { self.all().map(|a| a.fingers).max().unwrap_or(0) }
 }
 
 impl DeviceSession {
@@ -254,12 +262,47 @@ mod tests {
             );
             assert_eq!(grid_event(&mut rx), None, "not yet past the distance");
             swipe(&input, &[(3, x, y), (3, x * 2.0, y * 2.0)]);
-            assert_eq!(grid_event(&mut rx), Some((GridSwipe::Cell, way)));
+            assert_eq!(grid_event(&mut rx), Some((THREE, way)));
             assert_eq!(grid_event(&mut rx), None, "one step a swipe");
         }
     }
 
-    const GRIDS: GridSwipe = GridSwipe::Grids { overview: true, open: false };
+    const THREE: GridSwipe = GridSwipe {
+        actions: SwipeActions {
+            left: GestureAction::GoToCellRight,
+            right: GestureAction::GoToCellLeft,
+            up: GestureAction::GoToCellDown,
+            down: GestureAction::GoToCellUp,
+        },
+        open: false,
+    };
+    const GRIDS: GridSwipe = GridSwipe {
+        actions: SwipeActions {
+            left: GestureAction::NextGrid,
+            right: GestureAction::PreviousGrid,
+            up: GestureAction::Overview,
+            down: GestureAction::None,
+        },
+        open: false,
+    };
+
+    #[test]
+    fn the_defaults_are_subline_s_table() {
+        let settings = crate::common::config::GridGestureSettings::default();
+        assert_eq!((settings.three, settings.four), (THREE.actions, GRIDS.actions));
+        let parsed = Config::parse(
+            "[settings.grid.gestures.three]\nleft = \"focus_display_right\"\n[keys]\n",
+        )
+        .unwrap();
+        let three = parsed.settings.grid.gestures.three;
+        assert_eq!(three.left, GestureAction::FocusDisplayRight);
+        assert_eq!(
+            three.right,
+            GestureAction::GoToCellLeft,
+            "the ways not given keep theirs"
+        );
+        assert_eq!(parsed.settings.grid.gestures.four, GRIDS.actions);
+    }
 
     #[test]
     fn four_fingers_go_left_right_and_up_and_leave_down_to_macos() {
@@ -270,11 +313,11 @@ mod tests {
         }
 
         let mut without_overview = config(3);
-        without_overview.settings.grid.gestures.overview = false;
+        without_overview.settings.grid.gestures.four.up = GestureAction::None;
         assert!(
             !Settings::new(&without_overview)
                 .grid
-                .grids
+                .four
                 .unwrap()
                 .grid
                 .unwrap()
@@ -290,11 +333,17 @@ mod tests {
 
     #[test]
     fn with_the_overview_open_only_the_grid_swipes_stay_and_down_is_ours() {
-        let open = GridSwipe::Grids { overview: true, open: true };
+        let open = GridSwipe { open: true, ..GRIDS };
+        assert_eq!(open.action(Direction::Down), Some(GridAction::OverviewBack));
+        assert_eq!(GRIDS.action(Direction::Down), None, "closed, down is macOS's");
         for (fingers, y, expected) in [
             (4, -0.12, Some((open, Direction::Down))),
             (4, 0.12, Some((open, Direction::Up))),
-            (3, -0.12, Some((GridSwipe::Cell, Direction::Down))),
+            (
+                3,
+                -0.12,
+                Some((GridSwipe { open: true, ..THREE }, Direction::Down)),
+            ),
         ] {
             let (input, control, mut rx) = device(&config(3));
             control.set_overview(true);
@@ -327,7 +376,7 @@ mod tests {
             (4, 0.0, -0.06),
             (4, 0.0, -0.12),
         ]);
-        let open = GridSwipe::Grids { overview: true, open: true };
+        let open = GridSwipe { open: true, ..GRIDS };
         assert_eq!(grid_event(&mut rx), Some((open, Direction::Down)));
     }
 
@@ -358,7 +407,12 @@ mod tests {
         assert!(settings.action_for(LayoutMode::Traditional, 4).is_none());
 
         config.virtual_workspaces.grid_layout = Some(crate::common::config::GridLayout::new(3, 3));
-        config.settings.grid.gestures.enabled = false;
+        config.settings.grid.gestures.three = SwipeActions {
+            left: GestureAction::None,
+            right: GestureAction::None,
+            up: GestureAction::None,
+            down: GestureAction::None,
+        };
         assert!(
             Settings::new(&config)
                 .action_for(LayoutMode::Traditional, 3)
@@ -375,6 +429,6 @@ mod tests {
         assert!(settings.vertical());
         assert!(settings.consume);
         let action = settings.action_for(LayoutMode::Traditional, 3).unwrap();
-        assert_eq!(action.grid, Some(GridSwipe::Cell));
+        assert_eq!(action.grid, Some(THREE));
     }
 }

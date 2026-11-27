@@ -234,6 +234,13 @@ const MANUAL: &[(Category, Option<LayoutMode>, &str, &str, &str)] = &[
     (Grid, None, "Grid", "Grid", "workspace grid cells rows columns 3x3 start names"),
     (Cells, None, "Cells", "Cells", "moves slide map motion reduce edge glow cells"),
     (
+        Mouse,
+        None,
+        "Mouse & Trackpad › Grid",
+        "Grid swipes",
+        "three four fingers swipe gestures trackpad grid cell overview table",
+    ),
+    (
         Borders,
         None,
         "Focus",
@@ -365,7 +372,6 @@ fn catalog() -> &'static [Entry] {
         append::<GridSettings>(&mut out, "menu_bar", MenuBar, None, "Menu Bar › Grid");
         append::<GridOverviewSettings>(&mut out, "", Overview, None, "Overview › Grid");
         append::<GridMotionSettings>(&mut out, "", Cells, None, "Cells › Showing moves");
-        append::<GridGestureSettings>(&mut out, "", Mouse, None, "Mouse & Trackpad › Grid");
         append::<BorderSettings>(&mut out, "", Borders, None, "Focus › Focus line");
         append::<BorderSettings>(&mut out, "colors", Borders, None, "Focus › Colors");
         out.extend(super::interface::OVERVIEW_SHORTCUTS.map(|(_, title)| Draft {
