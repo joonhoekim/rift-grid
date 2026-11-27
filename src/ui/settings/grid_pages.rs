@@ -1,5 +1,6 @@
-//! The settings app's pages for the grid fork: the Grid page and the window
-//! borders.
+//! The settings app's pages for the grid fork, as subline's: Grid, Cells and
+//! Focus, and the grid's sections on upstream's Overview, Mouse & Trackpad and
+//! Menu Bar pages.
 
 use cgs::controls::ColorWell;
 use cgs::settings::{Section, SettingsPage};
@@ -7,27 +8,28 @@ use cgs::settings::{Section, SettingsPage};
 use super::*;
 use crate::common::config::*;
 
-/// The Grid page: the grid itself, its Overview, how moves between cells are
-/// shown, and the swipes.
+/// The Grid page: the grids' size and where a display starts.
 pub(super) fn grid(ui: Ui, model: &Rc<Model>) -> Page {
     let mut f = FormBuilder::new(ui, model);
     f.tooltips = true;
     let grid = f.schema_rows(
         Section::new(&ui, "Grid").description(
-            "Nine grids of cells, one per number key. Each cell is a workspace.",
+            "Nine grids of cells, one per number key. Each cell is a workspace. Rows and \
+             columns take effect when rift-grid starts again; cells are named in the \
+             config file ([settings.grid] names, names_2 to names_9), and upstream's \
+             default workspace and workspace names are not used.",
         ),
         "",
         |s| &s.settings.grid,
         |s| &mut s.settings.grid,
     );
-    let overview = f.schema_rows(
-        Section::new(&ui, "Overview").description(
-            "The grid in the Overview, which is turned on in the Overview page.",
-        ),
-        "",
-        |s| &s.settings.grid.overview,
-        |s| &mut s.settings.grid.overview,
-    );
+    f.finish(SettingsPage::new(&ui, "").section(grid))
+}
+
+/// The Cells page: how moves between cells are shown, and how much they move.
+pub(super) fn cells(ui: Ui, model: &Rc<Model>) -> Page {
+    let mut f = FormBuilder::new(ui, model);
+    f.tooltips = true;
     let moves = f.schema_rows(
         Section::new(&ui, "Showing moves").description(
             "How moving to another cell or grid is shown: the screen slides there, and a \
@@ -37,21 +39,44 @@ pub(super) fn grid(ui: Ui, model: &Rc<Model>) -> Page {
         |s| &s.settings.grid.moves,
         |s| &mut s.settings.grid.moves,
     );
-    let swipes = f.schema_rows(
-        Section::new(&ui, "Swipes").description(
-            "Distance, tolerance and haptics are the workspace swipes' own, in Mouse & \
-             Trackpad.",
+    let motion = f.schema_rows(
+        Section::new(&ui, "Accessibility"),
+        "cells",
+        |s| &s.settings.grid,
+        |s| &mut s.settings.grid,
+    );
+    f.finish(SettingsPage::new(&ui, "").section(moves).section(motion))
+}
+
+/// The grid's section on upstream's Overview page, after its transitions.
+pub(super) fn overview_section(f: &mut FormBuilder, ui: &Ui) -> Section {
+    f.schema_rows(
+        Section::new(ui, "Grid").description("How the Overview shows a grid of cells."),
+        "",
+        |s| &s.settings.grid.overview,
+        |s| &mut s.settings.grid.overview,
+    )
+}
+
+/// The grid's swipes, on upstream's Mouse & Trackpad page.
+pub(super) fn swipes_section(f: &mut FormBuilder, ui: &Ui) -> Section {
+    f.schema_rows(
+        Section::new(ui, "Grid").description(
+            "Distance, tolerance and haptics are the workspace swipes' own, above.",
         ),
         "",
         |s| &s.settings.grid.gestures,
         |s| &mut s.settings.grid.gestures,
-    );
-    f.finish(
-        SettingsPage::new(&ui, "")
-            .section(grid)
-            .section(overview)
-            .section(moves)
-            .section(swipes),
+    )
+}
+
+/// The grid map, on upstream's Menu Bar page.
+pub(super) fn menu_bar_section(f: &mut FormBuilder, ui: &Ui) -> Section {
+    f.schema_rows(
+        Section::new(ui, "Grid"),
+        "menu_bar",
+        |s| &s.settings.grid,
+        |s| &mut s.settings.grid,
     )
 }
 
@@ -86,7 +111,7 @@ fn border_color(
 pub(super) fn borders(ui: Ui, model: &Rc<Model>) -> Page {
     let mut f = FormBuilder::new(ui, model);
     let section = f.schema_rows(
-        Section::new(&ui, "Window Borders").description(
+        Section::new(&ui, "Focus line").description(
             "A ring just outside each window of the active workspaces, the focused one in \
              its own color.",
         ),

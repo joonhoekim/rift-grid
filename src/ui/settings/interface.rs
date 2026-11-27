@@ -224,10 +224,12 @@ pub(super) fn menu_bar(ui: Ui, model: &Rc<Model>) -> Page {
             &s.settings.ui.menu_bar
         })
         .wide();
+    let grid = super::grid_pages::menu_bar_section(&mut f, &ui);
     f.finish(
         SettingsPage::new(&ui, "")
             .section(preview)
             .section(visibility)
+            .section(grid)
             .section(workspaces)
             .section(appearance)
             .section(Section::new(&ui, "Custom images").row(row).footer(Caption::new(
@@ -369,11 +371,13 @@ pub(super) fn overview(ui: Ui, model: &Rc<Model>) -> Page {
         });
         shortcuts = shortcuts.row(f.row(label, controls, message));
     }
+    let grid = super::grid_pages::overview_section(&mut f, &ui);
     f.finish(
         SettingsPage::new(&ui, "")
             .section(visibility)
             .section(recording)
             .section(transitions.row(duration))
+            .section(grid)
             .section(shortcuts)
             .section(Caption::new(&ui, "Enabling Overview requires restarting Rift.")),
     )

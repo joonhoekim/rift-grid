@@ -35,6 +35,7 @@ mod interface;
 mod interface_preview;
 mod layouts;
 mod grid_pages;
+mod grid_sidebar;
 mod pages;
 pub mod process;
 mod schema;
@@ -66,6 +67,7 @@ pub(super) enum Category {
     Layouts,
     Workspaces,
     Grid,
+    Cells,
     Rules,
     Keyboard,
     Mouse,
@@ -81,18 +83,19 @@ impl Category {
 
     fn title(self) -> &'static str { CATEGORIES[self.index()].1 }
 }
-pub(super) const CATEGORIES: [(Category, &str, &str); 13] = [
+pub(super) const CATEGORIES: [(Category, &str, &str); 14] = [
     (Category::General, "General", "gearshape"),
     (Category::Layouts, "Layouts", "rectangle.split.2x2"),
     (Category::Workspaces, "Workspaces", "square.grid.2x2"),
     (Category::Grid, "Grid", "square.grid.3x3"),
+    (Category::Cells, "Cells", "arrow.up.and.down.and.arrow.left.and.right"),
     (Category::Rules, "Rules", "line.3.horizontal.decrease"),
     (Category::Keyboard, "Keyboard", "keyboard"),
     (Category::Mouse, "Mouse & Trackpad", "computermouse"),
     (Category::MenuBar, "Menu Bar", "menubar.rectangle"),
     (Category::Overview, "Overview", "rectangle.3.group"),
     (Category::StackTabs, "Stack Tabs", "square.stack.3d.up"),
-    (Category::Borders, "Window Borders", "square.dashed"),
+    (Category::Borders, "Focus", "square.dashed"),
     (Category::Advanced, "Advanced", "slider.horizontal.3"),
     (Category::About, "About", "info.circle"),
 ];

@@ -29,7 +29,7 @@ New code lives in fork modules; upstream files only call into them.
 | `sys/mach.rs`, `sys/service.rs`, `common/config/types.rs`, `crates/rift-client/src/lib.rs`, `Cargo.toml`, `assets/Info.plist`, `rift.default.toml` | The fork's names (`crates/rift-protocol/src/names.rs`): the Mach service and launchd label, the binary looked up on `PATH`, the log paths, the config and data directories, the default layout folder, the `[[bin]]` names, the bundle id; clap's `name` in both binaries |
 | `bin/rift.rs` | `load_cells` after the layout engine is made |
 | `Cargo.toml` | `objc2-screen-capture-kit`, which upstream dropped with its screenshot previews: the grid's slides capture windows with it |
-| `ui/settings/*` | The Grid and Window Borders categories (`Category`, `CATEGORIES`, `sidebar.rs`'s badge match, the page match in `pages.rs`, one block each in `search.rs`'s `MANUAL` and catalog), their pages in `grid_pages.rs`; in `mod.rs`, `EndEditing` (`settings/editing.rs`), which ends a field's editing on a click elsewhere or when the window loses key, checked in `native_tests.rs` |
+| `ui/settings/*` | The Grid, Cells and Focus (`Borders`) categories (`Category`, `CATEGORIES`, `sidebar.rs`'s badge match, the page match in `pages.rs`, one block each in `search.rs`'s `MANUAL` and catalog), their pages in `grid_pages.rs`; `sidebar.rs` takes its order and groups from `grid_sidebar.rs` (subline's sections; `Category`'s order stays upstream's), and `search.rs`'s `grouped` heads results in that order; a grid section each on the Overview page (after the transitions, so its first field stays the one `native_tests.rs` edits), the Mouse & Trackpad page (after the workspace swipes) and the Menu Bar page; in `mod.rs`, `EndEditing` (`settings/editing.rs`), which ends a field's editing on a click elsewhere or when the window loses key, checked in `native_tests.rs` |
 
 ## cgs
 
@@ -53,8 +53,9 @@ These could shrink the fork's footprint in upstream files. None is a defect.
   the settings app's command list; the rest are `skip`, since the list would
   offer workspace names for a grid number.
 - The settings app's category list, page match and search catalog: upstream
-  reorganizes these often, and each time the fork's Grid and Window Borders
-  entries conflict. Upstream's own pages carry no grid sections.
+  reorganizes these often, and each time the fork's Grid, Cells and Focus
+  entries conflict. Upstream's Overview, Mouse & Trackpad and Menu Bar pages
+  carry one grid section each.
 - `reactor.rs` has seven separate hook calls. One `Event::Fork` variant with a
   hook before and after handling would make it two.
 

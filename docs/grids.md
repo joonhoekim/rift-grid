@@ -22,7 +22,9 @@ settings and its menus; the fork's own code, commands and settings use these.
 The commands follow subline's actions: `focus` (tile beside, or the next cell
 past the edge), `move_tile`, `go_to_cell`, `focus_default_cell`, `grid`,
 `send_to_grid`, `overview_whole`. The settings are `[settings.grid]`; the
-settings app shows them on the Grid page.
+settings app shows them as subline's does: the Grid, Cells and Focus pages,
+and a Grid section on the Overview (after the transitions), Mouse & Trackpad
+(after the workspace swipes) and Menu Bar pages.
 
 ## Model
 

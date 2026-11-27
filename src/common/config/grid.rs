@@ -79,11 +79,16 @@ pub struct GridSettings {
     /// How much rift-grid's own animations move: the slides between cells, the
     /// grid map, the edge light and the window borders. System follows Reduce
     /// motion in the Accessibility settings.
-    #[setting(label = "Motion", choices, aliases = "reduce reduced animation accessibility")]
+    #[setting(
+        label = "Motion",
+        choices,
+        group = "cells",
+        aliases = "reduce reduced animation accessibility"
+    )]
     pub motion: MotionLevel,
     #[serde(default)]
     /// Which grids get a map in the menu bar.
-    #[setting(label = "Grid map", choices, aliases = "grid map 3x3 menu bar")]
+    #[setting(label = "Grid map", choices, group = "menu_bar", aliases = "grid map 3x3 menu bar")]
     pub grid_map: GridMaps,
 }
 

@@ -36,7 +36,7 @@ What subline set out to do, and this fork does on rift:
 | Trackpad swipes: three fingers to the neighboring cell any way, four fingers left and right through the display's grids and up for the Overview; taken before macOS and upstream's swipes | `actor/gesture/grid.rs`, `actor/reactor/grid_gestures.rs` | `[settings.grid.gestures]`, `common/config/grid_gestures.rs` |
 | Menu bar grid maps, one per grid in use | `ui/menu_bar/grid_map.rs` | `[settings.grid] grid_map` |
 | Window borders: sliding focused border, glow, hidden under the windows above | `ui/borders.rs`, `actor/reactor/borders.rs` | `[settings.grid.focus]`, `common/config/borders.rs` |
-| Settings app: a Grid page (the grid, its Overview, moves, swipes) and a Window Borders page | `ui/settings/grid_pages.rs` | — |
+| Settings app in subline's order (Input, Workspace, Shell, System): Grid, Cells and Focus pages, and the grid's sections on the Overview, Mouse & Trackpad and Menu Bar pages | `ui/settings/grid_pages.rs`, `ui/settings/grid_sidebar.rs` | — |
 | Drag and drop as in VS Code's editor groups: the tile under the pointer, five zones, a preview of where the window lands; replaces upstream's targeting (see [docs/upstream.md](docs/upstream.md)) | `actor/drag/dock.rs` | `[settings.drag_drop] drop_zone_fraction` |
 
 subline features put off for now (a drawer, grid presets, a slide that follows

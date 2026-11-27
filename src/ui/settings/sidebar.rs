@@ -4,7 +4,7 @@ use cgs::settings::{SettingsBadge, SettingsDestination, SettingsNavigation};
 use cgs::view::NativeView;
 use objc2_app_kit::NSView;
 
-use super::{CATEGORIES, Category};
+use super::Category;
 
 pub(super) struct SettingsSidebar {
     navigation: SettingsNavigation<Category>,
@@ -12,8 +12,7 @@ pub(super) struct SettingsSidebar {
 
 impl SettingsSidebar {
     pub(super) fn new(ui: &Ui, select: impl FnMut(Category) + 'static) -> Self {
-        let destinations = CATEGORIES
-            .into_iter()
+        let destinations = super::grid_sidebar::ordered()
             .map(|(id, title, symbol)| SettingsDestination {
                 id,
                 title,
@@ -21,20 +20,17 @@ impl SettingsSidebar {
                 badge: match id {
                     Category::General | Category::Advanced | Category::About => SettingsBadge::Gray,
                     Category::Layouts => SettingsBadge::Blue,
-                    Category::Workspaces | Category::Grid => SettingsBadge::Violet,
+                    Category::Workspaces
+                    | Category::Grid
+                    | Category::Cells
+                    | Category::Borders => SettingsBadge::Violet,
                     Category::Rules => SettingsBadge::Brown,
                     Category::Keyboard | Category::Mouse => SettingsBadge::Slate,
                     Category::MenuBar
                     | Category::Overview
-                    | Category::StackTabs
-                    | Category::Borders => {
-                        SettingsBadge::Teal
-                    }
+                    | Category::StackTabs => SettingsBadge::Teal,
                 },
-                starts_group: matches!(
-                    id,
-                    Category::Keyboard | Category::MenuBar | Category::Advanced | Category::About
-                ),
+                starts_group: super::grid_sidebar::starts_group(id),
             })
             .collect();
         let navigation = SettingsNavigation::new(ui, destinations, select);

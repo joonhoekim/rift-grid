@@ -59,7 +59,7 @@ impl Entry {
 
 pub(super) fn grouped(results: &[&'static Entry]) -> Vec<Row> {
     let mut rows = Vec::new();
-    for &(page, heading, _) in &CATEGORIES {
+    for (page, heading, _) in super::grid_sidebar::ordered() {
         let mut matches = results.iter().filter(|entry| entry.page == page).peekable();
         if matches.peek().is_some() {
             rows.push(Row::Heading(heading));
@@ -231,16 +231,15 @@ const MANUAL: &[(Category, Option<LayoutMode>, &str, &str, &str)] = &[
         "Overview",
         "window previews fade transitions",
     ),
-    (Grid, None, "Grid", "Grid", "workspace grid cells 3x3 overview swipes slide map"),
+    (Grid, None, "Grid", "Grid", "workspace grid cells rows columns 3x3 start names"),
+    (Cells, None, "Cells", "Cells", "moves slide map motion reduce edge glow cells"),
     (
         Borders,
         None,
-        "Window Borders",
-        "Window Borders",
-        "border outline ring glow focus jankyborders",
+        "Focus",
+        "Focus",
+        "window borders outline ring glow focus line jankyborders",
     ),
-    (Borders, None, "Window Borders", "Border color", "focused active border colour"),
-    (Borders, None, "Window Borders", "Unfocused color", "inactive border colour"),
     (
         StackTabs,
         None,
@@ -362,10 +361,13 @@ fn catalog() -> &'static [Entry] {
         append::<MenuBarSettings>(&mut out, "", MenuBar, None, "Menu Bar");
         append::<MissionControlSettings>(&mut out, "", Overview, None, "Overview");
         append::<GridSettings>(&mut out, "", Grid, None, "Grid");
-        append::<GridOverviewSettings>(&mut out, "", Grid, None, "Grid › Overview");
-        append::<GridMotionSettings>(&mut out, "", Grid, None, "Grid › Showing moves");
-        append::<GridGestureSettings>(&mut out, "", Grid, None, "Grid › Swipes");
-        append::<BorderSettings>(&mut out, "", Borders, None, "Window Borders");
+        append::<GridSettings>(&mut out, "cells", Cells, None, "Cells › Accessibility");
+        append::<GridSettings>(&mut out, "menu_bar", MenuBar, None, "Menu Bar › Grid");
+        append::<GridOverviewSettings>(&mut out, "", Overview, None, "Overview › Grid");
+        append::<GridMotionSettings>(&mut out, "", Cells, None, "Cells › Showing moves");
+        append::<GridGestureSettings>(&mut out, "", Mouse, None, "Mouse & Trackpad › Grid");
+        append::<BorderSettings>(&mut out, "", Borders, None, "Focus › Focus line");
+        append::<BorderSettings>(&mut out, "colors", Borders, None, "Focus › Colors");
         out.extend(super::interface::OVERVIEW_SHORTCUTS.map(|(_, title)| Draft {
             title,
             location: "Overview › Keyboard Shortcuts".into(),

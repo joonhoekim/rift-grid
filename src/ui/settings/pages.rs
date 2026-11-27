@@ -60,6 +60,7 @@ pub(super) fn build(ui: Ui, model: &Rc<Model>, id: Category) -> Page {
         Category::Overview => super::interface::overview(ui, model),
         Category::StackTabs => super::interface::stack_tabs(ui, model),
         Category::Grid => super::grid_pages::grid(ui, model),
+        Category::Cells => super::grid_pages::cells(ui, model),
         Category::Borders => super::grid_pages::borders(ui, model),
         Category::About => FormBuilder::new(ui, model).finish(about(ui, &model.env)),
         Category::Advanced => advanced(ui, model),
@@ -924,6 +925,7 @@ fn input(ui: Ui, model: &Rc<Model>) -> Page {
         |s| &mut s.settings.gestures,
     );
     page = page.section(section.content(Disclosure::new(&ui, "Advanced swipe settings", tuning)));
+    page = page.section(super::grid_pages::swipes_section(&mut f, &ui));
     let mut section = Section::new(&ui, "Scrolling layout gestures")
         .description("These gestures navigate the Scrolling layout strip.");
     let mut tuning = Section::new(&ui, "");

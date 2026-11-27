@@ -24,11 +24,11 @@ pub struct BorderSettings {
     pub border_radius: f64,
     #[serde(default = "default_border_active_color")]
     /// The focused window's border, as 0xAARRGGBB or #RRGGBB[AA].
-    #[setting(label = "Border color", custom, aliases = "active focused colour")]
+    #[setting(label = "Border color", custom, group = "colors", aliases = "active focused colour")]
     pub border_color: String,
     #[serde(default = "default_border_inactive_color")]
     /// The other windows' borders, as 0xAARRGGBB or #RRGGBB[AA]. Empty draws none.
-    #[setting(label = "Unfocused color", custom, aliases = "inactive colour")]
+    #[setting(label = "Unfocused color", custom, group = "colors", aliases = "inactive border colour")]
     pub unfocused_color: String,
     #[serde(default = "yes")]
     /// A soft glow around the focused window's border.
