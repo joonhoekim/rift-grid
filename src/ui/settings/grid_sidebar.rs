@@ -6,11 +6,11 @@ use super::CATEGORIES;
 use super::Category::{self, *};
 
 /// The pages in the sidebar's order: General; Input (Keyboard, Mouse);
-/// Workspace (Grid to Rules); Shell (Menu Bar, Stack Tabs); System (Advanced,
+/// Workspace (Grid to Rules, Home after Overview as subline's); Shell (Menu Bar, Stack Tabs); System (Advanced,
 /// About).
 const ORDER: [Category; CATEGORIES.len()] = [
-    General, Keyboard, Mouse, Grid, Cells, Borders, Overview, Workspaces, Layouts, Rules, MenuBar,
-    StackTabs, Advanced, About,
+    General, Keyboard, Mouse, Grid, Cells, Borders, Overview, Home, Workspaces, Layouts, Rules,
+    MenuBar, StackTabs, Advanced, About,
 ];
 
 /// Each page with its title and symbol, in the sidebar's order.

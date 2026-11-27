@@ -62,6 +62,7 @@ pub(super) fn build(ui: Ui, model: &Rc<Model>, id: Category) -> Page {
         Category::Grid => super::grid_pages::grid(ui, model),
         Category::Cells => super::grid_pages::cells(ui, model),
         Category::Borders => super::grid_pages::borders(ui, model),
+        Category::Home => super::grid_pages::home(ui, model),
         Category::About => FormBuilder::new(ui, model).finish(about(ui, &model.env)),
         Category::Advanced => advanced(ui, model),
         Category::Layouts => unreachable!("Layouts owns its inline inspector"),

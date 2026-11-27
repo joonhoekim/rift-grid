@@ -214,6 +214,9 @@ pub enum LayoutCommand {
 pub enum ReactorCommand {
     #[command(label = "Open Settings", order = 47)]
     OpenSettings,
+    /// Open home, the app grid, on the focused display, or close it.
+    #[command(group = 2, label = "Home", order = 30)]
+    Home,
     #[command(skip)]
     BindingMode(String),
     #[command(label = "Print layout tree", order = 48)]

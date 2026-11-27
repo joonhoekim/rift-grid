@@ -7,6 +7,7 @@ pub mod config;
 pub mod config_watcher;
 pub mod drag;
 pub mod gesture;
+pub mod home;
 pub mod input;
 pub mod menu_bar;
 pub mod mission_control;

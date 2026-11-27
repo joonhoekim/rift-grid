@@ -12,6 +12,7 @@ mod events;
 mod gesture;
 mod grid_displays;
 mod grid_gestures;
+mod grid_home;
 mod grid_motion;
 pub(crate) use crate::layout_engine::WorkspaceDropRequest as OverviewDrop;
 mod main_window;
@@ -1385,6 +1386,12 @@ impl Reactor {
     fn handle_event_traced(&mut self, event: Event) { self.handle_event_inner(event) }
 
     fn handle_event_inner(&mut self, event: Event) {
+        let home = self.home_before();
+        self.handle_event_body(event);
+        self.home_after(home);
+    }
+
+    fn handle_event_body(&mut self, event: Event) {
         if self.handle_border_event(&event) {
             return;
         }
@@ -2406,6 +2413,10 @@ impl Reactor {
             }
             Event::Command(Command::Metrics(cmd)) => {
                 crate::common::log::handle_command(cmd);
+                return Ok(());
+            }
+            Event::Command(Command::Reactor(ReactorCommand::Home)) => {
+                self.home_command();
                 return Ok(());
             }
             Event::Command(Command::Reactor(ReactorCommand::OpenSettings)) => {
@@ -5906,6 +5917,9 @@ impl Reactor {
             return;
         }
         self.mission_control_manager.mission_control_state = new_state;
+        if active {
+            crate::actor::home::send(crate::actor::home::Event::Close);
+        }
         self.update_focus_follows_mouse_state();
     }
 

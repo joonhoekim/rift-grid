@@ -76,6 +76,9 @@ pub struct GridSettings {
     #[setting(ignore)]
     pub gestures: GridGestureSettings,
     #[serde(default)]
+    #[setting(ignore)]
+    pub home: super::HomeSettings,
+    #[serde(default)]
     /// How much rift-grid's own animations move: the slides between cells, the
     /// grid map, the edge light and the window borders. System follows Reduce
     /// motion in the Accessibility settings.

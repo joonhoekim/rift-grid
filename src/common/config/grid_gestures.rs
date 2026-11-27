@@ -79,14 +79,14 @@ impl SwipeActions {
         }
     }
 
-    /// Four fingers go through the display's grids, and up into the Overview;
-    /// down stays macOS's App Exposé.
+    /// Four fingers go through the display's grids, up into the Overview and
+    /// down to home.
     pub fn four() -> Self {
         Self {
             left: GestureAction::NextGrid,
             right: GestureAction::PreviousGrid,
             up: GestureAction::Overview,
-            down: GestureAction::None,
+            down: GestureAction::Home,
         }
     }
 
@@ -162,4 +162,7 @@ pub enum GestureAction {
     FocusDisplayUp,
     #[setting(label = "Display below")]
     FocusDisplayDown,
+    /// Opens home, or closes it.
+    #[setting(label = "Home")]
+    Home,
 }

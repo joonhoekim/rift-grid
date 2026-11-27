@@ -23,7 +23,8 @@ impl SettingsSidebar {
                     Category::Workspaces
                     | Category::Grid
                     | Category::Cells
-                    | Category::Borders => SettingsBadge::Violet,
+                    | Category::Borders
+                    | Category::Home => SettingsBadge::Violet,
                     Category::Rules => SettingsBadge::Brown,
                     Category::Keyboard | Category::Mouse => SettingsBadge::Slate,
                     Category::MenuBar

@@ -10,6 +10,14 @@ use crate::layout_engine::{Direction, LayoutCommand};
 
 impl Reactor {
     pub(super) fn grid_swipe(&mut self, context: &Context, swipe: GridSwipe, fingers: Direction) {
+        // Home finds its display itself: the focused display may show a
+        // fullscreen app, which has no Space to resolve here.
+        if swipe.action(fingers) == Some(GridAction::Do(GestureAction::Home)) {
+            if !self.is_mission_control_active() {
+                self.home_command();
+            }
+            return;
+        }
         let Some(space) = self.command_context_space() else {
             return;
         };
@@ -24,7 +32,7 @@ impl Reactor {
             None => return,
         };
         let command = match action {
-            GestureAction::None => return,
+            GestureAction::None | GestureAction::Home => return,
             GestureAction::Overview => return self.grid_overview_step(true),
             GestureAction::GoToCellLeft => LayoutCommand::GoToCell(Direction::Left),
             GestureAction::GoToCellRight => LayoutCommand::GoToCell(Direction::Right),
@@ -61,11 +69,9 @@ impl Reactor {
         let before = self.layout_manager.layout_engine.workspaces().active_workspace(space);
         self.handle_event_inner(Event::Command(Command::Layout(command)));
         let after = self.layout_manager.layout_engine.workspaces().active_workspace(space);
-        let ticks = before != after
-            || (self.grid_hit_edge() && self.config.settings.grid.moves.edge_glow);
-        if ticks
-            && let Some(pattern) = context.haptic
-        {
+        let ticks =
+            before != after || (self.grid_hit_edge() && self.config.settings.grid.moves.edge_glow);
+        if ticks && let Some(pattern) = context.haptic {
             let _ = crate::sys::haptics::perform_haptic(pattern);
         }
     }
@@ -145,7 +151,7 @@ mod tests {
             left: GestureAction::NextGrid,
             right: GestureAction::PreviousGrid,
             up: GestureAction::Overview,
-            down: GestureAction::None,
+            down: GestureAction::Home,
         },
         open: false,
     };

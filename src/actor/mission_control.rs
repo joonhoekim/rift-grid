@@ -36,6 +36,9 @@ pub enum Event {
     Step {
         out: bool,
     },
+    /// The `home` command: close the Overview if it is open, then toggle home
+    /// once it has closed (keys go to the Overview until then).
+    DismissThenHome(Option<u32>),
 }
 
 /// Whether a broadcast is one the open overview has to show.
@@ -244,6 +247,8 @@ pub struct MissionControlActor {
     mtm: MainThreadMarker,
     input_tx: super::input::Sender,
     stack_line_tx: super::stack_line::Sender,
+    /// Home to open when the Overview has closed.
+    home_after: Option<Option<u32>>,
 }
 
 impl MissionControlActor {
@@ -277,6 +282,7 @@ impl MissionControlActor {
             mtm,
             input_tx,
             stack_line_tx,
+            home_after: None,
         }
     }
 
@@ -348,6 +354,8 @@ impl MissionControlActor {
         if self.settings.window_previews {
             let _ = cgs::compositor::preview::PreviewCompositor::prepare();
         }
+        super::home::send(super::home::Event::Close);
+        self.home_after = None;
         self.backgrounds.sync(self.mtm, &self.tx);
         crate::ui::mission_control::open_whole(whole);
         self.session = OverviewSession::new(
@@ -393,6 +401,9 @@ impl MissionControlActor {
             .send(super::input::Request::SetMissionControlActive(false, Vec::new()));
         self.stack_line_tx.send(super::stack_line::Event::OverviewBounds(Vec::new()));
         crate::ui::grid_motion::set_overview_open(false);
+        if let Some(display) = self.home_after.take() {
+            super::home::send(super::home::Event::Toggle(display));
+        }
     }
 
     fn handle(&mut self, event: Event) {
@@ -404,6 +415,18 @@ impl MissionControlActor {
         }
         match event {
             Event::Step { out } => self.overview_step(out),
+            Event::DismissThenHome(display) => {
+                if self.home_after.is_some() {
+                    // Asked again while the Overview is still closing: home
+                    // toggles twice, so it stays closed.
+                    self.home_after = None;
+                } else if self.session.is_some() {
+                    self.home_after = Some(display);
+                    self.hide();
+                } else {
+                    super::home::send(super::home::Event::Toggle(display));
+                }
+            }
             Event::Snapshot {
                 generation,
                 moved,

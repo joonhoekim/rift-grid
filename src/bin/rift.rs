@@ -370,6 +370,11 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
         )
     });
     let mission_control_native = NativeMissionControl::new(events_tx.clone(), mc_native_rx);
+    let home = rift_wm::actor::home::HomeActor::new(
+        config.settings.grid.home.clone(),
+        config_tx.clone(),
+        mtm,
+    );
 
     if config.settings.default_disable {
         println!(
@@ -423,6 +428,7 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
                 }
             },
             supervise("process_actor", process_actor.run()),
+            home.run(),
         );
     });
 }

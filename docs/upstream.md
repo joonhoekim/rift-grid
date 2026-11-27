@@ -27,9 +27,16 @@ New code lives in fork modules; upstream files only call into them.
 | `actor/wm_controller.rs`, `actor/mission_control.rs` | `WmEvent::OverviewStep` passed on as `mission_control::Event::Step`, handled by `overview_step` |
 | `actor/reactor/gesture.rs` | `Lifecycle::Grid` goes to `grid_gestures.rs`; `gesture_space_active` is `pub(super)` |
 | `sys/mach.rs`, `sys/service.rs`, `common/config/types.rs`, `crates/rift-client/src/lib.rs`, `Cargo.toml`, `assets/Info.plist`, `rift.default.toml` | The fork's names (`crates/rift-protocol/src/names.rs`): the Mach service and launchd label, the binary looked up on `PATH`, the log paths, the config and data directories, the default layout folder, the `[[bin]]` names, the bundle id; clap's `name` in both binaries |
-| `bin/rift.rs` | `load_cells` after the layout engine is made |
+| `bin/rift.rs` | `load_cells` after the layout engine is made; the home actor made and run (`actor/home.rs`) |
+| `actor/reactor.rs` (home) | `handle_event_inner` is `home_before`, then the old body (now `handle_event_body`), then `home_after` (`reactor/grid_home.rs`), which closes home when a display's cell changed; the `ReactorCommand::Home` arm; home closed when macOS's Mission Control becomes active (`set_mission_control_active`) |
+| `crates/rift-protocol/src/commands.rs`, `bin/rift-cli.rs` | `ReactorCommand::Home`; `rift-grid-cli home` |
+| `actor/wm_controller.rs` (home) | `WmEvent::Home` passed to the Overview as `DismissThenHome` (or straight to home without one); `ConfigUpdated` gives home its settings |
+| `actor/mission_control.rs` (home) | `DismissThenHome` and `home_after`: home opens from `close()`, once the input tap has let the Overview's keys go; `open` closes home |
+| `actor/config.rs` | `Event::Edit`: a change to the source in place, without a revision or an answer, for home's "Hide from Home" |
+| `sys/window_server.rs` | `is_ignored_own_window` keeps home's window, so the pointer stops at it |
+| `ui/settings/editors.rs` | `application_picker` and `application_icons` are `pub(super)`, for the Home page's hidden apps |
 | `Cargo.toml` | `objc2-screen-capture-kit`, which upstream dropped with its screenshot previews: the grid's slides capture windows with it |
-| `ui/settings/*` | The Grid, Cells and Focus (`Borders`) categories (`Category`, `CATEGORIES`, `sidebar.rs`'s badge match, the page match in `pages.rs`, one block each in `search.rs`'s `MANUAL` and catalog), their pages in `grid_pages.rs`; `sidebar.rs` takes its order and groups from `grid_sidebar.rs` (subline's sections; `Category`'s order stays upstream's), and `search.rs`'s `grouped` heads results in that order; a grid section each on the Overview page (after the transitions, so its first field stays the one `native_tests.rs` edits), the Mouse & Trackpad page (after the workspace swipes) and the Menu Bar page; in `mod.rs`, `EndEditing` (`settings/editing.rs`), which ends a field's editing on a click elsewhere or when the window loses key, checked in `native_tests.rs` |
+| `ui/settings/*` | The Grid, Cells, Focus (`Borders`) and Home categories (`Category`, `CATEGORIES`, `sidebar.rs`'s badge match, the page match in `pages.rs`, one block each in `search.rs`'s `MANUAL` and catalog), their pages in `grid_pages.rs`; `sidebar.rs` takes its order and groups from `grid_sidebar.rs` (subline's sections; `Category`'s order stays upstream's), and `search.rs`'s `grouped` heads results in that order; a grid section each on the Overview page (after the transitions, so its first field stays the one `native_tests.rs` edits), the Mouse & Trackpad page (after the workspace swipes) and the Menu Bar page; in `mod.rs`, `EndEditing` (`settings/editing.rs`), which ends a field's editing on a click elsewhere or when the window loses key, checked in `native_tests.rs` |
 
 ## cgs
 
@@ -250,6 +257,15 @@ those hooks, and are useful upstream on their own. None has been proposed yet.
   model and recorder, a large diff in a file upstream reworks often, so it is
   worth proposing before the fork carries it long: an issue first, with
   screenshots of both, then the pull request if the maintainer wants it.
+
+- **The installed-apps scan does not follow linked folders.**
+  `sys/installed_apps.rs` reads `~/Applications` with
+  `entry.file_type().is_dir()`, which is false for a link, so a folder of apps
+  that is a link (Home Manager's `~/Applications/Home Manager Apps`, a link
+  into the Nix store) is never read and its apps are missing from the
+  pickers. Following links needs a guard against loops (a folder already read,
+  by its real path). Home's own list (`ui/home/apps.rs`) does both; a small
+  pull request.
 
 ## Contributing back
 

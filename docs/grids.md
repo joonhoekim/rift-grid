@@ -121,13 +121,13 @@ and subline. The defaults:
 | Left | `go_to_cell_right` | `next_grid` (on this display, round the end) |
 | Right | `go_to_cell_left` | `previous_grid` |
 | Up | `go_to_cell_down` | `overview`: opens it, again steps out to the whole grid |
-| Down | `go_to_cell_up` | `none` (macOS's App Exposé) |
+| Down | `go_to_cell_up` | `home` ([home.md](home.md)) |
 
 A swipe can also be `focus_left` .. `focus_down` (tile or cell, as `focus`),
 `focus_default_cell`, `focus_recent_window` or `focus_display_left` ..
-`focus_display_down`. In the Overview, the way opposite the swipe bound to
-`overview`, when it has no action of its own, steps back in a stage, and out,
-as Esc. A way left out of a table keeps its default; `"none"` leaves it to
+`focus_display_down`, or `home`. In the Overview, the way opposite the swipe
+bound to `overview` steps back in a stage, and out, as Esc, whatever it is
+bound to: four fingers down is `home` while the Overview is closed. A way left out of a table keeps its default; `"none"` leaves it to
 macOS. The settings app shows the
 table on the Mouse & Trackpad page.
 

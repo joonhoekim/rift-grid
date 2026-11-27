@@ -714,7 +714,8 @@ fn is_own_window(cid: i32) -> bool { *G_CONNECTION == cid }
 /// Settings is Rift's only document window; its sheets are modal windows.
 /// Floating surfaces (menus/popovers) and compositor overlays are not targets.
 fn is_ignored_own_window(wid: u32, cid: i32) -> bool {
-    if !is_own_window(cid) {
+    // Home's window takes the pointer: nothing under it is focused or dragged.
+    if !is_own_window(cid) || crate::ui::home::is_window(wid) {
         return false;
     }
     let query = WindowIterator::new(&[WindowServerId::new(wid)]);

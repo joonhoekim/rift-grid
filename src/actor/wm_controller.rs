@@ -71,6 +71,11 @@ pub enum WmEvent {
     OverviewStep {
         out: bool,
     },
+    /// The `home` command, with the focused display (`None` while it shows a
+    /// fullscreen app).
+    Home {
+        display: Option<u32>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -500,6 +505,9 @@ impl WmController {
                 }
             }
             ConfigUpdated(new_cfg) => {
+                crate::actor::home::send(crate::actor::home::Event::Configure(
+                    new_cfg.settings.grid.home.clone(),
+                ));
                 if let Some(tx) = &self.mission_control_tx {
                     tx.send(mission_control::Event::Configure(
                         new_cfg.settings.ui.mission_control.clone(),
@@ -524,6 +532,11 @@ impl WmController {
                     self.config.config.settings.ui.mission_control.clone(),
                 ));
             }
+            Home { display } => match &self.mission_control_tx {
+                // The Overview closes first and opens home once it has.
+                Some(tx) => tx.send(mission_control::Event::DismissThenHome(display)),
+                None => crate::actor::home::send(crate::actor::home::Event::Toggle(display)),
+            },
             OverviewStep { out } => {
                 if let Some(tx) = &self.mission_control_tx {
                     let _ = tx.try_send(mission_control::Event::Step { out });

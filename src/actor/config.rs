@@ -35,6 +35,11 @@ pub enum Event {
         source: Box<ConfigSource>,
         response: SnapshotResponse,
     },
+    /// Change the source in place, as fork code asks (home's "Hide from Home"),
+    /// with no revision to match and no answer to wait for. A save that is
+    /// refused is logged.
+    #[serde(skip)]
+    Edit(Box<dyn FnOnce(&mut ConfigSource) + Send>),
     #[serde(skip)]
     QueryConfig(SyncSender<Config>),
     #[serde(skip)]
@@ -124,6 +129,17 @@ impl ConfigActor {
                     response,
                 } => {
                     let _ = response.send(self.apply_source(expected_revision, *source));
+                }
+                Event::Edit(edit) => {
+                    let edited = self.source_snapshot().and_then(|current| {
+                        self.edit_source(current.source, |source| {
+                            edit(source);
+                            Ok(())
+                        })
+                    });
+                    if let Err(error) = edited {
+                        tracing::warn!(%error, "Could not save a change to the config");
+                    }
                 }
                 Event::QueryConfig(resp) => {
                     let _ = resp.send(self.config.clone());

@@ -76,6 +76,7 @@ pub(super) enum Category {
     Overview,
     StackTabs,
     Borders,
+    Home,
     Advanced,
     About,
 }
@@ -84,7 +85,7 @@ impl Category {
 
     fn title(self) -> &'static str { CATEGORIES[self.index()].1 }
 }
-pub(super) const CATEGORIES: [(Category, &str, &str); 14] = [
+pub(super) const CATEGORIES: [(Category, &str, &str); 15] = [
     (Category::General, "General", "gearshape"),
     (Category::Layouts, "Layouts", "rectangle.split.2x2"),
     (Category::Workspaces, "Workspaces", "square.grid.2x2"),
@@ -97,6 +98,7 @@ pub(super) const CATEGORIES: [(Category, &str, &str); 14] = [
     (Category::Overview, "Overview", "rectangle.3.group"),
     (Category::StackTabs, "Stack Tabs", "square.stack.3d.up"),
     (Category::Borders, "Focus", "square.dashed"),
+    (Category::Home, "Home", "square.grid.3x3.square"),
     (Category::Advanced, "Advanced", "slider.horizontal.3"),
     (Category::About, "About", "info.circle"),
 ];

@@ -387,8 +387,20 @@ impl Reactor {
         let sys_id = |reactor: &Self, wid: WindowId| {
             reactor.state.windows.window(wid).and_then(|w| w.info.sys_id).map(|id| id.as_u32())
         };
-        let leave_out: Vec<u32> =
+        let mut leave_out: Vec<u32> =
             carried.iter().filter_map(|(wid, _)| sys_id(self, *wid)).collect();
+        // Home closes on the main thread meanwhile: it is not captured.
+        if let Some(home) = crate::ui::home::open_window() {
+            // Asked for once per window: a list that comes late, or without
+            // it, is not waited for at every slide.
+            static FETCHED_FOR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            if !self.grid_motion_manager.shareable.knows_window(home)
+                && FETCHED_FOR.swap(home, std::sync::atomic::Ordering::Relaxed) != home
+            {
+                self.grid_motion_manager.shareable.fetch_now(SCREEN_WAIT);
+            }
+            leave_out.push(home);
+        }
         // The cell moved to is captured meanwhile; its windows are where they are.
         let send = self.grid_motion_send();
         let mut images = HashMap::default();

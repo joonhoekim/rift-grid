@@ -1083,7 +1083,7 @@ fn rule_behavior(rule: &AppWorkspaceRule) -> String {
 use super::applications::{AppMatch, Choice};
 
 /// One application search/list used by both matcher editors.
-fn application_picker(
+pub(super) fn application_picker(
     ui: Ui,
     model: &Rc<Model>,
     height: f64,
@@ -1146,7 +1146,7 @@ fn application_picker(
     VStack::new(&ui).push(search).push(list)
 }
 
-fn application_icons<T>(bundle_id: impl Fn(&T) -> Option<String>) -> impl Fn(&T) -> Option<Image> {
+pub(super) fn application_icons<T>(bundle_id: impl Fn(&T) -> Option<String>) -> impl Fn(&T) -> Option<Image> {
     move |item| Application::icon_for_bundle(&bundle_id(item)?)
 }
 

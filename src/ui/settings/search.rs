@@ -233,6 +233,14 @@ const MANUAL: &[(Category, Option<LayoutMode>, &str, &str, &str)] = &[
     ),
     (Grid, None, "Grid", "Grid", "workspace grid cells rows columns 3x3 start names"),
     (Cells, None, "Cells", "Cells", "moves slide map motion reduce edge glow cells"),
+    (Home, None, "Home", "Home", "launcher apps app grid search spotlight launchpad open"),
+    (
+        Home,
+        None,
+        "Home › Hidden apps",
+        "Hidden apps",
+        "launcher hide leave out apps bundle",
+    ),
     (
         Mouse,
         None,
@@ -374,6 +382,7 @@ fn catalog() -> &'static [Entry] {
         append::<GridMotionSettings>(&mut out, "", Cells, None, "Cells › Showing moves");
         append::<BorderSettings>(&mut out, "", Borders, None, "Focus › Focus line");
         append::<BorderSettings>(&mut out, "colors", Borders, None, "Focus › Colors");
+        append::<HomeSettings>(&mut out, "", Home, None, "Home");
         out.extend(super::interface::OVERVIEW_SHORTCUTS.map(|(_, title)| Draft {
             title,
             location: "Overview › Keyboard Shortcuts".into(),

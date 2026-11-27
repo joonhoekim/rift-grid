@@ -1,6 +1,6 @@
 # Home
 
-Status: design, not built yet. It is subline's home (its `docs/design/home.md`,
+Status: built (2026-11-27). It is subline's home (its `docs/design/home.md`,
 `crates/compositor/src/home/`) brought to macOS as far as macOS allows. Where
 this differs from subline, the reason is given.
 
@@ -205,7 +205,8 @@ For each app home keeps: the bundle id, the path, the **name** (Finder's name,
 `NSFileManager displayNameAtPath`: localized, "계산기"), and **other names**
 to search by: the bundle's `CFBundleName` and `CFBundleDisplayName` from its
 `Info.plist` and the file name, so `calc` finds 계산기 too. The icon is
-`NSWorkspace iconForFile`, loaded when its slot is first drawn and cached.
+`NSWorkspace iconForFile`, loaded with its slot when the list arrives (while
+home is closed, so opening does not wait for icons) and cached.
 
 Upstream already has a scanner for the settings app's app pickers
 (`sys/installed_apps.rs`: `/Applications`, `/System/Applications` and
@@ -214,9 +215,10 @@ there, but not links to folders (`file_type().is_dir()`), so
 `~/Applications/Home Manager Apps` is never read. Home does not change it: the
 settings app's other pickers keep it, and the fix is only proposed upstream
 (`docs/upstream.md`). Home's fuller list is its own module
-(`ui/home/apps.rs`). The settings app's Home page picks hidden apps from that
-list, not from `installed()` (read on the settings app's job thread, as
-`installed()` is), so the picker and home show the same apps.
+(`ui/home/apps.rs`). The settings app's Home page picks hidden apps with the
+settings app's own app picker (upstream's scan and the running apps), as its
+other pages do, so an app in a linked folder that is not running is missing
+there until upstream's scan follows links.
 
 **Keeping up**: each time home opens, it compares the modification dates of
 every folder it read, at every level, with the ones it read, without
@@ -260,11 +262,9 @@ stays until the next opening; opening it then fails with a notice.
 - The search box has the keyboard as soon as home opens: typing searches. The
   input method works as in any text field: Korean composes in the box, and
   the grid follows the text as it is being composed, composing part included.
-  Whether the text field tells its delegate (`controlTextDidChange:`) while
-  text is being composed is checked first in the key-window prototype; if it
-  does not, the panel gives the box its own field editor
-  (`windowWillReturnFieldEditor:toObject:`) whose `setMarkedText:…` and
-  `insertText:…` report the text.
+  The text field tells its delegate (`controlTextDidChange:`) at each step
+  of composing (ㄱ, 계, 곗, 계, 계사, …; checked with the prototype), so the
+  plain text field is enough.
 - It matches each word of the search, case and accents ignored, against the
   name and the other names. Order, as subline's: names that start with the
   search, then names that contain it, then apps found only by their other
@@ -316,17 +316,16 @@ openApplicationAtURL` (the configuration activates it) and closes home.
   the global layout mode, the display under the pointer).
 - An app that is running is activated: macOS brings its windows forward and
   rift goes to the cell of its focused window, as when it is picked in the
-  Dock. macOS 14 and later may ignore an activation asked for by an app that
-  is not active, and rift never is while home is open. So when the open's
-  completion handler has run (off the main thread) and the app is still not
-  active (`NSRunningApplication isActive`), home asks the reactor to raise
-  that app (by pid); the reactor knows its windows and raises the focused one
-  as it raises any window (`window_server::make_key_window` needs the window
-  id). This is checked by hand with the key-window prototype.
+  Dock. The prototype showed it, both for an app that was not running and for
+  one that was, from the non-activating panel. (The completion handler runs
+  off the main thread and can come before the activation does: a new app
+  reported `isActive = false` there and was in front 0.3 s later. So nothing
+  is decided from it.)
 - A running app with no windows gets macOS's reopen event, so most apps open
   a new window. This is subline's `launch.raise` (on by default there)
   without anything to build; there is no setting to turn it off.
-- If opening fails, a notice says so (as `exec` does), and home stays closed.
+- If opening fails, it is logged (as `exec`'s failures are), and home stays
+  closed.
 
 subline puts a placeholder tile where the window will go, before the window
 comes. That needs a tile without a window in rift's layout, and is left for
@@ -372,11 +371,10 @@ background picture; here the blur and the darkened layer do that, so they are
 not brought over.
 
 The settings app gets a **Home** page, in the Workspace section after
-Overview, as subline's: the frequent row, the style with the panel's size
-(enabled when the style is `window`), and **Hidden apps**: a list of the
-hidden apps with a remove button each and an add button that picks from the
-installed apps (`ui/home/apps.rs`'s list, read in the settings process, off
-the main thread). Search finds the page and each setting ("Home › …").
+Overview, as subline's: the style, the frequent row and the panel's size (the
+page says it is for the Panel style), and **Hidden apps**: the hidden apps, a
+"+" that picks an app to hide and a "−" that shows the picked one again.
+Search finds the page and each setting ("Home › …").
 
 ## Code
 
@@ -387,21 +385,22 @@ files:
 | --- | --- |
 | `src/common/config/grid_home.rs` | `HomeSettings`, under `GridSettings.home` |
 | `src/common/config/grid_gestures.rs` | `GestureAction::Home` |
-| `src/actor/home.rs` | the home actor on the main thread (as the Overview's `actor/mission_control.rs`): `Event::{Toggle(Option<display>), Close, Configure, …}`, the open state, the display it is on. It also watches, on its own (`NSWorkspace` and distributed notifications, no hook), the active Space changing, the screens changing, sleep and the screen locking; each closes home. Apps (Launchpad) takes the key window, which closes home as any app does (checked by hand) |
-| `src/ui/home/` | `apps.rs` (reading the apps), `search.rs` (matching and order), `launches.rs` (the opened-apps file and its score), `grid.rs` (slots, layout, picking with the arrow keys, drawing), `panel.rs` (the `NSPanel` subclass, its views, its keys) |
+| `src/actor/home.rs` | the home actor on the main thread (as the Overview's `actor/mission_control.rs`): `Event::{Toggle(Option<display>), Close, Configure, Catalog}`. Its sender is kept in a `OnceLock` (`home::send`), so the reactor, the wm controller and the Overview reach it without a constructor change. It reads the apps on a thread at start and when they are stale |
+| `src/ui/home.rs`, `src/ui/home/` | the open state and the window number (atomics, read from other threads); `apps.rs` (reading the apps), `search.rs` (matching and order), `launches.rs` (the opened-apps file and its score), `grid.rs` (layout, panel size, picking with the arrow keys), `panel.rs` (the `NSPanel` subclass, its views, keys, clicks, the app menu, and the system notifications that close home: the active Space, the screens, sleep, the lock) |
 | `crates/rift-protocol/src/commands.rs` | `ReactorCommand::Home`, `#[command(group = 2, label = "Home")]`, with the grid's commands |
-| `src/bin/rift-cli.rs` | `rift-cli home` (its subcommands are written by hand) |
-| `src/actor/reactor/grid_home.rs` (fork) | runs `home` (matched where the reactor matches its other `ReactorCommand`s): the focused display is the menu bar's (`sys::screen::active_menu_bar_display_uuid()`, asked when the command runs), found in `space_state.screens`; no display when that screen's `space` is `None` (a fullscreen app). Nothing at all while macOS's Mission Control is active. Not `command_context_space()` or `active_display_space()`: both fall back to another display's Space when the focused one has none, which would open home on the wrong display; sends `WmEvent::Home { display: Option<…> }` over `communication_manager.wm_sender`. Raises an app's focused window on `Event::RaiseApp(pid)` from home. Compares each display's active workspace before and after every event and sends `WmEvent::CloseHome` when one changed (the snapshot is taken at the top of `handle_event_inner`, before the grid's early returns such as `MoveGridToDisplay`, and compared on those returns too; a nested `handle_event_inner` may send it twice, which is harmless): this covers keys, swipes, clicks, grid switches from the Overview and an app activated in another cell, with the cell motions on or off. A window opening or closing in the current cell does not send it |
-| `src/actor/reactor.rs` | hooks: the `home` arm and `Event::RaiseApp`; in `handle_event_inner`, the snapshot at the top and the comparison on each return, before `grid_motion_after` so home is told before a slide's capture starts; `WmEvent::CloseHome` when macOS's own Mission Control becomes active (`MissionControlState`) |
-| `src/actor/wm_controller.rs` | hook: `WmEvent::Home` sends `Toggle` to home, or, with the Overview open, has the Overview close and open home after (below); `WmEvent::CloseHome` sends `Close`; `ConfigUpdated` sends `Configure` to home, next to the Overview's |
-| `src/actor/mission_control.rs` | hooks: `MissionControlActor::open` closes home; `Event::DismissThenHome(display)` closes the Overview as `Dismiss` does and, in `close()` after `SetMissionControlActive(false)` (so the input tap no longer turns keys into Overview input), sends home its `Toggle`; with no Overview session (already closed), it sends the `Toggle` at once. The wm controller, the Overview and home share the main executor, so a `Dismiss` followed by a `Toggle` would not keep this order |
-| `src/actor/config.rs` | hook: an event that edits the current source in place, for "Hide from Home" |
-| `src/sys/window_server.rs` | hook: home's window number (`AtomicU32`), which the pointer queries stop at |
-| `src/actor/reactor/grid_motion.rs` (fork) | `begin_pan` puts home's window number (read from the atomic) in the capture's `leave_out`; if the cached shareable content does not know it, it is fetched again first (`fetch_now`), since the capture drops windows it does not know from the list silently and `expire()` only refetches next time. Home is made at startup and the list holds off-screen windows, so this happens at most once |
-| `src/bin/rift.rs` | hook: make home's channel before `WmController::new` (as the Overview's is); give home's sender to the wm controller and the Overview actor (both constructors take one more sender), and give home the reactor's sender and the config actor's; read the apps on a background thread |
-| `src/actor/reactor/grid_gestures.rs` (fork) | the swipe: `grid_swipe` works out the swipe's action first (it needs no Space); for `Home` it returns while macOS's Mission Control is active (`is_mission_control_active()`, the check `gesture_space_active` makes for the others) and otherwise runs the `home` command, before `command_context_space()`, so the display comes from the menu bar's display as above and a fullscreen display does nothing. The grid being on needs no check there: the gesture actor makes no grid swipes without it |
+| `src/bin/rift-cli.rs` | `rift-grid-cli home` (its subcommands are written by hand) |
+| `src/actor/reactor/grid_home.rs` (fork) | `home_command`: the focused display is the menu bar's (`sys::screen::active_menu_bar_display_uuid()`, asked when the command runs; the only display when that has no answer), found in `space_state.screens`; no display when that screen's `space` is `None` (a fullscreen app); nothing while macOS's Mission Control is active. Not `command_context_space()` or `active_display_space()`: both fall back to another display's Space. It sends `WmEvent::Home { display }`. `home_before`/`home_after`: while home is open, each display's current cell before and after an event; when one changed, home closes. This covers keys, swipes, clicks, grid switches (from the Overview too, and `MoveGridToDisplay`) and an app activated in another cell, with the cell motions on or off; a window opening or closing in the current cell does not close it. With home closed it costs one atomic load per event |
+| `src/actor/reactor.rs` | hooks: `handle_event_inner` is `home_before`, the old body (`handle_event_body`), `home_after`, so every return is covered; the `home` arm; home closes when macOS's Mission Control becomes active (`set_mission_control_active`). The cell slide's capture starts before home has closed, so it leaves home out (below) |
+| `src/actor/wm_controller.rs` | hook: `WmEvent::Home` goes to the Overview as `DismissThenHome` (straight to home when the Overview is off); `ConfigUpdated` gives home its settings |
+| `src/actor/mission_control.rs` | hooks: `open` closes home; `DismissThenHome(display)` closes the Overview as `Dismiss` does and toggles home from `close()`, after `SetMissionControlActive(false)` (so the input tap no longer turns keys into Overview input); with no Overview open it toggles home at once. The wm controller, the Overview and home share the main executor, so a `Dismiss` followed by a `Toggle` would not keep this order |
+| `src/actor/config.rs` | hook: `Event::Edit`, a change to the current source in place, for "Hide from Home"; a refused save is logged |
+| `src/sys/window_server.rs` | hook: `is_ignored_own_window` keeps home's window, so the pointer queries stop at it |
+| `src/actor/reactor/grid_motion.rs` (fork) | `begin_pan` puts home's window number in the capture's `leave_out` while home is open; if the cached shareable content does not know it, it is fetched again first (`fetch_now`), since the capture drops windows it does not know silently |
+| `src/bin/rift.rs` | hook: make the home actor and run it on the main executor |
+| `src/common/config/grid_gestures.rs`, `src/actor/reactor/grid_gestures.rs` (fork) | `GestureAction::Home`, four fingers down by default; `grid_swipe` works out the swipe's action first and runs `home_command` for `Home`, before `command_context_space()`, so a fullscreen display does nothing |
 | `src/actor/gesture/grid.rs` (fork) | the Overview's way back, whatever that way is bound to |
-| `src/ui/settings/` | `Category::Home` in `CATEGORIES` (`mod.rs`), its place in `grid_sidebar::ORDER`, `grid_pages.rs`, search entries |
+| `src/ui/settings/` | `Category::Home` in `CATEGORIES` (`mod.rs`), its place in `grid_sidebar::ORDER`, the badge, the page (`grid_pages::home`), search entries; `editors.rs`'s app picker made `pub(super)` |
+| `examples/home_probe.rs`, `examples/home_render.rs` | the key-window check by hand; home drawn to PNGs without a window |
 
 `docs/upstream.md`'s hooks table gets the new hooks, and its proposals the
 `installed_apps` folder link fix.
@@ -418,24 +417,28 @@ works):
 - picking with arrow keys on rows of different lengths, starting on the
   frequent row;
 - columns for a width, and the panel's size and its three-slot floor;
-- the swipe table: with the Overview open, the way opposite `overview` steps
-  back even when it is bound to `home`;
-- a point over home's window resolves to home, not to the window under it;
-- `CloseHome` is sent on a cell change by a key and by an app activated in
-  another cell, with the cell motions on and off, before the slide starts;
-  not on a window opening in the current cell;
-- `home` on a display showing a fullscreen app sends no display, and closes
-  an open home;
-- the config: defaults, `deny_unknown_fields`, the seed;
-- a render of the panel's views to a PNG, both styles, through the layer tree
-  (`renderInContext`: `cacheDisplayInRect`, which the settings render uses,
-  draws neither the blur nor layers), the blur drawn flat. Like
-  `settings_native`, it is an `--ignored` test that needs a logged-in session;
-  it draws into an offscreen context and never shows a window.
+- the swipe table: four fingers down is `home`; with the Overview open, the
+  way opposite `overview` steps back even when it is bound to `home`;
+- what home compares to close changes on a move to another cell and not when
+  the cell stays; a display showing a fullscreen app gets no home;
+- `"Alt + Space" = "home"` parses as the command; the config's defaults and
+  `deny_unknown_fields`;
+- a point in the grid finds the slot under it, the frequent row's line
+  included.
 
-The key-window behaviour (becoming key without activating, the keyboard going
-back on close, composing Korean, a running app coming forward when opened) is
-checked by hand once, early, with a small panel before the rest is built.
+The pointer stopping at home's window needs the window server and is checked
+by hand. `examples/home_render.rs` draws home to PNGs without showing a window
+(`cacheDisplayInRect`, which draws the views but not the blur), to look at
+both styles and a search while working on them.
+
+The key-window behaviour was checked by hand with a small panel
+(`examples/home_probe.rs`) before the rest was built (2026-11-27): the panel
+becomes key without changing the front app (`frontmostApplication` stays the
+app that was in front; `NSApp isActive` reads true while the panel is key);
+typing reaches the field without a click; Korean composes in it and reports
+each step; `Esc` and `Return` come as commands; after it hides the keyboard
+is back in the app that was in front; a click elsewhere takes the key window
+away; opening an app from it brings that app forward, running or not.
 
 ## Later
 

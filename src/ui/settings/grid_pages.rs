@@ -2,8 +2,12 @@
 //! Focus, and the grid's sections on upstream's Overview, Mouse & Trackpad and
 //! Menu Bar pages.
 
-use cgs::controls::ColorWell;
+use cgs::collection::SettingsList;
+use cgs::controls::{Button, ColorWell, IconButton};
+use cgs::layout::uniform_insets;
 use cgs::settings::{Section, SettingsPage};
+use cgs::view::{NativeControl, WeakView};
+use cgs::window::Popover;
 
 use super::*;
 use crate::common::config::*;
@@ -110,7 +114,12 @@ fn gesture_popup(
         get,
         move |s, action| {
             let gestures = &mut s.settings.grid.gestures;
-            if four { &mut gestures.four } else { &mut gestures.three }.set(way, action)
+            if four {
+                &mut gestures.four
+            } else {
+                &mut gestures.three
+            }
+            .set(way, action)
         },
         Rc::downgrade(message),
     );
@@ -125,7 +134,9 @@ fn gesture_popup(
     );
     popup.width(GESTURE_COLUMN);
     popup.set_item_badge(get(defaults()).config_choice_index(), Some("Default"));
-    f.sync_when(&popup, get, move |popup, s| popup.set_selected(get(s).config_choice_index()));
+    f.sync_when(&popup, get, move |popup, s| {
+        popup.set_selected(get(s).config_choice_index())
+    });
     popup
 }
 
@@ -216,4 +227,132 @@ pub(super) fn borders(ui: Ui, model: &Rc<Model>) -> Page {
         .row(bare)
         .row(unfocused);
     f.finish(SettingsPage::new(&ui, "").section(section).section(colors))
+}
+
+/// The Home page, as subline's: how home covers the screen, its frequent row,
+/// and the apps it leaves out.
+pub(super) fn home(ui: Ui, model: &Rc<Model>) -> Page {
+    let mut f = FormBuilder::new(ui, model);
+    f.tooltips = true;
+    let look = f.schema_rows(
+        Section::new(&ui, "Home").description(
+            "Home is a grid of the installed apps with a search box, opened with the home \
+             command (Alt + Space) or a swipe. The panel's size is for the Panel style.",
+        ),
+        "",
+        |s| &s.settings.grid.home,
+        |s| &mut s.settings.grid.home,
+    );
+    let hidden = hidden_apps(&mut f, ui, model);
+    f.finish(SettingsPage::new(&ui, "").section(look).section(hidden))
+}
+
+/// `[settings.grid.home] hidden`: the apps home leaves out, a button to add one
+/// from the installed apps and one to show the picked one again.
+fn hidden_apps(f: &mut FormBuilder, ui: Ui, model: &Rc<Model>) -> Section {
+    type Row = (String, String);
+    let picked: Rc<RefCell<Option<String>>> = Rc::default();
+    let message = Rc::new(ValidationMessage::new(&ui));
+    let weak = Rc::downgrade(model);
+    let error = Rc::downgrade(&message);
+    let remove = {
+        let picked = picked.clone();
+        let weak = weak.clone();
+        let error = error.clone();
+        Rc::new(
+            IconButton::new(&ui, "minus", "Show in Home Again").on_click(move || {
+                let Some(id) = picked.borrow_mut().take() else { return };
+                Model::submit(
+                    &weak,
+                    Box::new(move |s| {
+                        s.settings
+                            .grid
+                            .home
+                            .hidden
+                            .retain(|hidden| !hidden.eq_ignore_ascii_case(&id));
+                        Ok(())
+                    }),
+                    error.clone(),
+                );
+            }),
+        )
+    };
+    remove.set_enabled(false);
+    let on_pick = {
+        let picked = picked.clone();
+        let remove = Rc::downgrade(&remove);
+        move |row: Option<Row>| {
+            if let Some(remove) = remove.upgrade() {
+                remove.set_enabled(row.is_some());
+            }
+            *picked.borrow_mut() = row.map(|(_, id)| id);
+        }
+    };
+    let list = Rc::new(
+        SettingsList::new(&ui, |row: &Row| row.0.clone(), |row: &Row| row.1.clone())
+            .empty_message("No apps are hidden")
+            .fit_content(220.0)
+            .symbol("app")
+            .images(super::editors::application_icons(|row: &Row| {
+                Some(row.1.clone())
+            }))
+            .on_select_item(on_pick),
+    );
+    let env = Rc::downgrade(&model.env);
+    f.sync_when(
+        &list,
+        |s| s.settings.grid.home.hidden.clone(),
+        move |list, s| {
+            let Some(env) = env.upgrade() else { return };
+            let inventory = env.inventory.borrow();
+            let rows = s
+                .settings
+                .grid
+                .home
+                .hidden
+                .iter()
+                .map(|id| (inventory.display_name(&(Some(id.clone()), None)), id.clone()))
+                .collect();
+            list.set_rows(rows);
+        },
+    );
+    let dismissal = Rc::new(RefCell::new(std::rc::Weak::<Popover>::new()));
+    let dismiss = dismissal.clone();
+    let content = super::editors::application_picker(ui, model, 240.0, move |target| {
+        let Some(id) = target.and_then(|target| target.0) else {
+            return;
+        };
+        Model::submit(
+            &weak,
+            Box::new(move |s| {
+                let home = &mut s.settings.grid.home;
+                if !home.hides(&id) {
+                    home.hidden.push(id);
+                }
+                Ok(())
+            }),
+            error.clone(),
+        );
+        if let Some(popover) = dismiss.borrow().upgrade() {
+            popover.close();
+        }
+    })
+    .insets(uniform_insets(12.0));
+    content.width(360.0);
+    let popover = Rc::new(Popover::new(&ui, content));
+    *dismissal.borrow_mut() = Rc::downgrade(&popover);
+    let add = Button::new(&ui, "Hide an App…").symbol("plus");
+    let anchor = WeakView::new(&add);
+    let add = add.on_click(move || {
+        if let Some(view) = anchor.load() {
+            popover.show(&view);
+        }
+    });
+    if model.env.installed_applications.borrow().is_none() {
+        model.env.send(Action::RefreshRuntime, Box::new(|_| {}));
+    }
+    let buttons = HStack::new(&ui).push(add).push(remove).spacer(&ui);
+    Section::new(&ui, "Hidden apps")
+        .description("Apps left out of home's grid, its search and its frequent row.")
+        .content(VStack::new(&ui).spacing(8.0).push(list).push(buttons).push(message))
 }

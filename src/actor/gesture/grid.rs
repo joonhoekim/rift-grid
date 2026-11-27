@@ -17,13 +17,15 @@ pub struct GridSwipe {
 }
 
 impl GridSwipe {
-    /// What the swipe does going `way`: its action, or with the Overview open,
-    /// stepping back where the opposite way opens it.
+    /// What the swipe does going `way`: its action; but with the Overview
+    /// open, the way opposite the one that opens it steps back, whatever it is
+    /// bound to (four fingers down is `home`, up `overview`).
     pub fn action(self, way: Direction) -> Option<GridAction> {
+        if self.open && self.actions.get(way.opposite()) == GestureAction::Overview {
+            return Some(GridAction::OverviewBack);
+        }
         match self.actions.get(way) {
-            GestureAction::None => (self.open
-                && self.actions.get(way.opposite()) == GestureAction::Overview)
-                .then_some(GridAction::OverviewBack),
+            GestureAction::None => None,
             action => Some(GridAction::Do(action)),
         }
     }
@@ -281,7 +283,7 @@ mod tests {
             left: GestureAction::NextGrid,
             right: GestureAction::PreviousGrid,
             up: GestureAction::Overview,
-            down: GestureAction::None,
+            down: GestureAction::Home,
         },
         open: false,
     };
@@ -305,26 +307,25 @@ mod tests {
     }
 
     #[test]
-    fn four_fingers_go_left_right_and_up_and_leave_down_to_macos() {
-        for (x, y, way) in [(-0.12, 0.0, Direction::Left), (0.0, 0.12, Direction::Up)] {
+    fn four_fingers_go_every_way_and_a_way_with_nothing_is_left_to_macos() {
+        for (x, y, way) in [
+            (-0.12, 0.0, Direction::Left),
+            (0.0, 0.12, Direction::Up),
+            (0.0, -0.12, Direction::Down),
+        ] {
             let (input, _, mut rx) = device(&config(3));
             swipe(&input, &[(4, 0.0, 0.0), (4, x / 2.0, y / 2.0), (4, x, y)]);
             assert_eq!(grid_event(&mut rx), Some((GRIDS, way)));
         }
 
-        let mut without_overview = config(3);
-        without_overview.settings.grid.gestures.four.up = GestureAction::None;
-        assert!(
-            !Settings::new(&without_overview)
-                .grid
-                .four
-                .unwrap()
-                .grid
-                .unwrap()
-                .allows(Direction::Up)
-        );
-        for (config, y) in [(config(3), -0.12), (without_overview, 0.12)] {
-            let (input, control, mut rx) = device(&config);
+        let mut without = config(3);
+        without.settings.grid.gestures.four.up = GestureAction::None;
+        without.settings.grid.gestures.four.down = GestureAction::None;
+        let four = Settings::new(&without).grid.four.unwrap().grid.unwrap();
+        assert!(!four.allows(Direction::Up));
+        assert!(!four.allows(Direction::Down));
+        for y in [-0.12, 0.12] {
+            let (input, control, mut rx) = device(&without);
             swipe(&input, &[(4, 0.0, 0.0), (4, 0.0, y / 2.0), (4, 0.0, y)]);
             assert_eq!(grid_event(&mut rx), None);
             assert_eq!(control.ownership_guard().owner, Owner::System);
@@ -334,8 +335,23 @@ mod tests {
     #[test]
     fn with_the_overview_open_only_the_grid_swipes_stay_and_down_is_ours() {
         let open = GridSwipe { open: true, ..GRIDS };
-        assert_eq!(open.action(Direction::Down), Some(GridAction::OverviewBack));
-        assert_eq!(GRIDS.action(Direction::Down), None, "closed, down is macOS's");
+        assert_eq!(
+            open.action(Direction::Down),
+            Some(GridAction::OverviewBack),
+            "open, down steps back though it is bound to home"
+        );
+        assert_eq!(
+            GRIDS.action(Direction::Down),
+            Some(GridAction::Do(GestureAction::Home))
+        );
+        let unbound = GridSwipe {
+            actions: SwipeActions {
+                down: GestureAction::None,
+                ..GRIDS.actions
+            },
+            open: true,
+        };
+        assert_eq!(unbound.action(Direction::Down), Some(GridAction::OverviewBack));
         for (fingers, y, expected) in [
             (4, -0.12, Some((open, Direction::Down))),
             (4, 0.12, Some((open, Direction::Up))),
