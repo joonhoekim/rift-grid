@@ -379,7 +379,7 @@ mod tests {
     fn grid_commands_cross_cell_edges() {
         let mut settings = VirtualWorkspaceSettings::default();
         settings.default_workspace_count = 9;
-        settings.grid_columns = 3;
+        settings.grid_shape = Some((3, 3));
         settings.default_workspace = 4;
         let mut layout_settings = LayoutSettings::default();
         layout_settings.mode = LayoutMode::Bsp;
@@ -485,7 +485,7 @@ mod tests {
     fn focus_enters_the_next_cell_level_with_the_tile_left() {
         let mut settings = VirtualWorkspaceSettings::default();
         settings.default_workspace_count = 9;
-        settings.grid_columns = 3;
+        settings.grid_shape = Some((3, 3));
         settings.default_workspace = 4;
         let mut layout_settings = LayoutSettings::default();
         layout_settings.mode = LayoutMode::Bsp;
@@ -553,7 +553,7 @@ mod tests {
     #[test]
     fn grids_hold_cells_and_remember_where_they_were() {
         let mut settings = VirtualWorkspaceSettings::default();
-        settings.grid_columns = 3;
+        settings.grid_shape = Some((3, 3));
         settings.default_workspace = 4;
         settings.workspace_names = Vec::new();
         let mut layout_settings = LayoutSettings::default();

@@ -219,6 +219,10 @@ fingers = 3
 haptics_enabled = true
 haptic_pattern = "level_change"
 
+[settings.grid]
+rows = 3
+columns = 3
+
 [virtual_workspaces]
 enabled = true
 # Nine, as AeroSpace had. Indices are 0-based, so Alt+1 targets index 0 —
@@ -226,7 +230,6 @@ enabled = true
 # digit you press and the label you see match; only the internal index is off
 # by one.
 default_workspace_count = 9
-grid_columns = 3
 default_workspace = 4
 workspace_names = ["↖", "↑", "↗", "←", "·", "→", "↙", "↓", "↘"]
 auto_assign_windows = true

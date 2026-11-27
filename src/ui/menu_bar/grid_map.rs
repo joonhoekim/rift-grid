@@ -1,5 +1,5 @@
-//! The workspace grid in the menu bar: a small 3x3 map per grid instead of a
-//! label per workspace.
+//! The workspace grid in the menu bar: a small map per grid instead of a label
+//! per workspace.
 
 use std::borrow::Cow;
 
@@ -26,6 +26,10 @@ use crate::common::config::{GridMaps, MenuBarSettings};
 const GRID_MAP_CELL_WIDTH: f64 = 5.0;
 const GRID_MAP_CELL_HEIGHT: f64 = 4.0;
 const GRID_MAP_GAP: f64 = 1.5;
+/// The tallest a map is: three rows' height; more rows get smaller cells, down
+/// to `GRID_MAP_SMALLEST` of their size, which nine rows still fit the bar at.
+const GRID_MAP_MAX_HEIGHT: f64 = 3.0 * GRID_MAP_CELL_HEIGHT + 2.0 * GRID_MAP_GAP;
+const GRID_MAP_SMALLEST: f64 = 0.45;
 const GRID_MAP_EMPTY_ALPHA: f64 = 0.25;
 const GRID_MAP_OCCUPIED_ALPHA: f64 = 0.55;
 const GRID_MAP_ACTIVE_ALPHA: f64 = 1.0;
@@ -122,12 +126,17 @@ pub(super) fn build_grid_layout(
             (rows.max(r + 1), columns.max(c + 1))
         })
     };
-    let extent = |count: usize, cell: f64| {
-        count as f64 * cell + count.saturating_sub(1) as f64 * GRID_MAP_GAP
-    };
+    // Grids of more than three rows shrink to fit the bar, keeping their cells'
+    // shape.
+    let tallest = groups.iter().map(|group| shape(group).0).max().unwrap_or(0) as f64;
+    let natural = tallest * GRID_MAP_CELL_HEIGHT + (tallest - 1.0).max(0.0) * GRID_MAP_GAP;
+    let fit = (GRID_MAP_MAX_HEIGHT / natural).clamp(GRID_MAP_SMALLEST, 1.0);
+    let (cell_width, cell_height, gap) =
+        (GRID_MAP_CELL_WIDTH * fit, GRID_MAP_CELL_HEIGHT * fit, GRID_MAP_GAP * fit);
+    let extent = |count: usize, cell: f64| cell.mul_add(count as f64, count.saturating_sub(1) as f64 * gap);
     let height = groups
         .iter()
-        .map(|group| extent(shape(group).0, GRID_MAP_CELL_HEIGHT))
+        .map(|group| extent(shape(group).0, cell_height))
         .fold(0.0, f64::max);
     let displays =
         groups.windows(2).filter(|w| (w[0][0].display_uuid, w[0][0].space) != (w[1][0].display_uuid, w[1][0].space)).count();
@@ -154,22 +163,21 @@ pub(super) fn build_grid_layout(
             width += line_width + GRID_LABEL_SPACING;
         }
         let (rows, columns) = shape(group);
-        let top = (height + extent(rows, GRID_MAP_CELL_HEIGHT)) / 2.0;
+        let top = (height + extent(rows, cell_height)) / 2.0;
         for input in group {
             let Some((row, column)) = input.grid_cell else { continue };
             grid_cells.push((
                 CGRect::new(
                     CGPoint::new(
-                        width + column as f64 * (GRID_MAP_CELL_WIDTH + GRID_MAP_GAP),
-                        top - GRID_MAP_CELL_HEIGHT
-                            - row as f64 * (GRID_MAP_CELL_HEIGHT + GRID_MAP_GAP),
+                        width + column as f64 * (cell_width + gap),
+                        top - cell_height - row as f64 * (cell_height + gap),
                     ),
-                    CGSize::new(GRID_MAP_CELL_WIDTH, GRID_MAP_CELL_HEIGHT),
+                    CGSize::new(cell_width, cell_height),
                 ),
                 grid_map_alpha(input.workspace) * strength,
             ));
         }
-        width += extent(columns, GRID_MAP_CELL_WIDTH);
+        width += extent(columns, cell_width);
     }
     MenuIconLayout {
         size: CGSize::new(width, height),
@@ -190,7 +198,7 @@ pub(super) fn draw(cg: &CGContext, layout: &MenuIconLayout, y_offset: f64, foreg
             cell.origin.y + y_offset,
             cell.size.width,
             cell.size.height,
-            1.0,
+            cell.size.height / GRID_MAP_CELL_HEIGHT,
         );
         CGContext::set_rgb_fill_color(Some(cg), 1.0, 1.0, 1.0, alpha);
         CGContext::fill_path(Some(cg));

@@ -16,11 +16,10 @@ pub(super) fn grid(ui: Ui, model: &Rc<Model>) -> Page {
         Section::new(&ui, "Grid").description(
             "Nine grids of cells, one per number key. Each cell is a workspace.",
         ),
-        "grid",
-        |s| &s.virtual_workspaces,
-        |s| &mut s.virtual_workspaces,
+        "",
+        |s| &s.settings.grid,
+        |s| &mut s.settings.grid,
     );
-    let grid = f.schema_rows(grid, "", |s| &s.settings.grid, |s| &mut s.settings.grid);
     let overview = f.schema_rows(
         Section::new(&ui, "Overview").description(
             "The grid in the Overview, which is turned on in the Overview page.",

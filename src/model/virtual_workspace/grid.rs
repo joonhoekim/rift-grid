@@ -11,13 +11,12 @@ use crate::common::grid_nav;
 /// its number: "2·5", or "2·Mail" with a name for cell 5.
 pub(super) fn effective_settings(config: &VirtualWorkspaceSettings) -> VirtualWorkspaceSettings {
     let mut settings = config.clone();
-    let columns = config.grid_columns;
-    if columns == 0 {
+    let Some((rows, columns)) = config.grid_shape else {
         return settings;
-    }
+    };
     // Grids are a display's own; `grid_displays.rs` gives each grid one display.
     settings.mode = WorkspaceMode::PerDisplay;
-    let cells = columns * columns;
+    let cells = rows * columns;
     settings.default_workspace_count = GRID_COUNT * cells;
     settings.workspace_names = (0..settings.default_workspace_count)
         .map(|index| {
@@ -33,6 +32,13 @@ pub(super) fn effective_settings(config: &VirtualWorkspaceSettings) -> VirtualWo
         .collect();
     settings.default_workspace = config.default_workspace.min(settings.default_workspace_count - 1);
     settings
+}
+
+/// The most workspaces a display holds: upstream's limit, or every cell of
+/// every grid when that is more.
+pub(super) fn workspace_cap(settings: &VirtualWorkspaceSettings) -> usize {
+    let cells = settings.grid_shape.map_or(0, |(rows, columns)| GRID_COUNT * rows * columns);
+    crate::common::config::MAX_WORKSPACES.max(cells)
 }
 
 pub(crate) fn grid_dir(dir: Direction) -> grid_nav::Dir {
@@ -60,23 +66,57 @@ pub(crate) fn grid_neighbor_index(
 }
 
 impl WorkspaceStore {
-    pub fn grid_enabled(&self) -> bool { self.settings.grid_columns > 0 }
+    pub fn grid_enabled(&self) -> bool { self.settings.grid_shape.is_some() }
 
-    fn cells_per_grid(&self) -> usize { self.settings.grid_columns * self.settings.grid_columns }
+    /// The grids' rows and columns; (0, 0) without a grid.
+    pub(crate) fn grid_shape(&self) -> (usize, usize) { self.settings.grid_shape.unwrap_or_default() }
+
+    /// The grid's shape can change only when rift-grid starts: the workspaces
+    /// a display has, and what each one's place means, follow from it.
+    pub(super) fn check_grid_shape(
+        &self,
+        config: &VirtualWorkspaceSettings,
+        restoring: bool,
+    ) -> Result<(), String> {
+        let started = !self.initialized_spaces().is_empty();
+        if restoring {
+            let Some((rows, columns)) = config.grid_shape else { return Ok(()) };
+            let cells = GRID_COUNT * rows * columns;
+            if let Some(space) =
+                self.initialized_spaces().into_iter().find(|&s| self.workspace_ids(s).len() != cells)
+            {
+                return Err(format!(
+                    "the saved layout has {} workspaces on space {}, not the {cells} of nine \
+                     {rows}x{columns} grids: the grid's shape changed since it was saved",
+                    self.workspace_ids(space).len(),
+                    space.get()
+                ));
+            }
+        } else if started && config.grid_shape != self.settings.grid_shape {
+            return Err("[settings.grid] rows and columns take effect when rift-grid starts again"
+                .into());
+        }
+        Ok(())
+    }
+
+    fn cells_per_grid(&self) -> usize {
+        let (rows, columns) = self.grid_shape();
+        rows * columns
+    }
 
     /// The grid (0-based) the workspace at `index` is a cell of.
     pub fn grid_of(&self, index: usize) -> Option<usize> {
-        self.grid_enabled().then(|| index / self.cells_per_grid())
+        self.grid_enabled()
+            .then(|| index / self.cells_per_grid())
+            .filter(|&grid| grid < GRID_COUNT)
     }
 
     /// Row and column of the workspace at `index` within its grid.
     pub fn grid_cell(&self, index: usize) -> Option<(usize, usize)> {
-        self.grid_enabled().then(|| {
+        self.grid_of(index).map(|_| {
             let cell = index % self.cells_per_grid();
-            (
-                cell / self.settings.grid_columns,
-                cell % self.settings.grid_columns,
-            )
+            let columns = self.grid_shape().1;
+            (cell / columns, cell % columns)
         })
     }
 
@@ -225,7 +265,7 @@ impl WorkspaceStore {
         let cells = self.cells_per_grid();
         let start = self.grid_of(index)? * cells;
         let count = cells.min(self.workspace_ids(space).len().saturating_sub(start));
-        grid_neighbor_index(index - start, count, self.settings.grid_columns, dir)
+        grid_neighbor_index(index - start, count, self.grid_shape().1, dir)
             .map(|cell| self.workspace_ids(space)[start + cell])
     }
 }
@@ -256,10 +296,69 @@ mod tests {
     }
 
     #[test]
+    fn a_grid_of_three_rows_and_five_columns() {
+        use crate::common::config::LayoutSettings;
+        let settings = VirtualWorkspaceSettings {
+            grid_shape: Some((3, 5)),
+            ..Default::default()
+        };
+        let mut store = WorkspaceStore::new_with_config(&settings, &LayoutSettings::default());
+        let space = SpaceId::new(7);
+        store.ensure_space_initialized(space);
+        let ids = store.workspace_ids(space).to_vec();
+        assert_eq!(ids.len(), 9 * 15, "nine grids of fifteen cells");
+        assert_eq!((store.grid_of(14), store.grid_of(15)), (Some(0), Some(1)));
+        assert_eq!(store.grid_cell(7), Some((1, 2)), "row by row, five a row");
+        assert_eq!(store.grid_cell(15 + 9), Some((1, 4)));
+        // 0  1  2  3  4
+        // 5  6  7  8  9
+        // 10 11 12 13 14
+        assert_eq!(store.grid_center_cell(space, 0), Some(ids[7]));
+        assert_eq!(store.grid_center_cell(space, 1), Some(ids[22]));
+        let next = |index: usize, dir| {
+            store.grid_neighbor(space, ids[index], dir).map(|id| ids.iter().position(|&i| i == id).unwrap())
+        };
+        assert_eq!(next(7, Direction::Right), Some(8));
+        assert_eq!(next(7, Direction::Down), Some(12));
+        assert_eq!(next(9, Direction::Right), None, "the row's end");
+        assert_eq!(next(14, Direction::Right), None, "not into grid 2");
+        assert_eq!(next(15, Direction::Up), None);
+        assert_eq!(store.list_workspaces(space)[22].1, "2·8");
+
+        // The largest grids: nine of 9x9 on a display.
+        let settings = VirtualWorkspaceSettings {
+            grid_shape: Some((9, 9)),
+            ..Default::default()
+        };
+        let mut store = WorkspaceStore::new_with_config(&settings, &LayoutSettings::default());
+        store.ensure_space_initialized(space);
+        assert_eq!(store.workspace_ids(space).len(), 729);
+        assert_eq!(store.grid_center_cell(space, 8), Some(store.workspace_ids(space)[8 * 81 + 40]));
+    }
+
+    #[test]
+    fn the_grids_shape_changes_only_on_a_restart() {
+        use crate::common::config::LayoutSettings;
+        let three = VirtualWorkspaceSettings {
+            grid_shape: Some((3, 3)),
+            ..Default::default()
+        };
+        let mut store = WorkspaceStore::new_with_config(&three, &LayoutSettings::default());
+        let fresh = |shape| VirtualWorkspaceSettings { grid_shape: shape, ..Default::default() };
+        assert!(store.plan_settings_names(&fresh(Some((5, 5))), false).is_ok(), "nothing made yet");
+        store.ensure_space_initialized(SpaceId::new(3));
+        assert!(store.plan_settings_names(&three, false).is_ok(), "the same shape");
+        let Err(error) = store.plan_settings_names(&fresh(Some((1, 3))), false) else { panic!() };
+        assert!(error.contains("starts again"), "{error}");
+        let Err(error) = store.plan_settings_names(&fresh(Some((5, 3))), true) else { panic!() };
+        assert!(error.contains("shape changed"), "{error}");
+    }
+
+    #[test]
     fn an_app_rule_grid_is_that_grids_current_cell() {
         use crate::common::config::{LayoutSettings, WorkspaceSelector};
         let settings = VirtualWorkspaceSettings {
-            grid_columns: 3,
+            grid_shape: Some((3, 3)),
             ..Default::default()
         };
         let mut store = WorkspaceStore::new_with_config(&settings, &LayoutSettings::default());
@@ -294,7 +393,7 @@ mod tests {
         use crate::common::config::LayoutSettings;
         use crate::model::WindowStore;
         let settings = VirtualWorkspaceSettings {
-            grid_columns: 3,
+            grid_shape: Some((3, 3)),
             ..Default::default()
         };
         let mut store = WorkspaceStore::new_with_config(&settings, &LayoutSettings::default());
@@ -316,7 +415,7 @@ mod tests {
     fn a_remembered_cell_outside_its_grid_is_not_used() {
         use crate::common::config::LayoutSettings;
         let settings = VirtualWorkspaceSettings {
-            grid_columns: 3,
+            grid_shape: Some((3, 3)),
             ..Default::default()
         };
         let mut store = WorkspaceStore::new_with_config(&settings, &LayoutSettings::default());

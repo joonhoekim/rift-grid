@@ -36,6 +36,9 @@ use crate::sys::screen::SpaceId;
 /// Space shows.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct Saved {
+    /// The grid's rows and columns the places were counted in.
+    #[serde(default)]
+    shape: Option<(usize, usize)>,
     windows: Vec<Entry>,
     #[serde(default)]
     shown: Vec<Shown>,
@@ -106,6 +109,11 @@ fn window_id(pid: i32, window: u32) -> Option<WindowId> {
 }
 
 impl LayoutEngine {
+    /// The grids' rows and columns, none without a grid.
+    fn grid_shape(&self) -> Option<(usize, usize)> {
+        self.workspaces.grid_enabled().then(|| self.workspaces.grid_shape())
+    }
+
     /// Read where windows were when rift last ran.
     pub fn load_cells(&mut self) { self.load_cells_from(&cells_file()); }
 
@@ -117,6 +125,12 @@ impl LayoutEngine {
             tracing::warn!(?path, "Unreadable cells file; windows start in the current cell");
             return;
         };
+        // A place means another cell in a grid of another shape. A file from
+        // before the shape was kept is taken as it is.
+        if saved.shape.is_some() && saved.shape != self.grid_shape() {
+            tracing::warn!(?path, "The grid changed shape; windows start in the current cell");
+            return;
+        }
         self.workspaces.shown_before =
             saved.shown.iter().map(|s| (SpaceId::new(s.space), s.index)).collect();
         let cells = &mut self.cells;
@@ -148,6 +162,7 @@ impl LayoutEngine {
 
     /// What to save when it differs from the file, noting it saved.
     fn cells_changed(&mut self, window_store: &WindowStore) -> Option<Saved> {
+        let shape = self.grid_shape();
         let workspaces = &self.workspaces;
         let place = |workspace: VirtualWorkspaceId| {
             let space = workspaces.workspace_space(workspace)?;
@@ -229,6 +244,7 @@ impl LayoutEngine {
         );
         layouts.sort_unstable_by_key(|cell| (cell.space, cell.index));
         let saved = Saved {
+            shape,
             windows: entries,
             shown,
             layouts,
@@ -378,7 +394,7 @@ mod tests {
 
     fn engine(space: SpaceId) -> (LayoutEngine, WindowStore) {
         let settings = VirtualWorkspaceSettings {
-            grid_columns: 3,
+            grid_shape: Some((3, 3)),
             ..Default::default()
         };
         let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default());
@@ -436,7 +452,7 @@ mod tests {
 
         // The rift after: windows come with no assignment.
         let settings = VirtualWorkspaceSettings {
-            grid_columns: 3,
+            grid_shape: Some((3, 3)),
             ..Default::default()
         };
         let mut after = LayoutEngine::new(&settings, &LayoutSettings::default());
@@ -471,7 +487,7 @@ mod tests {
 
     fn bsp_engine(space: SpaceId) -> (LayoutEngine, WindowStore) {
         let settings = VirtualWorkspaceSettings {
-            grid_columns: 3,
+            grid_shape: Some((3, 3)),
             ..Default::default()
         };
         let layout = LayoutSettings {
@@ -588,6 +604,7 @@ mod tests {
             std::env::temp_dir().join(format!("rift-grid-cells-u-{}.json", std::process::id()));
         let a = WindowId::new(10, 1);
         let saved = Saved {
+            shape: Some((3, 3)),
             windows: vec![Entry {
                 pid: 10,
                 window: 1,
@@ -599,7 +616,7 @@ mod tests {
         };
         write_atomically(&path, &saved).unwrap();
         let settings = VirtualWorkspaceSettings {
-            grid_columns: 3,
+            grid_shape: Some((3, 3)),
             ..Default::default()
         };
         let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default());
@@ -612,11 +629,39 @@ mod tests {
     }
 
     #[test]
+    fn places_counted_in_a_grid_of_another_shape_are_not_used() {
+        let path =
+            std::env::temp_dir().join(format!("rift-grid-cells-s-{}.json", std::process::id()));
+        let saved = Saved {
+            shape: Some((3, 5)),
+            windows: vec![Entry {
+                pid: 10,
+                window: 1,
+                space: 9,
+                index: 12,
+            }],
+            shown: vec![Shown { space: 9, index: 12 }],
+            layouts: Vec::new(),
+        };
+        write_atomically(&path, &saved).unwrap();
+        let settings = VirtualWorkspaceSettings {
+            grid_shape: Some((3, 3)),
+            ..Default::default()
+        };
+        let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default());
+        engine.load_cells_from(&path);
+        assert!(engine.cells.remembered.is_empty());
+        assert!(engine.workspaces.shown_before.is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn windows_not_seen_yet_stay_in_the_file() {
         let space = SpaceId::new(7);
         let path =
             std::env::temp_dir().join(format!("rift-grid-cells-k-{}.json", std::process::id()));
         let saved = Saved {
+            shape: Some((3, 3)),
             windows: vec![Entry {
                 pid: 10,
                 window: 1,
@@ -628,7 +673,7 @@ mod tests {
         };
         write_atomically(&path, &saved).unwrap();
         let settings = VirtualWorkspaceSettings {
-            grid_columns: 3,
+            grid_shape: Some((3, 3)),
             ..Default::default()
         };
         let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default());

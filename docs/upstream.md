@@ -12,11 +12,13 @@ New code lives in fork modules; upstream files only call into them.
 | Upstream file | What the fork adds |
 | --- | --- |
 | `actor/reactor.rs` | Three `Event` variants (`BorderSettle`, `WindowsReordered`, `GridMotion`); in `handle_event_inner`, the border, grid motion and grid display handlers, `grid_motion_before`/`after`, `settle_display_grids` after a display change, and `update_borders`; `save_cells` last in `handle_event_inner` |
-| `actor/reactor/query.rs`, `model/server.rs` | The grid fields of `RuntimeWorkspaceData` (`grid_cell`, `grid`, `grid_elsewhere`, `layout_focus`) |
+| `actor/reactor/query.rs`, `model/server.rs` | The grid fields of `RuntimeWorkspaceData` (`grid_cell`, `grid`, `grid_elsewhere`, `layout_focus`); `GridsElsewhere` works `grid_elsewhere` out once a grid for the query |
 | `actor/reactor/events/command.rs` | The list of grid commands and their arm in the command-kind `match`, and switch tracking for commands that change cells only when they cross an edge |
 | `layout_engine/engine.rs` | Grid commands in `handle_command` and `handle_virtual_workspace_command`; `grid: GridState` (`engine/grid.rs`: the recent window list, and the grid's end a command ran into), made empty in `persistence/snapshot.rs` too; `return_to_remembered_cell` beside the persistence match in `assign_window_with_app_info`, `put_back_layouts` first on `SpaceExposed` and `cells.forget_app` on `AppTerminated` (`engine/cells.rs`); in `WindowAdded`, a window placed in a cell not shown reports a change, so it is moved off screen |
-| `model/virtual_workspace.rs` | `grid_current`; `shown_before`, which `ensure_space_initialized` shows first; the settings kept as `grid::effective_settings` (a workspace for every cell, named by grid and cell) in `new_with_config`, `plan_settings_names` and `apply_settings`; `remember_grid_cell` in `set_active_workspace`; `remap_grid_cells` in `remap_space`; app rules' `grid` through `rule_workspace` in `apply_app_rule_decision` |
-| `common/config/types.rs` | `grid_columns`, app rules' `grid`, `validate_grid`; `Settings.grid`, the fork's `[settings.grid]` (`common/config/grid.rs`, re-exported in `common/config/mod.rs`); `UiSettings.borders` |
+| `model/virtual_workspace.rs` | `grid_current`; `shown_before`, which `ensure_space_initialized` shows first; the settings kept as `grid::effective_settings` (a workspace for every cell, named by grid and cell) in `new_with_config`, `plan_settings_names` and `apply_settings`; `remember_grid_cell` in `set_active_workspace`; `remap_grid_cells` in `remap_space`; app rules' `grid` through `rule_workspace` in `apply_app_rule_decision`; `grid::workspace_cap` in place of `MAX_WORKSPACES` in `plan_settings_names`' scope check and `ensure_space_initialized`'s count, since nine grids of up to 9x9 cells pass upstream's 128; in `plan_settings_names`, `validate()` runs on the settings as configured, before `effective_settings` (whose workspace count is the grids'), then `check_grid_shape`, which refuses a restored layout counted in another grid shape |
+| `actor/reactor/events/command.rs` | `keep_grid_shape` first in `apply_config`: a reload keeps the running rows and columns until a restart (`grid_displays.rs`) |
+| `common/config/types.rs` | `grid_shape` (from `[settings.grid] rows`, `columns`, skipped by serde), app rules' `grid`, `validate_grid`; `Settings.grid`, the fork's `[settings.grid]` (`common/config/grid.rs`, re-exported in `common/config/mod.rs`); `UiSettings.borders` |
+| `common/config/parse.rs` | `with_grid` where `Config` is built from the file and from a snapshot: the workspace store reads the grid's shape from `virtual_workspaces` |
 | `ui/mission_control.rs`, `actor/mission_control.rs` | Upstream's Overview is one spatial scene seen through a camera; the grid places each cell's region at its row and column (`place_grid_cells`, `sync_grid_layers`), and `default_camera` takes `grid_camera`: the current cell at `[settings.grid.overview] zoom`, then the whole grid. `step_back`/`step_in` move between the two; `ToggleWhole`, `Changed` and `Step` events, Esc stepping in before it closes; `follow_grid` on refresh; `grid_input` first in `OverviewSession::input` (label close buttons, drops on grid buttons, `grid_bar_input`, arrows and Tab as `GridFocus`); in `drop_target`, the grid cell's workspace; window shadows slid in `apply_camera`; `set_capture_limits` first in `OverviewSession::new`; in `update_focus_ring`, the ring goes around a selected empty cell (`grid_empty_selection`); no pixel cap in `update_sources_at` with `full_resolution`. The grid's settings reach the Overview through `set_grid_settings`, which the reactor calls with the rest of `[settings.grid]` |
 | `ui/menu_bar.rs`, `actor/menu_bar.rs` | Grid maps and the grid entries of the Workspace menu; the grid fields in the settings preview's `Workspace`; `set_grid_maps` before each `update_config` |
 | `actor/gesture.rs` | `ActionConfig::grid`; the grid's actions in `Settings` (first in `action_for`, and `consume` while they are on); `DeviceSession` keeps `settings` and `mode` in place of upstream's `alternate`, so a late finger can pick any action; a `Lifecycle::Grid` variant, and one call to `grid_swipe` for a grid action's swipe frames |
@@ -27,7 +29,7 @@ New code lives in fork modules; upstream files only call into them.
 | `sys/mach.rs`, `sys/service.rs`, `common/config/types.rs`, `crates/rift-client/src/lib.rs`, `Cargo.toml`, `assets/Info.plist`, `rift.default.toml` | The fork's names (`crates/rift-protocol/src/names.rs`): the Mach service and launchd label, the binary looked up on `PATH`, the log paths, the config and data directories, the default layout folder, the `[[bin]]` names, the bundle id; clap's `name` in both binaries |
 | `bin/rift.rs` | `load_cells` after the layout engine is made |
 | `Cargo.toml` | `objc2-screen-capture-kit`, which upstream dropped with its screenshot previews: the grid's slides capture windows with it |
-| `ui/settings/*` | The Grid and Window Borders categories (`Category`, `CATEGORIES`, `sidebar.rs`'s badge match, the page match in `pages.rs`, one block each in `search.rs`'s `MANUAL` and catalog), their pages in `grid_pages.rs`; `grid_columns` has `group = "grid"` so that it shows on the Grid page only; in `mod.rs`, `EndEditing` (`settings/editing.rs`), which ends a field's editing on a click elsewhere or when the window loses key, checked in `native_tests.rs` |
+| `ui/settings/*` | The Grid and Window Borders categories (`Category`, `CATEGORIES`, `sidebar.rs`'s badge match, the page match in `pages.rs`, one block each in `search.rs`'s `MANUAL` and catalog), their pages in `grid_pages.rs`; in `mod.rs`, `EndEditing` (`settings/editing.rs`), which ends a field's editing on a click elsewhere or when the window loses key, checked in `native_tests.rs` |
 
 ## cgs
 
@@ -100,7 +102,7 @@ its next normalization undoes.
 ## Upstream behavior that meets the grid
 
 - `next_workspace`/`prev_workspace`, and the trackpad swipes that use them, walk
-  all 81 workspaces in a line, so they cross from one row or grid into the next.
+  all of a display's workspaces in a line, so they cross from one row or grid into the next.
 - The grid's swipes take their finger counts from upstream's workspace and
   Scrolling layout swipes while the grid is on: `[settings.gestures]` still
   gives them their distance, vertical tolerance and haptics.
@@ -113,7 +115,7 @@ its next normalization undoes.
   workspace's grid and cell from its position. Not yet checked with grids on.
 - `VirtualWorkspaceSettings::validate` checks `default_workspace` and
   `workspace_names` against `default_workspace_count`, which grids ignore: they
-  have `9 × grid_columns²` workspaces and name cells per grid. The store keeps
+  have `9 × rows × columns` workspaces and name cells per grid. The store keeps
   the grid's own count and names (`grid::effective_settings`), so upstream's
   naming and repair code sees them as configured.
 - `activate_workspace` reports the space it shows in `workspace_space`, and the

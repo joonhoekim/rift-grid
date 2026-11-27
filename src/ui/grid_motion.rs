@@ -589,12 +589,12 @@ impl Pan {
 
     /// Slide (or fade) to the cell made of `wallpaper` and `tiles`, back to
     /// front, from wherever an earlier slide has got to. `shape` is the grid's
-    /// columns and the cell moved to, whose neighbours show the wallpaper when
+    /// rows and columns and the cell moved to, whose neighbours show the wallpaper when
     /// the screen draws back. Returns how long it takes, in seconds.
     pub fn run(
         &mut self,
         step: Step,
-        shape: (usize, (usize, usize)),
+        shape: ((usize, usize), (usize, usize)),
         wallpaper: Option<&CGImage>,
         tiles: &[Tile],
         carried: &[Carried],
@@ -703,10 +703,14 @@ impl Pan {
     }
 
     /// Put the wallpaper in the grid's cells that have nothing yet, `shape`
-    /// being its columns and the cell at `self.offset`.
-    fn fill_grid(&mut self, (columns, (row, column)): (usize, (usize, usize)), image: &CGImage) {
+    /// being its rows and columns and the cell at `self.offset`.
+    fn fill_grid(
+        &mut self,
+        ((rows, columns), (row, column)): ((usize, usize), (usize, usize)),
+        image: &CGImage,
+    ) {
         let (w, h) = (self.size.width, self.size.height);
-        for r in 0..columns {
+        for r in 0..rows {
             for c in 0..columns {
                 let at = CGPoint::new(
                     self.offset.x + (c as f64 - column as f64) * (w + GAP),

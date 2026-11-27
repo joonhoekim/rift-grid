@@ -10,11 +10,12 @@ use crate::layout_engine::LayoutCommand;
 fn grid_commands_and_columns_parse() {
     let cfg = Config::parse(
         r#"
-            [settings]
+            [settings.grid]
+            rows = 3
+            columns = 5
 
             [virtual_workspaces]
             default_workspace_count = 9
-            grid_columns = 3
 
             [keys]
             "Alt + J" = { focus = "left" }
@@ -23,7 +24,7 @@ fn grid_commands_and_columns_parse() {
         "#,
     )
     .unwrap();
-    assert_eq!(cfg.virtual_workspaces.grid_columns, 3);
+    assert_eq!(cfg.virtual_workspaces.grid_shape, Some((3, 5)), "the store reads the shape");
     let commands: Vec<_> = cfg.keys.iter().map(|(_, command)| command.clone()).collect();
     for expected in [
         LayoutCommand::Focus(crate::layout_engine::Direction::Left),
@@ -37,9 +38,12 @@ fn grid_commands_and_columns_parse() {
 
 #[test]
 fn grid_settings_are_in_the_settings_app() {
-    let columns = VirtualWorkspaceSettings::field("grid_columns").unwrap();
-    assert_eq!(columns.title, "Grid columns");
-    assert!(matches!(columns.kind, FieldKind::Number { integer: true }));
+    for (key, title) in [("rows", "Rows"), ("columns", "Columns")] {
+        let field = GridSettings::field(key).unwrap();
+        assert_eq!(field.title, title);
+        assert!(matches!(field.kind, FieldKind::Number { integer: true }), "{key}");
+    }
+    assert!(VirtualWorkspaceSettings::field("grid_shape").is_none(), "not a setting of its own");
     use crate::common::config::GridOverviewSettings;
     for (key, unit, scale) in [("gap", "%", 100.0), ("zoom", "%", 100.0)] {
         let field = GridOverviewSettings::field(key).unwrap();
@@ -66,12 +70,27 @@ fn grid_settings_are_in_the_settings_app() {
 }
 
 #[test]
-fn grid_columns_and_rule_grids_are_checked() {
+fn grid_shapes_and_rule_grids_are_checked() {
     let issues = |toml: &str| Config::parse(toml).unwrap().validate();
-    let base = "[settings]\n[keys]\n[virtual_workspaces]\ngrid_columns = 3\n";
+    let shape = |rows, columns| {
+        Config::parse(&format!("[settings.grid]\nrows = {rows}\ncolumns = {columns}\n[keys]\n"))
+            .unwrap()
+            .virtual_workspaces
+            .grid_shape
+    };
+    assert_eq!(shape(3, 3), Some((3, 3)));
+    assert_eq!(shape(1, 7), Some((1, 7)));
+    assert_eq!(shape(4, 3), Some((5, 3)), "even reads as the next odd");
+    assert_eq!(shape(12, 3), Some((9, 3)), "at most nine");
+    assert_eq!(shape(0, 0), None);
+    assert_eq!(shape(3, 0), None);
+    let grid = |text: &str| issues(&format!("[settings.grid]\n{text}\n[keys]\n"));
+    assert!(grid("rows = 3\ncolumns = 5").is_empty());
+    assert!(grid("rows = 4\ncolumns = 3").is_empty(), "an even number reads as the next odd");
+    assert!(grid("rows = 3").iter().any(|i| i.contains("both rows and columns")));
+    assert!(grid("rows = 11\ncolumns = 3").iter().any(|i| i.contains("at most 9")));
+    let base = "[settings.grid]\nrows = 3\ncolumns = 3\n[keys]\n";
     assert!(issues(base).is_empty(), "{:?}", issues(base));
-    let wide = issues(&base.replace("= 3", "= 4"));
-    assert!(wide.iter().any(|i| i.contains("grid_columns")), "{wide:?}");
     let rule = |grid| {
         issues(&format!(
             "{base}[[virtual_workspaces.app_rules]]\napp_id = \"com.example.a\"\ngrid = {grid}\n"

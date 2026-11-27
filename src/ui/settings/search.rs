@@ -361,7 +361,6 @@ fn catalog() -> &'static [Entry] {
         append::<DragDropSettings>(&mut out, "", Mouse, None, "Mouse & Trackpad › Drag & Drop");
         append::<MenuBarSettings>(&mut out, "", MenuBar, None, "Menu Bar");
         append::<MissionControlSettings>(&mut out, "", Overview, None, "Overview");
-        append::<VirtualWorkspaceSettings>(&mut out, "grid", Grid, None, "Grid");
         append::<GridSettings>(&mut out, "", Grid, None, "Grid");
         append::<GridOverviewSettings>(&mut out, "", Grid, None, "Grid › Overview");
         append::<GridMotionSettings>(&mut out, "", Grid, None, "Grid › Showing moves");

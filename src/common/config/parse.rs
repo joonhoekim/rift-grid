@@ -206,10 +206,10 @@ impl Config {
                     binding_mode_specs.push((mode, specs));
                 }
                 Ok(Config {
-                    settings: c.settings,
                     keys,
                     binding_mode_specs,
-                    virtual_workspaces: c.virtual_workspaces,
+                    virtual_workspaces: c.virtual_workspaces.with_grid(&c.settings.grid),
+                    settings: c.settings,
                 })
             }
             Err(error) => {
@@ -279,10 +279,10 @@ impl<'de> Deserialize<'de> for Config {
         };
 
         Ok(Config {
-            settings: config.settings,
             keys: config.keys,
             binding_mode_specs,
-            virtual_workspaces: config.virtual_workspaces,
+            virtual_workspaces: config.virtual_workspaces.with_grid(&config.settings.grid),
+            settings: config.settings,
         })
     }
 }

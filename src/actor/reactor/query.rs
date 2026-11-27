@@ -486,6 +486,7 @@ impl Reactor {
             .map(|space| self.visible_workspace_view(space, space_id_param))
             .unwrap_or_default();
 
+        let mut grid_elsewhere = super::grid_displays::GridsElsewhere::default();
         for (index, workspace_id) in &workspace_list {
             let workspace_name =
                 &self.layout_manager.layout_engine.workspaces()[*workspace_id].name;
@@ -595,7 +596,7 @@ impl Reactor {
                 windows,
                 grid_cell: self.layout_manager.layout_engine.workspaces().grid_cell(index),
                 grid: self.layout_manager.layout_engine.workspaces().grid_of(index),
-                grid_elsewhere: self.grid_elsewhere_at(space_id, index),
+                grid_elsewhere: grid_elsewhere.at(self, space_id, index),
                 layout_focus: space_id.and_then(|space| {
                     self.layout_manager
                         .layout_engine

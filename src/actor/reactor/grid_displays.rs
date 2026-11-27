@@ -14,7 +14,38 @@ use crate::common::config::GRID_COUNT;
 use crate::layout_engine::LayoutCommand;
 use crate::sys::screen::SpaceId;
 
+/// Whether each grid is on another display, for the overview's "+", worked
+/// out once a grid while a query goes through every cell of a display.
+#[derive(Default)]
+pub(super) struct GridsElsewhere(crate::common::collections::HashMap<(SpaceId, usize), bool>);
+
+impl GridsElsewhere {
+    /// Whether the grid of the workspace at `index` on `space` is on another
+    /// display.
+    pub(super) fn at(&mut self, reactor: &Reactor, space: Option<SpaceId>, index: usize) -> bool {
+        let grid = reactor.layout_manager.layout_engine.workspaces().grid_of(index);
+        let Some((space, grid)) = space.zip(grid) else { return false };
+        *self
+            .0
+            .entry((space, grid))
+            .or_insert_with(|| reactor.grid_elsewhere(space, grid).is_some())
+    }
+}
+
 impl Reactor {
+    /// Keep the grid's shape as it is until rift-grid starts again: the
+    /// workspaces a display has, and what each one's place means, follow from it.
+    pub(super) fn keep_grid_shape(&self, new_config: &mut crate::common::config::Config) {
+        let running = self.config.virtual_workspaces.grid_shape;
+        let started = !self.layout_manager.layout_engine.workspaces().initialized_spaces().is_empty();
+        if started && new_config.virtual_workspaces.grid_shape != running {
+            tracing::warn!(
+                "[settings.grid] rows and columns take effect when rift-grid starts again"
+            );
+            new_config.virtual_workspaces.grid_shape = running;
+        }
+    }
+
     /// The displays in use, the main one first, by their spaces and UUIDs.
     fn grid_displays(&self) -> Vec<(SpaceId, String)> {
         self.space_state
@@ -59,14 +90,6 @@ impl Reactor {
             .cloned()
     }
 
-    /// Whether the grid of the workspace at `index` on `space` is on another
-    /// display, for the overview's "+".
-    pub(super) fn grid_elsewhere_at(&self, space: Option<SpaceId>, index: usize) -> bool {
-        let grid = self.layout_manager.layout_engine.workspaces().grid_of(index);
-        space
-            .zip(grid)
-            .is_some_and(|(space, grid)| self.grid_elsewhere(space, grid).is_some())
-    }
 
     fn focus_grid_display(&mut self, display: String) {
         self.handle_event_inner(Event::Command(Command::Reactor(ReactorCommand::FocusDisplay(
@@ -248,7 +271,7 @@ mod tests {
     fn two_displays() -> (Reactor, SpaceId, SpaceId) {
         crate::sys::screen::TEST_ACTIVE_DISPLAY.with(|display| display.take());
         let settings = crate::common::config::VirtualWorkspaceSettings {
-            grid_columns: 3,
+            grid_shape: Some((3, 3)),
             ..Default::default()
         };
         let mut reactor = test_reactor_with_workspace_settings(&settings);

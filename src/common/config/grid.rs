@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ConfigEnum, ConfigSchema, GridGestureSettings, GridMotionSettings, MAX_WORKSPACES,
+    ConfigEnum, ConfigSchema, GridGestureSettings, GridMotionSettings,
     VirtualWorkspaceSettings,
 };
 
@@ -13,11 +13,23 @@ pub const GRID_COUNT: usize = 9;
 
 fn yes() -> bool { true }
 
-/// `[settings.grid]`. The grid's layout itself, `grid_columns`, is in
-/// `[virtual_workspaces]` with the other workspace settings.
+/// The most rows, and columns, a grid can have.
+pub const MAX_GRID_SIDE: usize = 9;
+
+/// `[settings.grid]`.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default, ConfigSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GridSettings {
+    #[serde(default)]
+    /// Rows of cells in every grid, odd numbers only: an even number reads as the
+    /// next odd one. 0, with columns 0, keeps upstream's line of workspaces.
+    #[setting(label = "Rows", aliases = "grid cells size 3x3 layout matrix height")]
+    pub rows: usize,
+    #[serde(default)]
+    /// Cells in a row of every grid, odd numbers only: an even number reads as
+    /// the next odd one.
+    #[setting(label = "Columns", aliases = "grid cells size 3x3 layout matrix width")]
+    pub columns: usize,
     #[serde(default)]
     #[setting(ignore)]
     pub overview: GridOverviewSettings,
@@ -110,19 +122,52 @@ impl Default for GridOverviewSettings {
     }
 }
 
+impl GridSettings {
+    /// The grids' rows and columns, each odd and at most `MAX_GRID_SIDE`; none
+    /// without a grid.
+    pub fn shape(&self) -> Option<(usize, usize)> {
+        let side = |n: usize| (n | 1).min(MAX_GRID_SIDE);
+        (self.rows > 0 && self.columns > 0).then(|| (side(self.rows), side(self.columns)))
+    }
+
+    pub(super) fn validate(&self, issues: &mut Vec<String>) {
+        if (self.rows == 0) != (self.columns == 0) {
+            issues.push("[settings.grid] needs both rows and columns, or neither".into());
+        }
+        for (name, n) in [("rows", self.rows), ("columns", self.columns)] {
+            if n > MAX_GRID_SIDE {
+                issues.push(format!("[settings.grid] {name} can be at most {MAX_GRID_SIDE}"));
+            }
+        }
+        self.gestures.validate(issues);
+    }
+}
+
 impl VirtualWorkspaceSettings {
+    /// These settings with the grid's shape from `[settings.grid]`, which the
+    /// workspace store reads here.
+    pub fn with_grid(mut self, grid: &GridSettings) -> Self {
+        // Said once for each shape written, not on every parse.
+        static WARNED: std::sync::Mutex<(usize, usize)> = std::sync::Mutex::new((0, 0));
+        let written = (grid.rows, grid.columns);
+        if let Ok(mut warned) = WARNED.lock()
+            && *warned != written
+        {
+            *warned = written;
+            for (name, n) in [("rows", grid.rows), ("columns", grid.columns)] {
+                if n % 2 == 0 && (1..MAX_GRID_SIDE).contains(&n) {
+                    tracing::warn!(
+                        "[settings.grid] {name} = {n} reads as {}: odd numbers only",
+                        n + 1
+                    );
+                }
+            }
+        }
+        self.grid_shape = grid.shape();
+        self
+    }
+
     pub(super) fn validate_grid(&self, issues: &mut Vec<String>) {
-        let columns = self.grid_columns;
-        if columns == 0 {
-            return;
-        }
-        if GRID_COUNT * columns * columns > MAX_WORKSPACES {
-            issues.push(format!(
-                "grid_columns ({columns}) makes {} workspaces a display, more than \
-                 {MAX_WORKSPACES}; it can be at most 3",
-                GRID_COUNT * columns * columns
-            ));
-        }
         for (index, rule) in self.app_rules.iter().enumerate() {
             if rule.grid.is_some_and(|grid| !(1..=GRID_COUNT).contains(&grid)) {
                 issues.push(format!("App rule {index}'s grid must be from 1 to {GRID_COUNT}"));

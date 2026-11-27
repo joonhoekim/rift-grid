@@ -2,7 +2,7 @@
 
 Workspaces come in two levels: a **grid** is a context (one
 project, one kind of work), and a **cell** of the grid is what a display shows.
-Most work fits in one 3x3 grid; more grids keep separate contexts apart.
+Most work fits in one grid; more grids keep separate contexts apart.
 
 ## Terms
 
@@ -12,7 +12,7 @@ settings and its menus; the fork's own code, commands and settings use these.
 
 | Term | Means | In upstream's terms |
 | --- | --- | --- |
-| **Grid** | 3x3 cells, numbered 1 to 9; one context (a project, a kind of work). The size is fixed: a fixed 3x3 is the mental model | nine workspaces in a row of a display's list |
+| **Grid** | `rows` x `columns` cells, numbered row by row; one context (a project, a kind of work). Every grid has the same size | a run of workspaces in a display's list |
 | **Cell** | What a display shows; one at a time | one virtual workspace |
 | **Current cell** | The cell on screen; each grid remembers its own, the center cell until then (`current_cell`, `grid_current_cell`) | the active workspace |
 | **Tile** | A window's place in a cell's layout | a node of the layout tree, a column |
@@ -21,15 +21,24 @@ settings and its menus; the fork's own code, commands and settings use these.
 
 The commands follow subline's actions: `focus` (tile beside, or the next cell
 past the edge), `move_tile`, `go_to_cell`, `focus_default_cell`, `grid`,
-`send_to_grid`, `overview_whole`. The settings are `[settings.grid]` and
-`[virtual_workspaces] grid_columns`; the settings app shows them on the Grid
-page.
+`send_to_grid`, `overview_whole`. The settings are `[settings.grid]`; the
+settings app shows them on the Grid page.
 
 ## Model
 
-Rift's virtual workspaces are a list per display. With `grid_columns = 3`, each
-display gets 9 grids x 9 cells = 81 workspaces; grid g (1-based) is workspaces
-`9(g-1) .. 9(g-1)+8`, read row by row from the top left.
+Rift's virtual workspaces are a list per display. `[settings.grid] rows` and
+`columns` turn it into grids, as subline's `[grid]`: odd numbers from 1 to 9,
+an even number read as the next odd one, so every grid has a center cell, its
+default cell. 0 for both (the default) keeps upstream's line. Each display gets
+9 grids of `rows x columns` cells, 81 workspaces at 3x3; grid g (1-based) is
+the `rows x columns` workspaces after the first g-1 grids', read row by row
+from the top left. `[virtual_workspaces] workspace_names` names the cells of
+every grid, row by row (upstream checks them against `default_workspace_count`,
+so that has to be at least as many).
+
+The shape takes effect when rift-grid starts: a reload with other rows or
+columns applies the rest and keeps the running shape, and windows' remembered
+cells from a grid of another shape are not used.
 
 A grid belongs to one display at a time, as a workspace does in Hyprland: the
 display that shows it, or else the one whose cells of it hold windows. Each
@@ -116,14 +125,14 @@ vertical tolerance and haptics are `[settings.gestures]`'s.
 
 `grid = N` (1-based) in an app rule sends the window to grid N's current cell on
 the display the window opens on, even when grid N is on another display.
-`workspace` keeps its meaning (a cell by its index in the 81, or by name), and
+`workspace` keeps its meaning (a cell by its index in the display's list, or by name), and
 `grid` wins when both are given.
 
 ## Menu bar
 
 `[settings.grid] grid_map`:
 
-- `"all"` (default): a 3x3 map per grid, side by side, each after its number,
+- `"all"` (default): a map per grid, side by side, each after its number,
   for the grids that have windows plus the grid on screen. The grid on screen, number and map, is drawn at full strength.
 - `"current"`: one map, the grid on screen, after its number when more than one
   grid has windows.

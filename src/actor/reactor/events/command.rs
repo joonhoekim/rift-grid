@@ -264,8 +264,9 @@ impl Reactor {
     pub(in crate::actor::reactor) fn apply_config(
         &mut self,
         changes: &mut Changes,
-        new_config: Config,
+        mut new_config: Config,
     ) -> anyhow::Result<()> {
+        self.keep_grid_shape(&mut new_config);
         let issues = new_config.validate();
         anyhow::ensure!(
             issues.is_empty(),

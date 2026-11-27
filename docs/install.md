@@ -90,7 +90,7 @@ cp rift.default.toml ~/.config/rift-grid/config.toml
 
 then, in that file:
 
-- under `[virtual_workspaces]`, add `grid_columns = 3`;
+- add `[settings.grid]` with `rows = 3` and `columns = 3`;
 - under `[settings.ui.mission_control]`, set `enabled = true` for the grid
   overview;
 - in `[keys]`, replace the bindings that use the same keys with the grid ones

@@ -810,12 +810,13 @@ impl WorkspaceStore {
         config: &VirtualWorkspaceSettings,
         restoring: bool,
     ) -> Result<WorkspaceSettingsPlan, String> {
-        let config = &grid::effective_settings(config);
         self.validate_persisted_topology()?;
         let issues = config.validate();
         if !issues.is_empty() {
             return Err(issues.join("; "));
         }
+        self.check_grid_shape(config, restoring)?;
+        let config = &grid::effective_settings(config);
         let mode_changed = !restoring && self.settings.mode != config.mode;
         let mut plan = WorkspaceSettingsPlan {
             names: Vec::new(),
@@ -828,10 +829,11 @@ impl WorkspaceStore {
         for space in self.initialized_spaces() {
             // Legacy catalogs may exceed the limit because earlier versions appended
             // workspaces for empty displays. Keep those catalogs valid on reload.
-            if scope_ids(space).count() > MAX_WORKSPACES
+            let cap = grid::workspace_cap(config);
+            if scope_ids(space).count() > cap
                 && (mode_changed || config.mode != WorkspaceMode::Global)
             {
-                return Err(format!("workspace scope exceeds {MAX_WORKSPACES} workspaces"));
+                return Err(format!("workspace scope exceeds {cap} workspaces"));
             }
         }
         // Configuration owns the initial names on restore. Reserve them before
@@ -1052,7 +1054,7 @@ impl WorkspaceStore {
             self.repair_activation(space);
             return;
         }
-        let count = self.settings.default_workspace_count.clamp(1, MAX_WORKSPACES);
+        let count = self.settings.default_workspace_count.clamp(1, grid::workspace_cap(&self.settings));
         let selected = self
             .shown_before
             .remove(&space)

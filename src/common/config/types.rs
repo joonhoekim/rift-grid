@@ -96,11 +96,10 @@ pub struct VirtualWorkspaceSettings {
     /// Workspace used for new windows without another assignment.
     #[setting(label = "Default workspace", custom, aliases = "startup desktop space")]
     pub default_workspace: usize,
-    #[serde(default)]
-    /// Lay workspaces out as a grid with this many columns, row by row from the
-    /// top left. 0 keeps them in a line.
-    #[setting(label = "Grid columns", group = "grid", aliases = "grid cells rows 3x3 layout matrix")]
-    pub grid_columns: usize,
+    /// The grid's rows and columns, from `[settings.grid]` (`grid.rs`).
+    #[serde(skip)]
+    #[setting(ignore)]
+    pub grid_shape: Option<(usize, usize)>,
     #[serde(default)]
     /// Recheck workspace rules when a window title changes.
     #[setting(
@@ -227,7 +226,7 @@ impl Default for VirtualWorkspaceSettings {
             prevent_wrapping: false,
             workspace_names: default_workspace_names(),
             default_workspace: 0,
-            grid_columns: 0,
+            grid_shape: None,
             reapply_app_rules_on_title_change: false,
             app_rules: Vec::new(),
             workspace_rules: Vec::new(),
@@ -1643,7 +1642,7 @@ impl Settings {
 
         issues.extend(self.layout.validate());
         issues.extend(self.ui.stack_line.validate());
-        self.grid.gestures.validate(&mut issues);
+        self.grid.validate(&mut issues);
 
         if !(0.10..=0.45).contains(&self.drag_drop.drop_zone_fraction) {
             issues.push(format!(

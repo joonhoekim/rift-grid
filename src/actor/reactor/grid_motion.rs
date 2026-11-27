@@ -70,9 +70,9 @@ unsafe impl Send for GridMotionManager {}
 struct Pending {
     generation: u64,
     step: Step,
-    /// The cell moved to, and how many columns (and rows) its grid has.
+    /// The cell moved to, and how many rows and columns its grid has.
     cell: (usize, usize),
-    columns: usize,
+    shape: (usize, usize),
     workspace: VirtualWorkspaceId,
     /// The usable part of the display, which the overlay covers.
     screen: CGRect,
@@ -482,7 +482,7 @@ impl Reactor {
             generation,
             step,
             cell,
-            columns: self.config.virtual_workspaces.grid_columns,
+            shape: self.config.virtual_workspaces.grid_shape.unwrap_or_default(),
             workspace: to,
             screen: visible,
             display,
@@ -568,7 +568,7 @@ impl Reactor {
         );
         let wallpaper = manager.shareable.wallpaper(pending.display, wallpaper_rect);
         let Some(pan) = manager.pan.as_mut() else { return };
-        let shape = (pending.columns, pending.cell);
+        let shape = (pending.shape, pending.cell);
         let duration =
             pan.run(pending.step, shape, wallpaper.map(|w| &**w), &tiles, &carried, motion);
         // The overlay fades out a moment after the slide, as windows shown again
