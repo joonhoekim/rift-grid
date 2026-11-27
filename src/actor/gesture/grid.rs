@@ -58,7 +58,7 @@ impl Actions {
     /// `tolerance` is upstream's, for the left-and-right grid swipe.
     pub(super) fn new(config: &Config, tolerance: f64) -> Self {
         let settings = &config.settings.grid.gestures;
-        let on = settings.enabled && config.virtual_workspaces.grid_shape.is_some();
+        let on = settings.enabled && config.virtual_workspaces.grid_layout.is_some();
         let action = |fingers: usize, swipe| {
             (on && fingers > 0).then_some(ActionConfig {
                 fingers,
@@ -188,7 +188,8 @@ mod tests {
 
     fn config(side: usize) -> Config {
         let mut config = Config::default();
-        config.virtual_workspaces.grid_shape = (side > 0).then_some((side, side));
+        config.virtual_workspaces.grid_layout =
+            (side > 0).then(|| crate::common::config::GridLayout::new(side, side));
         config.settings.gestures.distance_pct = 0.08;
         config.settings.gestures.haptics_enabled = false;
         config
@@ -356,7 +357,7 @@ mod tests {
         );
         assert!(settings.action_for(LayoutMode::Traditional, 4).is_none());
 
-        config.virtual_workspaces.grid_shape = Some((3, 3));
+        config.virtual_workspaces.grid_layout = Some(crate::common::config::GridLayout::new(3, 3));
         config.settings.grid.gestures.enabled = false;
         assert!(
             Settings::new(&config)

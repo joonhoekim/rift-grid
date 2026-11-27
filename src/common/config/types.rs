@@ -96,10 +96,10 @@ pub struct VirtualWorkspaceSettings {
     /// Workspace used for new windows without another assignment.
     #[setting(label = "Default workspace", custom, aliases = "startup desktop space")]
     pub default_workspace: usize,
-    /// The grid's rows and columns, from `[settings.grid]` (`grid.rs`).
+    /// The grid, from `[settings.grid]` (`grid.rs`).
     #[serde(skip)]
     #[setting(ignore)]
-    pub grid_shape: Option<(usize, usize)>,
+    pub grid_layout: Option<super::GridLayout>,
     #[serde(default)]
     /// Recheck workspace rules when a window title changes.
     #[setting(
@@ -226,7 +226,7 @@ impl Default for VirtualWorkspaceSettings {
             prevent_wrapping: false,
             workspace_names: default_workspace_names(),
             default_workspace: 0,
-            grid_shape: None,
+            grid_layout: None,
             reapply_app_rules_on_title_change: false,
             app_rules: Vec::new(),
             workspace_rules: Vec::new(),
@@ -641,8 +641,6 @@ pub struct UiSettings {
     pub stack_line: StackLineSettings,
     #[serde(default)]
     pub mission_control: MissionControlSettings,
-    #[serde(default)]
-    pub borders: super::BorderSettings,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, ConfigSchema)]

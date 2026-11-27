@@ -32,9 +32,17 @@ an even number read as the next odd one, so every grid has a center cell, its
 default cell. 0 for both (the default) keeps upstream's line. Each display gets
 9 grids of `rows x columns` cells, 81 workspaces at 3x3; grid g (1-based) is
 the `rows x columns` workspaces after the first g-1 grids', read row by row
-from the top left. `[virtual_workspaces] workspace_names` names the cells of
-every grid, row by row (upstream checks them against `default_workspace_count`,
-so that has to be at least as many).
+from the top left. As subline's, `names` names grid 1's cells row by row and
+`names_2` to `names_9` the other grids'; a cell without a name is its number,
+and its workspace is called "grid·name" ("2·5", "2·Mail"). Upstream's
+`[virtual_workspaces] default_workspace` and `workspace_names` are not used
+with a grid.
+
+`start` is where each display starts: `"default"` (the default), grid 1's
+center, until the displays are settled below (a second display moves on to
+grid 2); `"last"`, the cell it showed when rift-grid last ran. Windows go back
+to their cells either way. Names must differ within a grid, and a grid has no
+more names than cells.
 
 The shape takes effect when rift-grid starts: a reload with other rows or
 columns applies the rest and keeps the running shape, and windows' remembered
@@ -71,8 +79,8 @@ Two displays can show the same number only when both hold windows in it, as
 state from before this model may.
 
 When rift-grid restarts, windows go back to their cells, in the arrangement
-each cell had, and each display shows the cell it showed. rift-grid keeps all
-three in `~/.rift-grid/cells.json`, written whenever they change, so a crash
+each cell had, and with `start = "last"` each display shows the cell it showed.
+rift-grid keeps all three in `~/.rift-grid/cells.json`, written whenever they change, so a crash
 leaves it as current as a clean exit. Windows are known by their process and
 window number, which hold for the login session; after a reboot nothing
 matches and windows start in the shown cell.

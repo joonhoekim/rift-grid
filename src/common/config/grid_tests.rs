@@ -24,7 +24,7 @@ fn grid_commands_and_columns_parse() {
         "#,
     )
     .unwrap();
-    assert_eq!(cfg.virtual_workspaces.grid_shape, Some((3, 5)), "the store reads the shape");
+    assert_eq!(cfg.virtual_workspaces.grid_shape(), Some((3, 5)), "the store reads the shape");
     let commands: Vec<_> = cfg.keys.iter().map(|(_, command)| command.clone()).collect();
     for expected in [
         LayoutCommand::Focus(crate::layout_engine::Direction::Left),
@@ -43,7 +43,7 @@ fn grid_settings_are_in_the_settings_app() {
         assert_eq!(field.title, title);
         assert!(matches!(field.kind, FieldKind::Number { integer: true }), "{key}");
     }
-    assert!(VirtualWorkspaceSettings::field("grid_shape").is_none(), "not a setting of its own");
+    assert!(VirtualWorkspaceSettings::field("grid_layout").is_none(), "not a setting of its own");
     use crate::common::config::GridOverviewSettings;
     for (key, unit, scale) in [("gap", "%", 100.0), ("zoom", "%", 100.0)] {
         let field = GridOverviewSettings::field(key).unwrap();
@@ -76,7 +76,7 @@ fn grid_shapes_and_rule_grids_are_checked() {
         Config::parse(&format!("[settings.grid]\nrows = {rows}\ncolumns = {columns}\n[keys]\n"))
             .unwrap()
             .virtual_workspaces
-            .grid_shape
+            .grid_shape()
     };
     assert_eq!(shape(3, 3), Some((3, 3)));
     assert_eq!(shape(1, 7), Some((1, 7)));
@@ -89,6 +89,10 @@ fn grid_shapes_and_rule_grids_are_checked() {
     assert!(grid("rows = 4\ncolumns = 3").is_empty(), "an even number reads as the next odd");
     assert!(grid("rows = 3").iter().any(|i| i.contains("both rows and columns")));
     assert!(grid("rows = 11\ncolumns = 3").iter().any(|i| i.contains("at most 9")));
+    assert!(grid("rows = 1\ncolumns = 3\nnames = [\"a\", \"b\"]").is_empty());
+    assert!(grid("rows = 1\ncolumns = 3\nnames = [\"a\", \"a\"]").iter().any(|i| i.contains("two cells")));
+    assert!(grid("rows = 1\ncolumns = 3\nnames = [\"3\"]").iter().any(|i| i.contains("\"3\"")), "as cell 3's number");
+    assert!(grid("rows = 1\ncolumns = 3\nnames_2 = [\"a\", \"b\", \"c\", \"d\"]").iter().any(|i| i.contains("names_2 has 4")));
     let base = "[settings.grid]\nrows = 3\ncolumns = 3\n[keys]\n";
     assert!(issues(base).is_empty(), "{:?}", issues(base));
     let rule = |grid| {

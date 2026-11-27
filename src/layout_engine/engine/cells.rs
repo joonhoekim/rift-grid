@@ -131,8 +131,11 @@ impl LayoutEngine {
             tracing::warn!(?path, "The grid changed shape; windows start in the current cell");
             return;
         }
-        self.workspaces.shown_before =
-            saved.shown.iter().map(|s| (SpaceId::new(s.space), s.index)).collect();
+        // Each display starts on the cell it showed, with `start = "last"`.
+        if self.workspaces.grid_starts_last() {
+            self.workspaces.shown_before =
+                saved.shown.iter().map(|s| (SpaceId::new(s.space), s.index)).collect();
+        }
         let cells = &mut self.cells;
         cells.remembered = saved
             .windows
@@ -394,7 +397,7 @@ mod tests {
 
     fn engine(space: SpaceId) -> (LayoutEngine, WindowStore) {
         let settings = VirtualWorkspaceSettings {
-            grid_shape: Some((3, 3)),
+            grid_layout: Some(crate::common::config::GridLayout::new(3, 3)),
             ..Default::default()
         };
         let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default());
@@ -452,7 +455,10 @@ mod tests {
 
         // The rift after: windows come with no assignment.
         let settings = VirtualWorkspaceSettings {
-            grid_shape: Some((3, 3)),
+            grid_layout: Some(crate::common::config::GridLayout {
+                start: crate::common::config::GridStart::Last,
+                ..crate::common::config::GridLayout::new(3, 3)
+            }),
             ..Default::default()
         };
         let mut after = LayoutEngine::new(&settings, &LayoutSettings::default());
@@ -468,6 +474,22 @@ mod tests {
         assert_eq!(active, Some(ids[12]), "the Space shows what it showed");
         assert_eq!(store.workspace_for_window(c), active, "a new window, as before");
         assert!(after.cells.remembered.is_empty(), "both placed");
+
+        // Starting on the default cell, the windows still go back to theirs.
+        let mut fresh = LayoutEngine::new(
+            &VirtualWorkspaceSettings {
+                grid_layout: Some(crate::common::config::GridLayout::new(3, 3)),
+                ..Default::default()
+            },
+            &LayoutSettings::default(),
+        );
+        let mut fresh_store = WindowStore::default();
+        fresh.load_cells_from(&path);
+        let _ = fresh.handle_event(&mut fresh_store, LayoutEvent::SpaceExposed(space, size));
+        observe(&mut fresh, &mut fresh_store, space, &[a]);
+        let ids = fresh.workspaces.workspace_ids(space);
+        assert_eq!(fresh.workspaces.active_workspace(space), Some(ids[4]), "grid 1's center");
+        assert_eq!(fresh_store.workspace_for_window(a), Some(ids[5]));
 
         // Another Space, or a window it never saw, is left alone.
         let (mut other, mut store) = engine(SpaceId::new(8));
@@ -487,7 +509,7 @@ mod tests {
 
     fn bsp_engine(space: SpaceId) -> (LayoutEngine, WindowStore) {
         let settings = VirtualWorkspaceSettings {
-            grid_shape: Some((3, 3)),
+            grid_layout: Some(crate::common::config::GridLayout::new(3, 3)),
             ..Default::default()
         };
         let layout = LayoutSettings {
@@ -616,7 +638,7 @@ mod tests {
         };
         write_atomically(&path, &saved).unwrap();
         let settings = VirtualWorkspaceSettings {
-            grid_shape: Some((3, 3)),
+            grid_layout: Some(crate::common::config::GridLayout::new(3, 3)),
             ..Default::default()
         };
         let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default());
@@ -645,7 +667,7 @@ mod tests {
         };
         write_atomically(&path, &saved).unwrap();
         let settings = VirtualWorkspaceSettings {
-            grid_shape: Some((3, 3)),
+            grid_layout: Some(crate::common::config::GridLayout::new(3, 3)),
             ..Default::default()
         };
         let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default());
@@ -673,7 +695,10 @@ mod tests {
         };
         write_atomically(&path, &saved).unwrap();
         let settings = VirtualWorkspaceSettings {
-            grid_shape: Some((3, 3)),
+            grid_layout: Some(crate::common::config::GridLayout {
+                start: crate::common::config::GridStart::Last,
+                ..crate::common::config::GridLayout::new(3, 3)
+            }),
             ..Default::default()
         };
         let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default());

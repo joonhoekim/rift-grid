@@ -194,8 +194,8 @@ show_empty = false
 # "where else is there something" and not only "where am I".
 mode = "all"
 # Labels rather than layout previews: the label is what the keybinding says.
-# workspace_names is "1".."9", so `name` is the digit you press — `index`
-# would render 0..8 and be off by one from the keymap.
+# Cells are named by grid and cell ("2·5"), as the keys say — `index`
+# would render from 0 and be off by one from the keymap.
 active_label = "name"
 display_style = "label"
 
@@ -222,16 +222,13 @@ haptic_pattern = "level_change"
 [settings.grid]
 rows = 3
 columns = 3
+names = ["↖", "↑", "↗", "←", "·", "→", "↙", "↓", "↘"]
 
 [virtual_workspaces]
 enabled = true
-# Nine, as AeroSpace had. Indices are 0-based, so Alt+1 targets index 0 —
-# hence the names below, which are what the menu-bar indicator displays. The
-# digit you press and the label you see match; only the internal index is off
-# by one.
+# Unused with a grid, which has 9 x rows x columns workspaces a display, named
+# by [settings.grid] names.
 default_workspace_count = 9
-default_workspace = 4
-workspace_names = ["↖", "↑", "↗", "←", "·", "→", "↙", "↓", "↘"]
 auto_assign_windows = true
 preserve_focus_per_workspace = true
 workspace_auto_back_and_forth = false

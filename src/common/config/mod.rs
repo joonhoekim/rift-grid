@@ -9,7 +9,8 @@ mod schema;
 mod types;
 pub use borders::BorderSettings;
 pub use grid::{
-    GRID_COUNT, GridFollow, GridMaps, GridOverviewSettings, GridSettings, MotionLevel,
+    GRID_COUNT, GridFollow, GridLayout, GridMaps, GridOverviewSettings, GridSettings, GridStart,
+    MotionLevel,
 };
 pub use grid_gestures::GridGestureSettings;
 pub use grid_motion::GridMotionSettings;

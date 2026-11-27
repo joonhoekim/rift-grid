@@ -36,13 +36,18 @@ impl Reactor {
     /// Keep the grid's shape as it is until rift-grid starts again: the
     /// workspaces a display has, and what each one's place means, follow from it.
     pub(super) fn keep_grid_shape(&self, new_config: &mut crate::common::config::Config) {
-        let running = self.config.virtual_workspaces.grid_shape;
+        let running = &self.config.virtual_workspaces;
         let started = !self.layout_manager.layout_engine.workspaces().initialized_spaces().is_empty();
-        if started && new_config.virtual_workspaces.grid_shape != running {
+        let new = &mut new_config.virtual_workspaces;
+        if started && new.grid_shape() != running.grid_shape() {
             tracing::warn!(
                 "[settings.grid] rows and columns take effect when rift-grid starts again"
             );
-            new_config.virtual_workspaces.grid_shape = running;
+            // The new names and start stay; they mean the same in the shape running.
+            match (&mut new.grid_layout, &running.grid_layout) {
+                (Some(new), Some(running)) => (new.rows, new.columns) = (running.rows, running.columns),
+                (new, running) => *new = running.clone(),
+            }
         }
     }
 
@@ -271,7 +276,7 @@ mod tests {
     fn two_displays() -> (Reactor, SpaceId, SpaceId) {
         crate::sys::screen::TEST_ACTIVE_DISPLAY.with(|display| display.take());
         let settings = crate::common::config::VirtualWorkspaceSettings {
-            grid_shape: Some((3, 3)),
+            grid_layout: Some(crate::common::config::GridLayout::new(3, 3)),
             ..Default::default()
         };
         let mut reactor = test_reactor_with_workspace_settings(&settings);

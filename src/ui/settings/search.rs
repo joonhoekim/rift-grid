@@ -239,7 +239,7 @@ const MANUAL: &[(Category, Option<LayoutMode>, &str, &str, &str)] = &[
         "Window Borders",
         "border outline ring glow focus jankyborders",
     ),
-    (Borders, None, "Window Borders", "Focused color", "active border colour"),
+    (Borders, None, "Window Borders", "Border color", "focused active border colour"),
     (Borders, None, "Window Borders", "Unfocused color", "inactive border colour"),
     (
         StackTabs,

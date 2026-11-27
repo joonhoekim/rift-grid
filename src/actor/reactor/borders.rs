@@ -127,8 +127,8 @@ impl Reactor {
         use std::hash::{Hash, Hasher};
 
         use crate::ui::borders::{BorderTarget, Borders};
-        let settings = &self.config.settings.ui.borders;
-        if !settings.enabled {
+        let settings = &self.config.settings.grid.focus;
+        if !settings.border {
             self.border_manager = BorderManager::default();
             return;
         }

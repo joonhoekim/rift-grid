@@ -2042,13 +2042,13 @@ fn interface_controls(
     // The color panel reaches a well through its action alone; a well that is
     // not continuous never sends it.
     settings.router.navigate(Category::Borders);
-    let well = named::<NSColorWell>(&root, "Focused color").unwrap();
+    let well = named::<NSColorWell>(&root, "Border color").unwrap();
     well.activate(true);
     NSColorPanel::sharedColorPanel(settings.router.ui.mtm())
         .setColor(&NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.0, 0.0, 1.0));
     well.deactivate();
     commit(&mut source, pending);
-    assert_eq!(source.settings.ui.borders.active_color, "0xffff0000");
+    assert_eq!(source.settings.grid.focus.border_color, "0xffff0000");
 
     let windows = NSApplication::sharedApplication(settings.router.ui.mtm()).windows().len();
     settings.router.navigate(Category::StackTabs);

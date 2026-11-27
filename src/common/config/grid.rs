@@ -31,8 +31,44 @@ pub struct GridSettings {
     #[setting(label = "Columns", aliases = "grid cells size 3x3 layout matrix width")]
     pub columns: usize,
     #[serde(default)]
+    /// The cell a display starts on when rift-grid starts.
+    #[setting(label = "Starting cell", choices, aliases = "start login launch default last")]
+    pub start: GridStart,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Grid 1's cell names, row by row; `names_2` to `names_9` name the other
+    /// grids'. A cell without a name is its number.
+    #[setting(ignore)]
+    pub names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[setting(ignore)]
+    pub names_2: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[setting(ignore)]
+    pub names_3: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[setting(ignore)]
+    pub names_4: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[setting(ignore)]
+    pub names_5: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[setting(ignore)]
+    pub names_6: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[setting(ignore)]
+    pub names_7: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[setting(ignore)]
+    pub names_8: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[setting(ignore)]
+    pub names_9: Vec<String>,
+    #[serde(default)]
     #[setting(ignore)]
     pub overview: GridOverviewSettings,
+    #[serde(default)]
+    #[setting(ignore)]
+    pub focus: super::BorderSettings,
     #[serde(default)]
     #[setting(ignore)]
     pub moves: GridMotionSettings,
@@ -122,7 +158,59 @@ impl Default for GridOverviewSettings {
     }
 }
 
+/// What the workspace store takes from `[settings.grid]`.
+#[derive(Debug, PartialEq, Clone, Default)]
+pub struct GridLayout {
+    pub rows: usize,
+    pub columns: usize,
+    /// Each grid's cell names, grid 1's first.
+    pub names: Vec<Vec<String>>,
+    pub start: GridStart,
+}
+
+impl GridLayout {
+    pub fn new(rows: usize, columns: usize) -> Self {
+        Self { rows, columns, ..Self::default() }
+    }
+
+    /// The name of cell `cell` (0-based) of grid `grid` (0-based): its own,
+    /// else its number.
+    pub fn cell_name(&self, grid: usize, cell: usize) -> String {
+        self.names
+            .get(grid)
+            .and_then(|names| names.get(cell))
+            .filter(|name| !name.is_empty())
+            .cloned()
+            .unwrap_or_else(|| (cell + 1).to_string())
+    }
+}
+
+/// The cell a display starts on.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy, Default, ConfigEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum GridStart {
+    /// The default cell, grid 1's center.
+    #[default]
+    #[setting(label = "The default cell")]
+    Default,
+    /// The cell the display was on when rift-grid last ran.
+    #[setting(label = "The last cell")]
+    Last,
+}
+
 impl GridSettings {
+    /// What the workspace store takes: none without a grid.
+    pub fn layout(&self) -> Option<GridLayout> {
+        let (rows, columns) = self.shape()?;
+        let names = [
+            &self.names, &self.names_2, &self.names_3, &self.names_4, &self.names_5,
+            &self.names_6, &self.names_7, &self.names_8, &self.names_9,
+        ]
+        .map(Clone::clone)
+        .to_vec();
+        Some(GridLayout { rows, columns, names, start: self.start })
+    }
+
     /// The grids' rows and columns, each odd and at most `MAX_GRID_SIDE`; none
     /// without a grid.
     pub fn shape(&self) -> Option<(usize, usize)> {
@@ -139,12 +227,31 @@ impl GridSettings {
                 issues.push(format!("[settings.grid] {name} can be at most {MAX_GRID_SIDE}"));
             }
         }
+        // Two cells of a grid with one name would be two workspaces with one.
+        if let Some(layout) = self.layout() {
+            let cells = layout.rows * layout.columns;
+            for (grid, names) in layout.names.iter().enumerate() {
+                let key = if grid == 0 { "names".to_string() } else { format!("names_{}", grid + 1) };
+                if names.len() > cells {
+                    issues.push(format!(
+                        "[settings.grid] {key} has {} names for {cells} cells",
+                        names.len()
+                    ));
+                }
+                let mut seen = std::collections::HashSet::new();
+                if let Some(name) =
+                    (0..cells).map(|cell| layout.cell_name(grid, cell)).find(|name| !seen.insert(name.clone()))
+                {
+                    issues.push(format!("[settings.grid] {key} names two cells \"{name}\""));
+                }
+            }
+        }
         self.gestures.validate(issues);
     }
 }
 
 impl VirtualWorkspaceSettings {
-    /// These settings with the grid's shape from `[settings.grid]`, which the
+    /// These settings with the grid from `[settings.grid]`, which the
     /// workspace store reads here.
     pub fn with_grid(mut self, grid: &GridSettings) -> Self {
         // Said once for each shape written, not on every parse.
@@ -163,8 +270,13 @@ impl VirtualWorkspaceSettings {
                 }
             }
         }
-        self.grid_shape = grid.shape();
+        self.grid_layout = grid.layout();
         self
+    }
+
+    /// The grids' rows and columns, none without a grid.
+    pub fn grid_shape(&self) -> Option<(usize, usize)> {
+        self.grid_layout.as_ref().map(|grid| (grid.rows, grid.columns))
     }
 
     pub(super) fn validate_grid(&self, issues: &mut Vec<String>) {

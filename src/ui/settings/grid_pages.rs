@@ -91,27 +91,27 @@ pub(super) fn borders(ui: Ui, model: &Rc<Model>) -> Page {
              its own color.",
         ),
         "",
-        |s| &s.settings.ui.borders,
-        |s| &mut s.settings.ui.borders,
+        |s| &s.settings.grid.focus,
+        |s| &mut s.settings.grid.focus,
     );
     let focused = border_color(
         &mut f,
-        "Focused color",
-        |s| &s.settings.ui.borders.active_color,
-        |s, v| s.settings.ui.borders.active_color = v,
+        "Border color",
+        |s| &s.settings.grid.focus.border_color,
+        |s, v| s.settings.grid.focus.border_color = v,
     );
     let unfocused = border_color(
         &mut f,
         "Unfocused color",
-        |s| &s.settings.ui.borders.inactive_color,
-        |s, v| s.settings.ui.borders.inactive_color = v,
+        |s| &s.settings.grid.focus.unfocused_color,
+        |s, v| s.settings.grid.focus.unfocused_color = v,
     );
     let message = Rc::new(ValidationMessage::new(&ui));
     let commit = f.assign(
-        |s| !s.settings.ui.borders.inactive_color.trim().is_empty(),
+        |s| !s.settings.grid.focus.unfocused_color.trim().is_empty(),
         |s, on| {
-            s.settings.ui.borders.inactive_color = if on {
-                BorderSettings::default().inactive_color
+            s.settings.grid.focus.unfocused_color = if on {
+                BorderSettings::default().unfocused_color
             } else {
                 String::new()
             }
@@ -120,7 +120,7 @@ pub(super) fn borders(ui: Ui, model: &Rc<Model>) -> Page {
     );
     let switch = Rc::new(Switch::new(&ui).on_change(commit));
     f.sync(&switch, |switch, s| {
-        switch.set_value(!s.settings.ui.borders.inactive_color.trim().is_empty())
+        switch.set_value(!s.settings.grid.focus.unfocused_color.trim().is_empty())
     });
     let bare = f.row("Unfocused borders", switch, message);
     let colors = Section::new(&ui, "Colors")

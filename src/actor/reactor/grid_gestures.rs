@@ -84,7 +84,7 @@ mod tests {
     fn one_display() -> (Reactor, SpaceId, Context) {
         crate::sys::screen::TEST_ACTIVE_DISPLAY.with(|display| display.take());
         let settings = crate::common::config::VirtualWorkspaceSettings {
-            grid_shape: Some((3, 3)),
+            grid_layout: Some(crate::common::config::GridLayout::new(3, 3)),
             ..Default::default()
         };
         let mut reactor = test_reactor_with_workspace_settings(&settings);
@@ -92,7 +92,7 @@ mod tests {
         let frame = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
         reactor.handle_event(space_state_event(vec![frame], vec![Some(space)]));
         let mut config = Config::default();
-        config.virtual_workspaces.grid_shape = Some((3, 3));
+        config.virtual_workspaces.grid_layout = Some(crate::common::config::GridLayout::new(3, 3));
         config.settings.gestures.haptics_enabled = false;
         let context = Context::new(
             1,

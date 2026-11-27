@@ -84,11 +84,11 @@ pub struct BorderStyle {
 impl BorderStyle {
     pub fn new(settings: &BorderSettings) -> Self {
         let defaults = BorderSettings::default();
-        let active = parse_color(&settings.active_color).unwrap_or_else(|| {
-            warn!(color = %settings.active_color, "Unreadable border color; using the default");
-            parse_color(&defaults.active_color).unwrap()
+        let active = parse_color(&settings.border_color).unwrap_or_else(|| {
+            warn!(color = %settings.border_color, "Unreadable border color; using the default");
+            parse_color(&defaults.border_color).unwrap()
         });
-        let inactive = match settings.inactive_color.trim() {
+        let inactive = match settings.unfocused_color.trim() {
             "" => None,
             text => parse_color(text).or_else(|| {
                 warn!(color = %text, "Unreadable border color; drawing no unfocused borders");
@@ -96,8 +96,8 @@ impl BorderStyle {
             }),
         };
         Self {
-            width: settings.width.clamp(0.5, 20.0),
-            radius: settings.radius.clamp(0.0, 40.0),
+            width: settings.border_width.clamp(0.5, 20.0),
+            radius: settings.border_radius.clamp(0.0, 40.0),
             active,
             inactive,
             glow: settings.glow,
@@ -847,7 +847,7 @@ mod tests {
 
     #[test]
     fn the_ring_sits_outside_the_window_with_room_for_the_glow() {
-        let settings = BorderSettings { enabled: true, width: 5.0, ..BorderSettings::default() };
+        let settings = BorderSettings { border: true, border_width: 5.0, ..BorderSettings::default() };
         let style = BorderStyle::new(&settings);
         let frame = CGRect::new(CGPoint::new(100.0, 50.0), CGSize::new(800.0, 600.0));
         // Width 5, and twice the glow's 12 around it for the glow to fade out.
@@ -863,7 +863,7 @@ mod tests {
         assert_eq!(plain.canvas(frame), CGRect::new(CGPoint::new(95.0, 45.0), CGSize::new(810.0, 610.0)));
 
         assert_eq!(style.color(true), Some(style.active));
-        let none = BorderStyle::new(&BorderSettings { inactive_color: String::new(), ..settings });
+        let none = BorderStyle::new(&BorderSettings { unfocused_color: String::new(), ..settings });
         assert_eq!(none.color(false), None, "no unfocused borders");
 
         // Corners never exceed half a side, which CoreGraphics rejects.

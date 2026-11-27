@@ -482,7 +482,7 @@ impl Reactor {
             generation,
             step,
             cell,
-            shape: self.config.virtual_workspaces.grid_shape.unwrap_or_default(),
+            shape: self.config.virtual_workspaces.grid_shape().unwrap_or_default(),
             workspace: to,
             screen: visible,
             display,
