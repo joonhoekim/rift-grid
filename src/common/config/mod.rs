@@ -3,7 +3,7 @@ pub mod borders;
 mod document;
 mod grid;
 mod grid_gestures;
-mod grid_home;
+pub(crate) mod grid_home;
 mod grid_motion;
 mod parse;
 mod schema;

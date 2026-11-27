@@ -949,7 +949,8 @@ impl Controller {
             name.setFont(Some(&NSFont::boldSystemFontOfSize(16.0)));
             name.setTextColor(Some(&NSColor::labelColor()));
             name.setFrame(CGRect::new(
-                CGPoint::new(grid_x + 6.0, top - HEAD_H + 6.0),
+                // Its bottom 4pt above the box's top line (`top - 6`).
+                CGPoint::new(grid_x + 6.0, top - 32.0),
                 CGSize::new(width, 22.0),
             ));
             views.grid.addSubview(&name);

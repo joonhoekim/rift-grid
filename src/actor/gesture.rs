@@ -36,6 +36,8 @@ pub struct ActionConfig {
     pub boundary_threshold: f64,
     pub animate: Option<bool>,
     pub grid: Option<GridSwipe>,
+    /// Fingers drawn together open home (`grid.rs`).
+    pub pinch_home: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Settings {
@@ -55,7 +57,7 @@ impl Settings {
             fraction.clamp(0.0, 1.0)
         };
         let grid = grid::Actions::new(config, tolerance(g.swipe_vertical_tolerance));
-        Self {
+        let mut settings = Self {
             grid,
             // The grid's swipes always keep macOS from seeing them.
             consume: g.consume_dock_swipe || grid.any(),
@@ -71,6 +73,7 @@ impl Settings {
                 boundary_threshold: 0.0,
                 animate: None,
                 grid: None,
+                pinch_home: false,
             }),
             scroll: s.enabled.then_some(ActionConfig {
                 fingers: s.fingers.max(1),
@@ -82,8 +85,11 @@ impl Settings {
                 boundary_threshold: s.workspace_switch_threshold.max(0.0),
                 animate: None,
                 grid: None,
+                pinch_home: false,
             }),
-        }
+        };
+        grid::add_pinch(&mut settings, config);
+        settings
     }
 
     pub fn enabled(self) -> bool {
@@ -92,6 +98,11 @@ impl Settings {
 
     /// Whether vertical native swipes (Mission Control, App Exposé) can be Rift's.
     pub fn vertical(self) -> bool { self.grid.vertical() }
+
+    /// Whether native pinches (Apps, Show Desktop) can be Rift's.
+    pub fn pinch(self) -> bool {
+        self.grid.pinch() || self.workspace.into_iter().chain(self.scroll).any(|a| a.pinch_home)
+    }
 
     fn accepts_count(self, fingers: usize) -> bool {
         self.scroll
@@ -320,8 +331,8 @@ impl Control {
 /// A quarter-pad drag moves one working-area width, independent of column size.
 const SCROLL_SENSITIVITY: f64 = 4.0;
 const VERTICAL_INTENT_DISTANCE: f64 = 0.03;
-fn swipe_recognizer(fingers: usize) -> GestureRecognizer {
-    let mut recognizer = GestureRecognizer::new(fingers)
+fn swipe_recognizer(action: &ActionConfig) -> GestureRecognizer {
+    let mut recognizer = GestureRecognizer::new(action.fingers)
         .with_exact_finger_count(true)
         .with_gesture_types(GestureTypes::SWIPE);
     recognizer.minimum_swipe_translation = 0.003;
@@ -340,6 +351,8 @@ struct DeviceSession {
     sample: Motion,
     max_contacts: usize,
     lifting: Option<Duration>,
+    /// Whether the fingers are drawn together, for home (`grid.rs`).
+    pinch: grid::PinchWatch,
 }
 impl DeviceSession {
     fn new(context: Context, settings: Settings, mode: LayoutMode) -> Self {
@@ -349,7 +362,7 @@ impl DeviceSession {
             .max(settings.workspace.map_or(0, |a| a.fingers))
             .max(settings.grid.max_fingers());
         Self {
-            recognizer: swipe_recognizer(context.action.fingers),
+            recognizer: swipe_recognizer(&context.action),
             sample: Motion {
                 session: context.session,
                 total_x: 0.0,
@@ -365,6 +378,7 @@ impl DeviceSession {
             claim_x: 0.0,
             max_contacts: 0,
             lifting: None,
+            pinch: grid::PinchWatch::default(),
         }
     }
 
@@ -426,14 +440,28 @@ impl DeviceSession {
                 && let Some(action) = self.settings.action_for(self.mode, count)
             {
                 self.context.action = action;
-                self.recognizer = swipe_recognizer(action.fingers);
+                self.recognizer = swipe_recognizer(&action);
             }
         }
         // Below the configured count, only topology/lift bookkeeping matters.
         if count < self.recognizer.required_finger_count {
             return;
         }
-        let Some(event) = self.recognizer.process(contacts) else {
+        // The recognizer keeps every frame; what it finds waits while the
+        // fingers may still be a pinch.
+        let pinch = (self.context.action.pinch_home && self.owner == Owner::Undecided)
+            .then(|| self.pinch.feed(contacts));
+        let event = self.recognizer.process(contacts);
+        match pinch {
+            Some(grid::Pinch::Closing) => return self.pinch_home(tx, control),
+            Some(grid::Pinch::Opening) => {
+                self.owner = Owner::System;
+                return;
+            }
+            Some(grid::Pinch::Undecided) => return,
+            Some(grid::Pinch::Moving) | None => {}
+        }
+        let Some(event) = event else {
             return;
         };
         let c = &self.context;

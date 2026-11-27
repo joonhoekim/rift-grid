@@ -9,6 +9,7 @@ pub mod grid;
 pub mod launches;
 pub mod panel;
 pub mod search;
+pub mod spotlight;
 
 /// Home's window number, 0 before it is made; read from the reactor's and the
 /// input's threads.

@@ -11,6 +11,8 @@ pub const EVENT_MASK: u64 = (1 << 29) | (1 << 30) | (1 << 22);
 // Private CGS fields, shared with Loop's CGEventField extensions.
 const HID_TYPE: CGEventField = CGEventField(110);
 const MOTION: CGEventField = CGEventField(123);
+/// The motion of a Dock pinch (Apps, Show Desktop).
+const PINCH: i64 = 3;
 const VELOCITY: CGEventField = CGEventField(129);
 const PHASE: CGEventField = CGEventField(132);
 const REPOST: i64 = 0x5249465447455354;
@@ -187,6 +189,8 @@ pub struct Filter {
     /// Vertical swipes (Mission Control, App Exposé) go through arbitration
     /// too, for the grid's swipes.
     pub vertical: bool,
+    /// Pinches (Apps, Show Desktop) go through arbitration too, for home.
+    pub pinch: bool,
 }
 impl Filter {
     /// No copies/allocations on the normal forward/drop path. Sequence state
@@ -258,7 +262,11 @@ impl Filter {
             // smart zoom and vertical Mission Control never enter the filter.
             let subtype = CGEvent::integer_value_field(Some(event), HID_TYPE);
             let motion = CGEvent::integer_value_field(Some(event), MOTION);
-            if !matches!(subtype, 16 | 23) || (motion != 1 && !(self.vertical && motion == 2)) {
+            if !matches!(subtype, 16 | 23)
+                || (motion != 1
+                    && !(self.vertical && motion == 2)
+                    && !(self.pinch && motion == PINCH))
+            {
                 return true;
             }
             owner = ownership();
@@ -492,6 +500,30 @@ mod tests {
         assert!(!f.forward(CGEventType(30), &event, || Box::new(o), |_| {}));
         CGEvent::set_integer_value_field(Some(&event), CGEventField::EventSourceUserData, REPOST);
         assert!(f.forward(CGEventType(30), &event, || Box::new(o), |_| {}));
+    }
+    #[test]
+    fn dock_pinches_are_arbitrated_only_while_home_takes_them() {
+        let event = CGEvent::new(None).unwrap();
+        CGEvent::set_integer_value_field(
+            Some(&event),
+            CGEventField(55),
+            CGS_EVENT_DOCK_CONTROL as i64,
+        );
+        CGEvent::set_integer_value_field(Some(&event), HID_TYPE, 23);
+        CGEvent::set_integer_value_field(Some(&event), MOTION, PINCH);
+        CGEvent::set_integer_value_field(Some(&event), PHASE, 1);
+        CGEvent::set_integer_value_field(Some(&event), CGEventField::EventSourceUnixProcessID, 0);
+        let o = Ownership {
+            session: 1,
+            owner: Owner::Rift,
+            consume: true,
+            touching: true,
+            dock_owner: None,
+        };
+        let mut f = Filter::default();
+        assert!(f.forward(CGEventType(30), &event, || Box::new(o), |_| {}), "macOS's");
+        let mut f = Filter { pinch: true, ..Filter::default() };
+        assert!(!f.forward(CGEventType(30), &event, || Box::new(o), |_| {}), "home's");
     }
     #[test]
     fn cancellation_clears_native_velocity_and_scroll_momentum() {

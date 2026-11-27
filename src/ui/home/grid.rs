@@ -10,7 +10,11 @@ pub const PAD: f64 = 16.0;
 /// room a category's title takes above its rows.
 pub const GRID_TOP: f64 = 8.0;
 pub const LINE_GAP: f64 = 17.0;
-pub const HEAD_H: f64 = 40.0;
+/// The room above a category's rows: the gap after the box before it (20),
+/// the title (22) and the gap between the title and its own box (4), plus the
+/// box's own margins; the title sits close to its box and apart from the one
+/// before.
+pub const HEAD_H: f64 = 56.0;
 /// The panel is never narrower than this many slots.
 const PANEL_SLOTS: f64 = 3.0;
 

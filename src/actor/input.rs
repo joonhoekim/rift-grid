@@ -383,6 +383,7 @@ impl Input {
         input.install_binding_specs(config.binding_mode_specs);
         input.gesture_filter.borrow_mut().vertical =
             input.state.borrow().gesture_settings.vertical();
+        input.gesture_filter.borrow_mut().pinch = input.state.borrow().gesture_settings.pinch();
         input.rebuild_overview_keys(&config.settings.ui.mission_control);
         input
     }
@@ -609,6 +610,7 @@ impl Input {
                 }
                 state.gesture_settings = super::gesture::Settings::new(&new_config);
                 self.gesture_filter.borrow_mut().vertical = state.gesture_settings.vertical();
+                self.gesture_filter.borrow_mut().pinch = state.gesture_settings.pinch();
                 let mouse_hides_on_focus = new_config.settings.mouse_hides_on_focus;
                 let focus_follows_mouse_config_enabled = new_config.settings.focus_follows_mouse;
                 let mouse_features_enabled = new_config.settings.drag_drop.enabled;

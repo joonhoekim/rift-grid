@@ -32,11 +32,39 @@ the keyboard, and goes away when the keyboard goes elsewhere.
   *Code*): home closes if it is open; otherwise it opens only when a display
   came with the command. It works with or without the grid (`rows = 0`);
   only the swipe needs the grid, since the swipe table is the grid's.
-- **Key**: the seed binds `Alt + Space` (subline's `Mod+Space`). macOS's
-  Spotlight keeps `Cmd + Space`.
+- **Key**: the seed binds `Alt + Space` (subline's `Mod+Space`).
 - **Swipe**: a new `GestureAction::Home` ("Home"). The default four-finger
   table binds `down = "home"`; down was left to macOS's App Exposé before, and
   rift now takes it.
+- **In place of Spotlight** (`take_spotlight = true`, the default): home also
+  takes what opens Spotlight and its Apps view:
+  - **`Cmd + Space`** is bound to `home` in the default keymap, unless the
+    keymap binds it to something else. macOS reads that key as a system
+    shortcut ("Show Spotlight search") before any app, so rift turns the
+    shortcut off for the session; it stays off until the next login if rift
+    quits. Turning the setting off turns it on again, only if rift turned it
+    off (a file in `~/.rift-grid` says so): a shortcut turned off in System
+    Settings stays off. The binding is added when the config is read, to the
+    default keymap only, so the Keyboard page does not list it.
+  - **Four fingers drawn together** (thumb and three fingers, macOS's pinch
+    for Apps, which replaced Launchpad) open home. A pinch is told from a
+    swipe by the fingers' widest span against their middle: the span changing
+    by 0.05 of the pad and by more than 1.5 times the middle's travel is a
+    pinch; the middle travelling 0.02 and more than the span changes is a
+    swipe (`gesture/grid.rs`, `PinchWatch`; the multitouch crate's own magnify
+    loses to its swipe, since a thumb coming in moves the middle too). The
+    swipe recognizer keeps every frame meanwhile; what it finds waits until
+    the fingers are not a pinch. macOS's Dock pinch (Dock events of motion 3,
+    to be confirmed on a device) is held and dropped as its swipes are.
+    Drawn apart (Show Desktop) is left to macOS once seen, but a Dock pinch
+    that begins before rift has seen which way the fingers go is dropped, so
+    Show Desktop can be lost then. The pinch rides on what four fingers
+    already do in rift (the grid's four-finger swipes, the default, else
+    upstream's four-finger swipes): with nothing of rift's on four fingers
+    there is no pinch, since waiting to see whether the fingers pinch would
+    hold macOS's own four-finger swipes. Not while the Overview is open.
+
+  Off, both stay macOS's.
 - **Stepping back out of the Overview**: today the swipe opposite the one
   bound to `overview` steps back only while that way has no action
   (`actor/gesture/grid.rs`). With `down = "home"` that would end. So while the
@@ -404,6 +432,7 @@ to the dock. macOS apps have no such list, and the Dock's own menu pins.
 | `window_height` | `0.7` | the panel's height, the same |
 | `frequent` | `true` | the frequent row |
 | `categorize` | `true` | the boxes by kind |
+| `take_spotlight` | `true` | `Cmd + Space` and the four-finger pinch open home |
 | `hidden` | `[]` | bundle ids left out of home |
 | `categories` | `{}` | kinds given by hand, by bundle id |
 
@@ -443,6 +472,10 @@ files:
 | `src/sys/window_server.rs` | hook: `is_ignored_own_window` keeps home's window, so the pointer queries stop at it |
 | `src/actor/reactor/grid_motion.rs` (fork) | `begin_pan` puts home's window number in the capture's `leave_out` while home is open; if the cached shareable content does not know it, it is fetched again first (`fetch_now`), since the capture drops windows it does not know silently |
 | `src/bin/rift.rs` | hook: make the home actor and run it on the main executor |
+| `src/common/config/parse.rs` | hook: `grid_home::add_spotlight_key` after the keymaps are read: `Cmd + Space` = `home` in the default keymap and its specs, unless bound |
+| `src/ui/home/spotlight.rs` | Spotlight's system shortcut (`CGSSetSymbolicHotKeyEnabled`, 64) off while home takes the key, on again after |
+| `src/actor/gesture.rs` | hooks: `ActionConfig::pinch_home`; `grid::add_pinch` at the end of `Settings::new`; `DeviceSession::pinch` (a `PinchWatch`) fed before the recognizer's result is used, and `pinch_home` (`gesture/grid.rs`) on a pinch; `Settings::pinch` |
+| `src/sys/gesture.rs`, `src/actor/input.rs` | hooks: `Filter::pinch`, set beside `vertical`: Dock pinches (motion 3) go through arbitration |
 | `src/common/config/grid_gestures.rs`, `src/actor/reactor/grid_gestures.rs` (fork) | `GestureAction::Home`, four fingers down by default; `grid_swipe` works out the swipe's action first and runs `home_command` for `Home`, before `command_context_space()`, so a fullscreen display does nothing |
 | `src/actor/gesture/grid.rs` (fork) | the Overview's way back, whatever that way is bound to |
 | `src/ui/settings/` | `Category::Home` in `CATEGORIES` (`mod.rs`), its place in `grid_sidebar::ORDER`, the badge, the page (`grid_pages::home`), search entries; `editors.rs`'s app picker made `pub(super)` |

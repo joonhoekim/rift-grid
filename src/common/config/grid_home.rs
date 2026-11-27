@@ -57,6 +57,15 @@ pub struct HomeSettings {
         aliases = "categories categorize kind"
     )]
     pub categorize: bool,
+    #[serde(default = "yes")]
+    /// Cmd + Space and the four-finger pinch open home instead of Spotlight
+    /// and Apps. Off, they stay macOS's.
+    #[setting(
+        label = "Open home in place of Spotlight",
+        order = 3,
+        aliases = "spotlight cmd space command pinch launchpad apps"
+    )]
+    pub take_spotlight: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     /// Bundle ids left out of home's grid and search.
     #[setting(ignore)]
@@ -75,6 +84,7 @@ impl Default for HomeSettings {
             window_height: default_height(),
             frequent: true,
             categorize: true,
+            take_spotlight: true,
             hidden: Vec::new(),
             categories: Default::default(),
         }
@@ -118,6 +128,43 @@ pub enum HomeStyle {
     /// A panel in the middle, the windows around it darkened.
     #[setting(label = "Panel")]
     Window,
+}
+
+/// Spotlight's key, which home takes while `take_spotlight` is on.
+pub const SPOTLIGHT_KEY: &str = "Cmd + Space";
+
+/// With `take_spotlight`, bind Cmd + Space to `home` in the default keymap,
+/// unless the keymap binds it already. `hotkey` is the key as parsed.
+pub(super) fn add_spotlight_key(
+    home: &HomeSettings,
+    hotkey: Option<(String, crate::sys::hotkey::Hotkey)>,
+    keys: &mut Vec<(
+        crate::sys::hotkey::Hotkey,
+        crate::actor::wm_controller::WmCommand,
+    )>,
+    specs: &mut super::BindingModeSpecs,
+) {
+    use crate::actor::reactor::Command;
+    use crate::actor::wm_controller::WmCommand;
+    let (Some((spec, hotkey)), true) = (hotkey, home.take_spotlight) else {
+        return;
+    };
+    let taken = |other: &crate::sys::hotkey::Hotkey| {
+        other.key_code == hotkey.key_code
+            && other
+                .modifiers
+                .expand_to_specific()
+                .iter()
+                .any(|m| hotkey.modifiers.expand_to_specific().contains(m))
+    };
+    if keys.iter().any(|(other, _)| taken(other)) {
+        return;
+    }
+    let home = WmCommand::ReactorCommand(Command::Reactor(rift_protocol::ReactorCommand::Home));
+    keys.push((hotkey, home.clone()));
+    if let Some((_, default)) = specs.iter_mut().find(|(mode, _)| mode == "default") {
+        default.push((spec, home));
+    }
 }
 
 /// The kinds of app home groups the grid by, in the grid's order.
@@ -221,6 +268,27 @@ hidden = ["com.apple.Chess"]"#,
             "{:?}",
             config.keys
         );
+    }
+
+    #[test]
+    fn spotlight_s_key_opens_home_unless_it_is_bound_or_given_back() {
+        use crate::actor::reactor::Command;
+        use crate::actor::wm_controller::WmCommand;
+        let home = WmCommand::ReactorCommand(Command::Reactor(rift_protocol::ReactorCommand::Home));
+        let parse = |text: &str| super::super::Config::parse(text).unwrap();
+        let has = |config: &super::super::Config, command: &WmCommand| {
+            config.keys.iter().any(|(_, c)| c == command)
+        };
+        let config = parse("[settings]\n[keys]\n");
+        assert!(has(&config, &home));
+        assert!(
+            config.binding_mode_specs[0].1.iter().any(|(_, c)| *c == home),
+            "the input actor installs the specs"
+        );
+        let given_back = parse("[settings.grid.home]\ntake_spotlight = false\n[keys]\n");
+        assert!(!has(&given_back, &home));
+        let bound = parse("[settings]\n[keys]\n\"Cmd + Space\" = \"overview_whole\"\n");
+        assert!(!has(&bound, &home), "the keymap's own binding wins");
     }
 
     #[test]

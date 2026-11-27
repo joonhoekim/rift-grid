@@ -523,8 +523,10 @@ fn binding_mode_config_rejects_bad_targets_reserved_default_and_bad_hotkeys() {
 fn command_arrays_parse_save_and_follow_keymap_renames() {
     use crate::actor::wm_controller::WmCmd;
 
+    // Without home's Cmd + Space, the keymap is exactly what is written.
     let text = r#"
-            [settings]
+            [settings.grid.home]
+            take_spotlight = false
             [keys]
             "Alt + 1" = [{ move_window_to_workspace = 0 }, { binding_mode = "move" }]
             [binding_modes.move]

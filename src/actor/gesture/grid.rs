@@ -80,6 +80,7 @@ impl Actions {
                 boundary_threshold: 0.0,
                 animate: None,
                 grid: Some(GridSwipe { actions, open: false }),
+                pinch_home: false,
             })
         };
         Self {
@@ -102,18 +103,122 @@ impl Actions {
 
     pub(super) fn open(self) -> bool { self.open }
 
+    pub(super) fn pinch(self) -> bool { self.all().any(|a| a.pinch_home) }
+
     pub(super) fn for_fingers(self, fingers: usize) -> Option<ActionConfig> {
         let mut action = self.all().find(|a| a.fingers == fingers)?;
         if let Some(swipe) = action.grid.as_mut() {
             swipe.open = self.open;
         }
+        // Home does not open over the Overview.
+        action.pinch_home &= !self.open;
         Some(action)
     }
 
     pub(super) fn max_fingers(self) -> usize { self.all().map(|a| a.fingers).max().unwrap_or(0) }
 }
 
+/// Four fingers drawn together (macOS's pinch for Apps) open home, while
+/// `[settings.grid.home] take_spotlight` is on. The pinch rides on what four
+/// fingers already do in rift: the grid's four-finger swipes, else upstream's
+/// swipes of four fingers.
+pub(super) fn add_pinch(settings: &mut Settings, config: &Config) {
+    if !config.settings.grid.home.take_spotlight {
+        return;
+    }
+    if let Some(four) = settings.grid.four.as_mut() {
+        four.pinch_home = true;
+        return;
+    }
+    for action in [&mut settings.workspace, &mut settings.scroll].into_iter().flatten() {
+        if action.fingers == 4 {
+            action.pinch_home = true;
+            return;
+        }
+    }
+    // With nothing of rift's on four fingers there is no pinch: an action of
+    // its own would hold macOS's four-finger swipes while it waits to see
+    // whether the fingers pinch.
+}
+
+/// What four fingers are doing, from where they first were: drawn together,
+/// drawn apart, moved together (a swipe), or not yet any.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Pinch {
+    Undecided,
+    Closing,
+    Opening,
+    Moving,
+}
+
+/// How much the fingers' widest span changes (of the pad), against how far
+/// their middle moves: a pinch's span changes a lot more than its middle moves
+/// (the thumb comes in while the others stay), a swipe's middle moves while
+/// its span stays.
+const PINCH_SPAN: f32 = 0.05;
+const SWIPE_TRAVEL: f32 = 0.02;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct PinchWatch {
+    origin: Option<(multitouch::Point, f32)>,
+}
+
+impl PinchWatch {
+    pub(super) fn feed(&mut self, contacts: &[multitouch::Contact]) -> Pinch {
+        let points: Vec<multitouch::Point> = contacts
+            .iter()
+            .filter(|c| !c.is_palm() && c.state().is_active())
+            .map(|c| c.normalized.position)
+            .collect();
+        if points.len() < 2 {
+            return Pinch::Undecided;
+        }
+        let n = points.len() as f32;
+        let middle = multitouch::Point::new(
+            points.iter().map(|p| p.x).sum::<f32>() / n,
+            points.iter().map(|p| p.y).sum::<f32>() / n,
+        );
+        let mut span = 0.0f32;
+        for (i, a) in points.iter().enumerate() {
+            for b in &points[i + 1..] {
+                span = span.max((a.x - b.x).hypot(a.y - b.y));
+            }
+        }
+        let Some((origin, origin_span)) = self.origin else {
+            self.origin = Some((middle, span));
+            return Pinch::Undecided;
+        };
+        let travel = (middle.x - origin.x).hypot(middle.y - origin.y);
+        let change = span - origin_span;
+        if change.abs() >= PINCH_SPAN && change.abs() > 1.5 * travel {
+            if change < 0.0 {
+                Pinch::Closing
+            } else {
+                Pinch::Opening
+            }
+        } else if travel >= SWIPE_TRAVEL && travel > change.abs() {
+            Pinch::Moving
+        } else {
+            Pinch::Undecided
+        }
+    }
+}
+
 impl DeviceSession {
+    /// Drawn together: take the pinch from macOS and open home.
+    pub(super) fn pinch_home(&mut self, tx: &Sender, control: &Control) {
+        if !control.claim(&self.context) {
+            self.owner = Owner::System;
+            return;
+        }
+        self.owner = Owner::Rift;
+        self.blocked = true;
+        tracing::debug!(session = self.context.session, "pinch claimed for home");
+        tx.send(crate::actor::reactor::Event::Command(
+            crate::actor::reactor::Command::Reactor(crate::actor::reactor::ReactorCommand::Home),
+        ));
+    }
+
     /// A grid swipe's travel `x`, `y` (up is positive) since it began: take it
     /// once it has gone a little way a way it allows, else leave it to macOS;
     /// then send one step past the swipe distance.
@@ -194,6 +299,137 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    /// Four fingers round (0.5, 0.5), `spread` apart.
+    fn spread(spread: f32) -> Vec<Contact> {
+        let mut fingers = contacts(4, 0.0, 0.5);
+        for (i, contact) in fingers.iter_mut().enumerate() {
+            let at = Point::new(0.5 + (i as f32 - 1.5) * spread, 0.5);
+            *contact = Contact::new(
+                0,
+                0.0,
+                i as i32,
+                ContactState::Touching,
+                Some(Finger::Index),
+                Some(Hand::Right),
+                Vector::new(at, Point::ZERO),
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                Vector::new(Point::ZERO, Point::ZERO),
+                0.0,
+            );
+        }
+        fingers
+    }
+
+    fn pinch(input: &Arc<Mutex<DeviceInput>>, spreads: &[f32]) {
+        for &step in spreads {
+            DeviceInput::deliver(input, multitouch::ContactEvent::Frame(&spread(step)));
+        }
+    }
+
+    fn home(rx: &mut crate::actor::Receiver<Event>) -> bool {
+        while let Ok((_, event)) = rx.try_recv() {
+            if matches!(
+                event,
+                Event::Command(crate::actor::reactor::Command::Reactor(
+                    crate::actor::reactor::ReactorCommand::Home
+                ))
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn four_fingers_drawn_together_open_home_and_apart_stay_macos_s() {
+        let (input, control, mut rx) = device(&config(3));
+        pinch(&input, &[0.12, 0.1, 0.07, 0.04, 0.02]);
+        assert!(home(&mut rx), "drawn together: home");
+        assert_eq!(control.ownership_guard().owner, Owner::Rift);
+
+        let (input, control, mut rx) = device(&config(3));
+        pinch(&input, &[0.02, 0.04, 0.07, 0.1, 0.12]);
+        assert!(!home(&mut rx), "drawn apart: Show Desktop");
+        assert_eq!(control.ownership_guard().owner, Owner::System);
+
+        let mut given_back = config(3);
+        given_back.settings.grid.home.take_spotlight = false;
+        assert!(!Settings::new(&given_back).pinch());
+        let (input, _, mut rx) = device(&given_back);
+        pinch(&input, &[0.12, 0.1, 0.07, 0.04, 0.02]);
+        assert!(!home(&mut rx), "given back to macOS");
+    }
+
+    /// Three fingers in a row and a thumb below them at `thumb`.
+    fn thumb_frame(thumb: (f32, f32)) -> Vec<Contact> {
+        let mut fingers = spread(0.08);
+        fingers.truncate(3);
+        let mut thumb_contact = contacts(1, thumb.0, thumb.1);
+        fingers.append(&mut thumb_contact);
+        for (i, contact) in fingers.iter_mut().enumerate() {
+            *contact = Contact::new(
+                0,
+                0.0,
+                i as i32,
+                ContactState::Touching,
+                Some(Finger::Index),
+                Some(Hand::Right),
+                Vector::new(contact.normalized.position, Point::ZERO),
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                Vector::new(Point::ZERO, Point::ZERO),
+                0.0,
+            );
+        }
+        fingers
+    }
+
+    #[test]
+    fn a_thumb_coming_in_to_three_fingers_is_a_pinch() {
+        // The fingers' middle moves with the thumb: a pinch all the same.
+        let (input, _, mut rx) = device(&config(3));
+        for step in 0..6 {
+            let t = step as f32 * 0.03;
+            let frame = thumb_frame((0.35 + t, 0.2 + t * 1.5));
+            DeviceInput::deliver(&input, multitouch::ContactEvent::Frame(&frame));
+        }
+        assert!(home(&mut rx));
+    }
+
+    #[test]
+    fn the_pinch_rides_on_upstream_s_four_finger_swipe_without_taking_it() {
+        let mut upstream = config(3);
+        upstream.settings.grid.gestures.four.left = GestureAction::None;
+        upstream.settings.grid.gestures.four.right = GestureAction::None;
+        upstream.settings.grid.gestures.four.up = GestureAction::None;
+        upstream.settings.grid.gestures.four.down = GestureAction::None;
+        upstream.settings.gestures.enabled = true;
+        upstream.settings.gestures.fingers = 4;
+        let settings = Settings::new(&upstream);
+        assert!(settings.grid.four.is_none(), "four fingers stay upstream's");
+        assert!(settings.workspace.unwrap().pinch_home);
+        assert!(settings.pinch());
+        // With the Overview open, no pinch.
+        let mut grid = Settings::new(&config(3)).grid;
+        grid.open = true;
+        assert!(!grid.for_fingers(4).unwrap().pinch_home);
+    }
+
+    #[test]
+    fn a_four_finger_swipe_is_not_a_pinch() {
+        let (input, _, mut rx) = device(&config(3));
+        swipe(&input, &[(4, 0.0, 0.0), (4, -0.06, 0.0), (4, -0.12, 0.0)]);
+        assert!(!home(&mut rx));
+        assert!(Settings::new(&config(3)).pinch());
     }
 
     fn config(side: usize) -> Config {

@@ -45,6 +45,7 @@ impl HomeActor {
     pub fn new(settings: HomeSettings, config_tx: config::Sender, mtm: MainThreadMarker) -> Self {
         let (tx, rx) = actor::channel();
         let _ = SENDER.set(tx);
+        crate::ui::home::spotlight::take_key(settings.take_spotlight);
         let home = Home::new(mtm, settings, move |change| edit(&config_tx, change), read_apps);
         read_apps();
         Self { rx, home }
@@ -62,7 +63,10 @@ impl HomeActor {
                     }
                 }
                 Event::Close => self.home.close(Closed::Elsewhere),
-                Event::Configure(settings) => self.home.configure(settings),
+                Event::Configure(settings) => {
+                    crate::ui::home::spotlight::take_key(settings.take_spotlight);
+                    self.home.configure(settings);
+                }
                 Event::Catalog(catalog) => self.home.set_catalog(catalog),
             }
         }

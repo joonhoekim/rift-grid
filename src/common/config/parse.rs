@@ -205,6 +205,12 @@ impl Config {
                     }
                     binding_mode_specs.push((mode, specs));
                 }
+                super::grid_home::add_spotlight_key(
+                    &c.settings.grid.home,
+                    Self::binding_hotkey(super::grid_home::SPOTLIGHT_KEY, &c.modifier_combinations),
+                    &mut keys,
+                    &mut binding_mode_specs,
+                );
                 Ok(Config {
                     keys,
                     binding_mode_specs,
