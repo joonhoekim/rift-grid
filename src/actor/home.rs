@@ -11,7 +11,7 @@ use objc2_foundation::MainThreadMarker;
 use crate::actor::{self, config};
 use crate::common::config::{ConfigSource, HomeSettings};
 use crate::ui::home::apps::{self, Catalog};
-use crate::ui::home::panel::{Closed, Home};
+use crate::ui::home::panel::{Closed, Home, HomeEdit};
 
 #[derive(Debug)]
 pub enum Event {
@@ -45,12 +45,7 @@ impl HomeActor {
     pub fn new(settings: HomeSettings, config_tx: config::Sender, mtm: MainThreadMarker) -> Self {
         let (tx, rx) = actor::channel();
         let _ = SENDER.set(tx);
-        let home = Home::new(
-            mtm,
-            settings,
-            move |bundle_id| hide(&config_tx, bundle_id),
-            read_apps,
-        );
+        let home = Home::new(mtm, settings, move |change| edit(&config_tx, change), read_apps);
         read_apps();
         Self { rx, home }
     }
@@ -83,13 +78,21 @@ fn read_apps() {
         .unwrap_or_else(|error| tracing::warn!(%error, "home: could not read the apps"));
 }
 
-/// Put `bundle_id` in `[settings.grid.home] hidden`, without waiting.
-fn hide(config_tx: &config::Sender, bundle_id: String) {
+/// Write `change` to `[settings.grid.home]`, without waiting.
+fn edit(config_tx: &config::Sender, change: HomeEdit) {
     config_tx.send(config::Event::Edit(Box::new(
         move |source: &mut ConfigSource| {
             let home = &mut source.settings.grid.home;
-            if !home.hides(&bundle_id) {
-                home.hidden.push(bundle_id);
+            match change {
+                HomeEdit::Hide(bundle_id) => {
+                    if !home.hides(&bundle_id) {
+                        home.hidden.push(bundle_id);
+                    }
+                }
+                HomeEdit::Category(bundle_id, category) => {
+                    home.categories.retain(|id, _| !id.eq_ignore_ascii_case(&bundle_id));
+                    home.categories.insert(bundle_id, category);
+                }
             }
         },
     )));

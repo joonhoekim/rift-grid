@@ -6,6 +6,11 @@ pub const SLOT_W: f64 = 108.0;
 pub const SLOT_H: f64 = 116.0;
 pub const ICON: f64 = 60.0;
 pub const PAD: f64 = 16.0;
+/// Above the first row; the room the line under the frequent row takes; the
+/// room a category's title takes above its rows.
+pub const GRID_TOP: f64 = 8.0;
+pub const LINE_GAP: f64 = 17.0;
+pub const HEAD_H: f64 = 40.0;
 /// The panel is never narrower than this many slots.
 const PANEL_SLOTS: f64 = 3.0;
 
@@ -35,26 +40,44 @@ pub fn panel(usable: Rect, share: (f64, f64)) -> Rect {
 }
 
 /// What the grid shows, row by row: indices into the apps. With no search, an
-/// optional frequent row and then every app; with a search, the results.
+/// optional frequent row and then every app, in categories or not; with a
+/// search, the results.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Shown {
     pub rows: Vec<Vec<usize>>,
     /// Whether the first row is the frequent row (a line follows it).
     pub frequent_row: bool,
+    /// Each category's first row and its title; its rows run to the next one's.
+    pub heads: Vec<(usize, String)>,
 }
 
 impl Shown {
     pub fn new(frequent: &[usize], all: &[usize], columns: usize) -> Self {
+        Self::grouped(frequent, &[(String::new(), all.to_vec())], columns)
+    }
+
+    /// The frequent row, then each group on rows of its own under its title.
+    /// One group alone has no title, as subline's grid with one category.
+    pub fn grouped(frequent: &[usize], groups: &[(String, Vec<usize>)], columns: usize) -> Self {
         let columns = columns.max(1);
         let frequent = &frequent[..frequent.len().min(columns)];
         let mut rows = Vec::new();
         if !frequent.is_empty() {
             rows.push(frequent.to_vec());
         }
-        rows.extend(all.chunks(columns).map(<[usize]>::to_vec));
+        let groups: Vec<_> = groups.iter().filter(|(_, apps)| !apps.is_empty()).collect();
+        let titled = groups.len() > 1;
+        let mut heads = Vec::new();
+        for (title, apps) in groups {
+            if titled {
+                heads.push((rows.len(), title.clone()));
+            }
+            rows.extend(apps.chunks(columns).map(<[usize]>::to_vec));
+        }
         Self {
             rows,
             frequent_row: !frequent.is_empty(),
+            heads,
         }
     }
 
@@ -64,6 +87,31 @@ impl Shown {
 
     pub fn first(&self) -> Option<Pick> {
         self.rows.iter().position(|row| !row.is_empty()).map(|row| Pick { row, col: 0 })
+    }
+
+    /// The top of row `row` in the grid view (`rows.len()` gives the bottom),
+    /// with the frequent row's line and the titles above it.
+    pub fn row_top(&self, row: usize) -> f64 {
+        let line = if self.frequent_row && row >= 1 {
+            LINE_GAP
+        } else {
+            0.0
+        };
+        let titles = self.heads.iter().filter(|(start, _)| *start <= row).count();
+        GRID_TOP + row as f64 * SLOT_H + line + titles as f64 * HEAD_H
+    }
+
+    /// The rows of each category: its title, its first row and the row after
+    /// its last.
+    pub fn sections(&self) -> Vec<(&str, usize, usize)> {
+        self.heads
+            .iter()
+            .enumerate()
+            .map(|(i, (start, title))| {
+                let end = self.heads.get(i + 1).map_or(self.rows.len(), |(next, _)| *next);
+                (title.as_str(), *start, end)
+            })
+            .collect()
     }
 }
 
@@ -158,6 +206,37 @@ mod tests {
         let plain = Shown::new(&[], &[0, 1], 3);
         assert_eq!(plain.rows, vec![vec![0, 1]]);
         assert!(!plain.frequent_row);
+    }
+
+    #[test]
+    fn categories_start_rows_of_their_own_under_a_title() {
+        let groups = [
+            ("Internet".to_owned(), vec![0, 1, 2, 3]),
+            ("Empty".to_owned(), vec![]),
+            ("Games".to_owned(), vec![4]),
+        ];
+        let shown = Shown::grouped(&[4], &groups, 3);
+        assert_eq!(shown.rows, vec![vec![4], vec![0, 1, 2], vec![3], vec![4]]);
+        assert_eq!(shown.heads, vec![
+            (1, "Internet".to_owned()),
+            (3, "Games".to_owned())
+        ]);
+        assert_eq!(shown.sections(), vec![("Internet", 1, 3), ("Games", 3, 4)]);
+        assert_eq!(shown.row_top(0), GRID_TOP);
+        assert_eq!(shown.row_top(1), GRID_TOP + SLOT_H + LINE_GAP + HEAD_H);
+        assert_eq!(
+            shown.row_top(3),
+            GRID_TOP + 3.0 * SLOT_H + LINE_GAP + 2.0 * HEAD_H
+        );
+        assert_eq!(
+            shown.row_top(4),
+            GRID_TOP + 4.0 * SLOT_H + LINE_GAP + 2.0 * HEAD_H
+        );
+        // Arrows go from a category's short last row into the next one.
+        assert_eq!(step(&shown, p(2, 0), Step::Down), p(3, 0));
+        // One category alone has no title.
+        let one = Shown::grouped(&[], &groups[..1], 3);
+        assert!(one.heads.is_empty());
     }
 
     #[test]

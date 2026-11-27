@@ -48,10 +48,23 @@ pub struct HomeSettings {
         aliases = "launcher recent most used top"
     )]
     pub frequent: bool,
+    #[serde(default = "yes")]
+    /// With no search, the grid in boxes by kind of app: Internet,
+    /// Productivity, Developer Tools and so on, from what each app says it is.
+    #[setting(
+        label = "Group apps by category",
+        order = 2,
+        aliases = "categories categorize kind"
+    )]
+    pub categorize: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     /// Bundle ids left out of home's grid and search.
     #[setting(ignore)]
     pub hidden: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    /// Categories given by hand, by bundle id, over the ones worked out.
+    #[setting(ignore)]
+    pub categories: std::collections::BTreeMap<String, HomeCategory>,
 }
 
 impl Default for HomeSettings {
@@ -61,7 +74,9 @@ impl Default for HomeSettings {
             window_width: default_width(),
             window_height: default_height(),
             frequent: true,
+            categorize: true,
             hidden: Vec::new(),
+            categories: Default::default(),
         }
     }
 }
@@ -77,6 +92,14 @@ impl HomeSettings {
             }
         };
         (keep(self.window_width), keep(self.window_height))
+    }
+
+    /// The category given by hand to `bundle_id` (case ignored).
+    pub fn category_of(&self, bundle_id: &str) -> Option<HomeCategory> {
+        self.categories
+            .iter()
+            .find(|(id, _)| id.eq_ignore_ascii_case(bundle_id))
+            .map(|(_, category)| *category)
     }
 
     /// Whether `bundle_id` is left out (case ignored).
@@ -97,6 +120,51 @@ pub enum HomeStyle {
     Window,
 }
 
+/// The kinds of app home groups the grid by, in the grid's order.
+#[derive(
+    Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, ConfigEnum,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum HomeCategory {
+    #[setting(label = "Internet")]
+    Internet,
+    #[setting(label = "Social")]
+    Social,
+    #[setting(label = "Productivity")]
+    Productivity,
+    #[setting(label = "Developer Tools")]
+    DeveloperTools,
+    #[setting(label = "Creativity")]
+    Creativity,
+    #[setting(label = "Entertainment")]
+    Entertainment,
+    #[setting(label = "Games")]
+    Games,
+    #[setting(label = "Information & Reading")]
+    Information,
+    #[setting(label = "Utilities")]
+    Utilities,
+    #[setting(label = "Other")]
+    Other,
+}
+
+impl HomeCategory {
+    pub const ALL: [Self; 10] = [
+        Self::Internet,
+        Self::Social,
+        Self::Productivity,
+        Self::DeveloperTools,
+        Self::Creativity,
+        Self::Entertainment,
+        Self::Games,
+        Self::Information,
+        Self::Utilities,
+        Self::Other,
+    ];
+
+    pub fn label(self) -> &'static str { Self::CONFIG_CHOICES[self.config_choice_index()].0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,6 +176,19 @@ mod tests {
         assert_eq!(home.style, HomeStyle::Full);
         assert_eq!(home.panel_share(), (0.6, 0.7));
         assert!(home.frequent);
+        assert!(home.categorize);
+    }
+
+    #[test]
+    fn categories_given_by_hand_read_by_bundle_id() {
+        let home: HomeSettings =
+            toml::from_str("[categories]\n\"dev.zed.Zed\" = \"developer_tools\"\n").unwrap();
+        assert_eq!(
+            home.category_of("DEV.ZED.ZED"),
+            Some(HomeCategory::DeveloperTools)
+        );
+        assert_eq!(home.category_of("dev.other"), None);
+        assert_eq!(HomeCategory::Information.label(), "Information & Reading");
     }
 
     #[test]

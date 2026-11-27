@@ -14,7 +14,7 @@ pub use grid::{
     MotionLevel,
 };
 pub use grid_gestures::{GestureAction, GridGestureSettings, SwipeActions};
-pub use grid_home::{HomeSettings, HomeStyle};
+pub use grid_home::{HomeCategory, HomeSettings, HomeStyle};
 pub use grid_motion::GridMotionSettings;
 pub use document::ConfigDocument;
 pub use schema::*;

@@ -34,10 +34,10 @@ use objc2_foundation::{
 use objc2_quartz_core::CAMediaTiming;
 
 use super::apps::Catalog;
-use super::grid::{self, ICON, PAD, Pick, SLOT_H, SLOT_W, Shown, Step};
+use super::grid::{self, GRID_TOP, HEAD_H, ICON, LINE_GAP, PAD, Pick, SLOT_H, SLOT_W, Shown, Step};
 use super::launches::{self, Launches};
-use super::search;
-use crate::common::config::{HomeSettings, HomeStyle};
+use super::{categories, search};
+use crate::common::config::{HomeCategory, HomeSettings, HomeStyle};
 use crate::sys::screen::NSScreenExt;
 
 /// The grid is never wider than this many slots, so a wide display keeps it
@@ -45,15 +45,25 @@ use crate::sys::screen::NSScreenExt;
 const MOST_COLUMNS: f64 = 9.0;
 const SEARCH_W: f64 = 560.0;
 const SEARCH_H: f64 = 36.0;
-/// Above the first row, and the room the line under the frequent row takes.
-const GRID_TOP: f64 = 8.0;
-const LINE_GAP: f64 = 17.0;
 const PANEL_RADIUS: f64 = 16.0;
 /// How dark the windows around the panel get.
 const DIM: f64 = 0.5;
 const FADE_IN: f64 = 0.15;
 const FADE_OUT: f64 = 0.1;
 const RISE: f64 = 12.0;
+/// How far a category's box reaches past its slots each side.
+const SECTION_OUT: f64 = 8.0;
+/// A category menu item's tag: the app's index times this, plus the category's.
+const CATEGORY_TAG: usize = 16;
+
+/// A change home asks of the config file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HomeEdit {
+    /// Leave the app out (`hidden`).
+    Hide(String),
+    /// Put the app in this category (`categories`).
+    Category(String, HomeCategory),
+}
 
 /// Why home closed: by itself (`Esc`, the command again, a click on its
 /// empty part), when it gives the keyboard back to the app it came from; or
@@ -110,7 +120,9 @@ pub struct ControllerIvars {
     /// Slot views by (in the frequent row, app index), made once per app list.
     slots: RefCell<HashMap<(bool, usize), Slot>>,
     icons: RefCell<HashMap<PathBuf, Retained<NSImage>>>,
-    hide: Box<dyn Fn(String)>,
+    edit: Box<dyn Fn(HomeEdit)>,
+    /// The categories' titles and boxes, made again with each fill.
+    sections: RefCell<Vec<Retained<NSView>>>,
     /// Asked to read the apps again (they changed on disk).
     reread: Box<dyn Fn()>,
 }
@@ -319,6 +331,14 @@ define_class!(
         #[unsafe(method(menuHide:))]
         fn menu_hide(&self, item: &NSMenuItem) { self.hide_app(item.tag() as usize); }
 
+        #[unsafe(method(menuCategory:))]
+        fn menu_category(&self, item: &NSMenuItem) {
+            let tag = item.tag() as usize;
+            if let Some(&category) = HomeCategory::ALL.get(tag % CATEGORY_TAG) {
+                self.set_category(tag / CATEGORY_TAG, category);
+            }
+        }
+
         #[unsafe(method(menuQuit:))]
         fn menu_quit(&self, item: &NSMenuItem) { self.quit(item.tag() as usize); }
     }
@@ -335,7 +355,7 @@ impl Home {
     pub fn new(
         mtm: MainThreadMarker,
         settings: HomeSettings,
-        hide: impl Fn(String) + 'static,
+        edit: impl Fn(HomeEdit) + 'static,
         reread: impl Fn() + 'static,
     ) -> Self {
         let launches_path = launches::path();
@@ -359,7 +379,8 @@ impl Home {
                 views: OnceCell::new(),
                 slots: RefCell::new(HashMap::new()),
                 icons: RefCell::new(HashMap::new()),
-                hide: Box::new(hide),
+                edit: Box::new(edit),
+                sections: RefCell::new(Vec::new()),
                 reread: Box::new(reread),
             });
             unsafe { msg_send![super(this), init] }
@@ -810,10 +831,12 @@ impl Controller {
         views
             .empty
             .setFrame(CGRect::new(CGPoint::new(0.0, top - 60.0), CGSize::new(w, 24.0)));
-        let columns = grid::columns(grid_w);
+        // The room inside the scroll view, without a scroller that takes some.
+        let inner = views.scroll.contentSize().width;
+        let columns = grid::columns(inner);
         let mut state = self.ivars().state.borrow_mut();
         state.columns = columns;
-        state.grid_x = ((grid_w - columns as f64 * SLOT_W) / 2.0).max(0.0);
+        state.grid_x = ((inner - columns as f64 * SLOT_W) / 2.0).max(0.0);
     }
 
     fn set_clock(&self) {
@@ -851,8 +874,7 @@ impl Controller {
         let mtm = MainThreadMarker::from(self);
         let scroll_w = views.scroll.contentSize().width;
         let rows = shown.rows.len();
-        let height =
-            (row_y(rows, shown.frequent_row) + GRID_TOP).max(views.scroll.contentSize().height);
+        let height = (shown.row_top(rows) + GRID_TOP).max(views.scroll.contentSize().height);
         views.grid.setFrame(CGRect::new(CGPoint::ZERO, CGSize::new(scroll_w, height)));
 
         let mut slots = self.ivars().slots.borrow_mut();
@@ -877,7 +899,6 @@ impl Controller {
             }
         }
         drop(slots);
-        let _ = columns;
         views.line.setHidden(!shown.frequent_row);
         if shown.frequent_row {
             let y = GRID_TOP + SLOT_H + LINE_GAP / 2.0;
@@ -889,9 +910,51 @@ impl Controller {
                 ),
             ));
         }
+        self.draw_sections(&shown, grid_x, columns);
         let none = rows == 0 && !self.ivars().state.borrow().query.trim().is_empty();
         views.empty.setHidden(!none);
         self.show_pick();
+    }
+
+    /// Each category's title, and a rounded box round its rows, behind them.
+    fn draw_sections(&self, shown: &Shown, grid_x: f64, columns: usize) {
+        let views = self.views();
+        let mtm = MainThreadMarker::from(self);
+        let mut sections = self.ivars().sections.borrow_mut();
+        for view in sections.drain(..) {
+            view.removeFromSuperview();
+        }
+        let width = columns as f64 * SLOT_W;
+        for (title, start, end) in shown.sections() {
+            let top = shown.row_top(start);
+            let bottom = shown.row_top(end - 1) + SLOT_H;
+            let frame = CGRect::new(
+                CGPoint::new(grid_x - SECTION_OUT, top - 6.0),
+                CGSize::new(width + 2.0 * SECTION_OUT, bottom - top + 10.0),
+            );
+            let section = NSView::initWithFrame(NSView::alloc(mtm), frame);
+            section.setWantsLayer(true);
+            if let Some(layer) = section.layer() {
+                layer.setCornerRadius(14.0);
+                layer.setBorderWidth(1.0);
+                layer.setBorderColor(Some(&NSColor::separatorColor().CGColor()));
+            }
+            views.grid.addSubview_positioned_relativeTo(
+                &section,
+                objc2_app_kit::NSWindowOrderingMode::Below,
+                None,
+            );
+            sections.push(section);
+            let name = NSTextField::labelWithString(&NSString::from_str(title), mtm);
+            name.setFont(Some(&NSFont::boldSystemFontOfSize(16.0)));
+            name.setTextColor(Some(&NSColor::labelColor()));
+            name.setFrame(CGRect::new(
+                CGPoint::new(grid_x + 6.0, top - HEAD_H + 6.0),
+                CGSize::new(width, 22.0),
+            ));
+            views.grid.addSubview(&name);
+            sections.push(Retained::into_super(Retained::into_super(name)));
+        }
     }
 
     fn make_slot(&self, mtm: MainThreadMarker, index: usize) -> Slot {
@@ -961,7 +1024,13 @@ impl Controller {
         put(&views.plate, pick);
         put(&views.hover, hover.filter(|hover| Some(*hover) != pick));
         if let Some(pick) = pick.filter(|pick| shown.get(*pick).is_some()) {
-            views.grid.scrollRectToVisible(slot_rect(pick, &shown, grid_x));
+            let mut rect = slot_rect(pick, &shown, grid_x);
+            // A category's first row brings its title into view with it.
+            if shown.heads.iter().any(|(start, _)| *start == pick.row) {
+                rect.origin.y -= HEAD_H;
+                rect.size.height += HEAD_H;
+            }
+            views.grid.scrollRectToVisible(rect);
         }
     }
 
@@ -1085,6 +1154,36 @@ impl Controller {
         };
         add("Open", sel!(menuOpen:));
         add("Show in Finder", sel!(menuReveal:));
+        let current = {
+            let state = self.ivars().state.borrow();
+            categories::category(&state.catalog.apps[index], &state.settings)
+        };
+        let kinds = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("Category"));
+        kinds.setAutoenablesItems(false);
+        for (at, category) in HomeCategory::ALL.iter().enumerate() {
+            let item = unsafe {
+                NSMenuItem::initWithTitle_action_keyEquivalent(
+                    NSMenuItem::alloc(mtm),
+                    &NSString::from_str(category.label()),
+                    Some(sel!(menuCategory:)),
+                    ns_string!(""),
+                )
+            };
+            unsafe { item.setTarget(Some(self)) };
+            item.setTag((index * CATEGORY_TAG + at) as isize);
+            item.setState(if *category == current { 1 } else { 0 });
+            kinds.addItem(&item);
+        }
+        let category = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                ns_string!("Category"),
+                None,
+                ns_string!(""),
+            )
+        };
+        category.setSubmenu(Some(&kinds));
+        menu.addItem(&category);
         add("Hide from Home", sel!(menuHide:));
         if running {
             add("Quit", sel!(menuQuit:));
@@ -1149,7 +1248,21 @@ impl Controller {
             }
             state.pick = None;
         }
-        (self.ivars().hide)(bundle_id);
+        (self.ivars().edit)(HomeEdit::Hide(bundle_id));
+        self.refill();
+    }
+
+    fn set_category(&self, index: usize, category: HomeCategory) {
+        let Some((bundle_id, _)) = self.app(index) else { return };
+        {
+            let mut state = self.ivars().state.borrow_mut();
+            let categories = &mut state.settings.categories;
+            categories.retain(|id, _| !id.eq_ignore_ascii_case(&bundle_id));
+            categories.insert(bundle_id.clone(), category);
+            // The rows move: what was picked is somewhere else now.
+            state.pick = None;
+        }
+        (self.ivars().edit)(HomeEdit::Category(bundle_id, category));
         self.refill();
     }
 
@@ -1208,7 +1321,22 @@ fn shown_for(state: &State) -> Shown {
         } else {
             Vec::new()
         };
-        Shown::new(&frequent, &all, state.columns)
+        let groups: Vec<(String, Vec<usize>)> = if settings.categorize {
+            HomeCategory::ALL
+                .iter()
+                .map(|&category| {
+                    let members = all
+                        .iter()
+                        .copied()
+                        .filter(|&index| categories::category(&apps[index], settings) == category)
+                        .collect();
+                    (category.label().to_owned(), members)
+                })
+                .collect()
+        } else {
+            vec![(String::new(), all)]
+        };
+        Shown::grouped(&frequent, &groups, state.columns)
     } else {
         let found: Vec<usize> =
             search::search(apps, &state.query).into_iter().filter(visible).collect();
@@ -1216,23 +1344,9 @@ fn shown_for(state: &State) -> Shown {
     }
 }
 
-/// The top of row `row` in the grid view, the frequent row's line included.
-fn row_y(row: usize, frequent_row: bool) -> f64 {
-    GRID_TOP
-        + row as f64 * SLOT_H
-        + if frequent_row && row >= 1 {
-            LINE_GAP
-        } else {
-            0.0
-        }
-}
-
 fn slot_rect(pick: Pick, shown: &Shown, grid_x: f64) -> CGRect {
     CGRect::new(
-        CGPoint::new(
-            grid_x + pick.col as f64 * SLOT_W,
-            row_y(pick.row, shown.frequent_row),
-        ),
+        CGPoint::new(grid_x + pick.col as f64 * SLOT_W, shown.row_top(pick.row)),
         CGSize::new(SLOT_W, SLOT_H),
     )
 }
@@ -1243,7 +1357,7 @@ fn slot_at(point: CGPoint, shown: &Shown, grid_x: f64) -> Option<Pick> {
         return None;
     }
     let row = (0..shown.rows.len()).find(|&row| {
-        let top = row_y(row, shown.frequent_row);
+        let top = shown.row_top(row);
         point.y >= top && point.y < top + SLOT_H
     })?;
     let pick = Pick { row, col: col as usize };
@@ -1269,9 +1383,9 @@ mod tests {
         // The frequent row holds one app: nothing beside it.
         assert_eq!(at(15.0 + SLOT_W, GRID_TOP + 1.0), None);
         // Below the line.
-        let second = row_y(1, true) + 1.0;
+        let second = shown.row_top(1) + 1.0;
         assert_eq!(at(15.0 + 2.0 * SLOT_W, second), Some(Pick { row: 1, col: 2 }));
         assert_eq!(at(5.0, second), None);
-        assert_eq!(at(15.0, row_y(1, true) - 2.0), None);
+        assert_eq!(at(15.0, shown.row_top(1) - 2.0), None);
     }
 }

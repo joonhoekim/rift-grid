@@ -19,6 +19,11 @@ pub struct App {
     pub name: String,
     /// The bundle's own names and the file name, to search by too.
     pub other_names: Vec<String>,
+    /// What the app says it is (`LSApplicationCategoryType`,
+    /// `public.app-category.…`).
+    pub category_type: Option<String>,
+    /// Whether it opens web pages: a browser.
+    pub browser: bool,
 }
 
 /// The apps as read, and what to look at to know they are out of date.
@@ -59,8 +64,27 @@ pub fn read() -> Catalog {
     objc2::rc::autoreleasepool(|_| {
         let mut catalog = read_from(&roots(), &[PathBuf::from(FINDER)], &display_name);
         sort(&mut catalog.apps);
+        let browsers = browsers();
+        for app in &mut catalog.apps {
+            app.browser = app.path.canonicalize().is_ok_and(|path| browsers.contains(&path));
+        }
         catalog
     })
+}
+
+/// The apps that open an https page.
+fn browsers() -> HashSet<PathBuf> {
+    let Some(page) =
+        objc2_foundation::NSURL::URLWithString(&NSString::from_str("https://example.com"))
+    else {
+        return HashSet::new();
+    };
+    objc2_app_kit::NSWorkspace::sharedWorkspace()
+        .URLsForApplicationsToOpenURL(&page)
+        .iter()
+        .filter_map(|url| url.path())
+        .filter_map(|path| PathBuf::from(path.to_string()).canonicalize().ok())
+        .collect()
 }
 
 /// Finder's name for the bundle, without `.app`.
@@ -161,6 +185,8 @@ impl Reader<'_> {
             path: path.to_owned(),
             name,
             other_names,
+            category_type: info.category_type,
+            browser: false,
         });
     }
 }
@@ -185,6 +211,7 @@ struct Info {
     id: String,
     name: Option<String>,
     display_name: Option<String>,
+    category_type: Option<String>,
     background_only: bool,
 }
 
@@ -216,6 +243,7 @@ fn read_info(path: &Path) -> Option<Info> {
         id: text("CFBundleIdentifier")?,
         name: text("CFBundleName"),
         display_name: text("CFBundleDisplayName"),
+        category_type: text("LSApplicationCategoryType"),
         background_only: flag("LSBackgroundOnly"),
     })
 }
@@ -368,7 +396,14 @@ mod this_mac {
         let catalog = super::read();
         let took = started.elapsed();
         for app in &catalog.apps {
-            println!("{:<32} {:<44} {:?}", app.name, app.bundle_id, app.other_names);
+            let category = super::super::categories::category(app, &Default::default());
+            println!(
+                "{:<32} {:<44} {:<16} {:?}",
+                app.name,
+                app.bundle_id,
+                category.label(),
+                app.category_type
+            );
         }
         println!(
             "{} apps in {took:?}, {} folders watched",

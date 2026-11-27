@@ -243,6 +243,30 @@ stays until the next opening; opening it then fails with a notice.
 - Order: by name, as Finder sorts (`localizedStandardCompare`).
 - **Hidden apps** (`hidden = ["com.apple.Chess", …]`, bundle ids, case
   ignored) are left out of the grid, the search and the frequent row.
+- **Categories** (`categorize = true`): with no search, the apps are in boxes
+  by kind, each under its title, in this order: Internet, Social,
+  Productivity, Developer Tools, Creativity, Entertainment, Games,
+  Information & Reading, Utilities, Other. Empty ones are not shown, and with
+  one kind alone there is no title. Each box starts new rows, and the arrow
+  keys go through them row by row. An app's kind, the first that applies:
+  1. given by hand: the app menu's **Category** submenu writes it to
+     `[settings.grid.home.categories]` (`"dev.zed.Zed" = "developer_tools"`);
+  2. Internet for a browser (an app that opens https pages) and for a site a
+     Chromium browser installed as an app (`com.google.Chrome.app.…`);
+  3. a table of Apple's apps whose own kind is missing or too wide (Mail and
+     FaceTime say productivity and utilities; Calculator, Weather and Phone
+     say nothing);
+  4. what the app says it is (`LSApplicationCategoryType`), Apple's 40-odd
+     kinds gathered into home's ten (all the `*-games` are Games);
+  5. Utilities for Apple's other apps that say nothing (Disk Utility);
+  6. Other.
+
+  subline's categories are written in its config and kept there; a "fill"
+  button fills them from the apps' own. Here they are worked out each time,
+  so new apps land in a box by themselves, and only what is moved by hand is
+  written. On this Mac, a third of the apps say nothing about their kind and
+  another third say only "utilities"; the browser test and Apple's table
+  place most of those.
 - **Frequent row** (`frequent = true`): with no search, the first row is the
   apps opened most lately, as many as fit in one row, then a thin line, then
   all the apps as usual (the frequent ones are there again). If nothing was
@@ -266,10 +290,28 @@ stays until the next opening; opening it then fails with a notice.
   of composing (ㄱ, 계, 곗, 계, 계사, …; checked with the prototype), so the
   plain text field is enough.
 - It matches each word of the search, case and accents ignored, against the
-  name and the other names. Order, as subline's: names that start with the
-  search, then names that contain it, then apps found only by their other
-  names; within each, by name.
-- With text in the box, the frequent row and its line are not shown.
+  name and the other names. Order, subline's with two more steps:
+  1. names that start with the search;
+  2. names (or other names) whose **initials** start with it: the first
+     letter of each word (`bb` finds Brave Browser, `vsc` Visual Studio Code,
+     `kt` KakaoTalk, a capital starting a word) or the first consonant of
+     each Hangul syllable (`ㅋㅋㅇㅌ` finds 카카오톡), for a search of one
+     word of two letters or more;
+  3. names that hold every word;
+  4. apps found only by their other names;
+  5. apps found once the search is read as **typed in the other keyboard
+     layout**, Korean two-set against QWERTY: `초개ㅡㄷ` is `chrome` typed
+     with the Korean layout on, `초개` finds Chrome as `chro` does, and
+     `zkzkdhxhr` is 카카오톡 typed with it off. Both the search and the names
+     are turned into the QWERTY keys that type them, and compared there, at
+     a word's start and never Latin against Latin: so `ㄱ` (the r key) does
+     not bring every name with an r in it, and a Hangul search still being
+     composed (`ㄱ`, `계ㅅ`) finds 계산기.
+
+  Within each, by name. People who use two languages often start typing
+  before they switch the layout; the last step finds what they meant.
+- With text in the box, the frequent row, its line and the categories are not
+  shown.
 - No results: "No apps found".
 
 **Keys**, in the text field:
@@ -337,6 +379,7 @@ A right-click (or `Ctrl` click) on a slot opens a menu (`NSMenu`) for it:
 
 - **Open**
 - **Show in Finder**
+- **Category ▸** the ten kinds, the app's own checked (see *The grid*)
 - **Hide from Home**: adds the bundle id to `hidden` in the config file, so
   the file stays the one source; undo is in the settings app, as subline. The
   config actor gets a new event that edits the current source in place
@@ -360,9 +403,12 @@ to the dock. macOS apps have no such list, and the Dock's own menu pins.
 | `window_width` | `0.6` | the panel's width, a share of the usable area (0.3–1.0), `window` only |
 | `window_height` | `0.7` | the panel's height, the same |
 | `frequent` | `true` | the frequent row |
+| `categorize` | `true` | the boxes by kind |
 | `hidden` | `[]` | bundle ids left out of home |
+| `categories` | `{}` | kinds given by hand, by bundle id |
 
-A reload while home is open applies `hidden` and `frequent` to what is shown;
+A reload while home is open applies `hidden`, `frequent`, `categorize` and
+`categories` to what is shown;
 a change of `style` or the panel's size closes home, and the next opening
 uses it.
 
@@ -454,6 +500,6 @@ The second step, in this order:
    recent first; picking one goes to it.
 4. **Settings**: up to four of the settings app's search results; picking one
    opens the settings app on that page.
-5. **Categories**: `[[settings.grid.home.categories]]`, boxes on the grid as
-   subline's; "Fill from the apps' categories" reads `LSApplicationCategoryType`.
+5. **Categories in the settings app**: the kinds given by hand, listed and
+   changed on the Home page (now only through the app menu and the file).
 6. **Placeholder tile** while an app starts.
